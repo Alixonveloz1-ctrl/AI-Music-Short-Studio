@@ -1,0 +1,30 @@
+{
+  "name": "ai-music-short-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Music Short Studio — create musical audiovisual shorts with AI, with the user approving every generated asset.",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @ams/shared",
+    "build": "npm run build:shared && npm run build -w @ams/server && npm run build -w @ams/web",
+    "dev": "npm run build:shared && concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @ams/server",
+    "dev:web": "npm run dev -w @ams/web",
+    "start": "npm run build && node packages/server/dist/index.js",
+    "test": "npm run build:shared && npm run test -w @ams/server",
+    "typecheck": "npm run build:shared && tsc -b packages/server packages/web --pretty",
+    "demo": "npm run build:shared && npm run demo -w @ams/server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}
