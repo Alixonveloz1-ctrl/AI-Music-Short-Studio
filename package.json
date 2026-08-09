@@ -2,7 +2,6 @@
   "name": "ai-music-short-studio",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "description": "AI Music Short Studio — create musical audiovisual shorts with AI, with the user approving every generated asset.",
   "workspaces": [
     "packages/shared",
