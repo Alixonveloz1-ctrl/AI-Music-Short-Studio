@@ -416,6 +416,12 @@ async function modificarProyecto(id, fn) {
   for (let intento = 1; intento <= INTENTOS; intento++) {
     const leido = await leerProyecto(id);
     if (!leido) throw errorDominio(`Proyecto no encontrado: ${id}`, 404);
+    // Sin número de versión no hay precondición posible, y guardarProyecto
+    // interpretaría null como "escribe sin protección" — justo lo que este
+    // bucle existe para impedir. Antes fallar que perder una aprobación.
+    if (!leido.generacion) {
+      throw errorDominio(`No se pudo determinar la versión del proyecto ${id}`, 502);
+    }
 
     const resultado = await fn(leido.proyecto);
 
