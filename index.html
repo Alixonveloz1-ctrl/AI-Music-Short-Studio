@@ -1,0 +1,2293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AI Music Short Studio</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   AI Music Short Studio — hoja de estilo única.
+
+   Primero el móvil. Todo el diseño está pensado para un pulgar: ningún
+   objetivo táctil baja de 44 px y las decisiones importantes (aprobar y
+   regenerar) viven en botones grandes, no en enlaces pequeños.
+   El escritorio se consigue con dos consultas de medios al final.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root{
+  --fondo:      #070a1a;
+  --fondo2:     #0a0f26;
+  --tarjeta:    #111834;
+  --tarjeta2:   #182146;
+  --borde:      rgba(146,124,255,.16);
+  --borde2:     rgba(146,124,255,.30);
+  --acento:     #7c5cff;
+  --acento2:    #b06cff;
+  --acento-tap: rgba(124,92,255,.16);
+  --texto:      #eceafe;
+  --tenue:      #8d92c4;
+  --tenue2:     #656a99;
+  --ok:         #35d39a;
+  --aviso:      #ffb454;
+  --error:      #ff6b7f;
+  --r:          20px;
+  --r-sm:       13px;
+  --alto-barra: 66px;
+}
+
+*,*::before,*::after{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+
+html,body{
+  background:var(--fondo);
+  color:var(--texto);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,sans-serif;
+  font-size:15px;
+  line-height:1.5;
+  min-height:100%;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+
+/* Halo violeta de fondo. Fijo y sin eventos: decora sin estorbar al scroll. */
+body::before{
+  content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(ellipse 70% 45% at 15% 0%, rgba(124,92,255,.16) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 40% at 90% 12%, rgba(176,108,255,.10) 0%, transparent 70%),
+    radial-gradient(ellipse 80% 50% at 50% 100%, rgba(80,60,180,.10) 0%, transparent 70%);
+}
+
+.oculto{ display:none !important; }
+
+/* ── Tipografía y piezas sueltas ─────────────────────────────────────── */
+h1{ font-size:22px; font-weight:700; letter-spacing:-.02em; }
+h2{ font-size:18px; font-weight:700; letter-spacing:-.01em; }
+h3{ font-size:15px; font-weight:700; }
+h4{ font-size:13px; font-weight:700; color:var(--tenue); text-transform:uppercase; letter-spacing:.08em; }
+a{ color:var(--acento2); text-decoration:none; }
+code,pre{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+
+.tenue{ color:var(--tenue); }
+.mini{ font-size:12.5px; }
+.centro{ text-align:center; }
+.sube{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--acento2); font-weight:700; }
+
+/* ── Estructura ──────────────────────────────────────────────────────── */
+.app{ position:relative; z-index:1; max-width:1500px; margin:0 auto; }
+#vista{ padding:14px 14px calc(var(--alto-barra) + env(safe-area-inset-bottom) + 26px); }
+
+.cab{
+  position:sticky; top:0; z-index:30;
+  display:flex; align-items:center; gap:10px;
+  padding:calc(env(safe-area-inset-top) + 12px) 14px 12px;
+  background:linear-gradient(180deg, rgba(7,10,26,.97) 60%, rgba(7,10,26,0));
+  backdrop-filter:blur(12px);
+}
+.cab-tit{ flex:1; min-width:0; }
+.cab-tit h1{ font-size:19px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cab-tit p{ font-size:12px; color:var(--tenue); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.marca{
+  background:linear-gradient(120deg,#a78bfa,#e879f9,#818cf8);
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+}
+
+/* ── Tarjetas ────────────────────────────────────────────────────────── */
+.tarjeta{
+  background:linear-gradient(160deg, var(--tarjeta) 0%, var(--fondo2) 100%);
+  border:1px solid var(--borde);
+  border-radius:var(--r);
+  padding:16px;
+  margin-bottom:14px;
+}
+.tarjeta > h2, .tarjeta > h3{ margin-bottom:10px; }
+.tarjeta.plana{ background:var(--tarjeta); }
+
+.hero{
+  position:relative; overflow:hidden;
+  background:linear-gradient(150deg, #221a52 0%, #141a3e 55%, #101534 100%);
+  border:1px solid var(--borde2);
+}
+.hero::after{
+  content:''; position:absolute; right:-60px; top:-70px; width:220px; height:220px;
+  background:radial-gradient(circle, rgba(176,108,255,.32), transparent 65%);
+  pointer-events:none;
+}
+.hero-fila{ display:flex; align-items:center; gap:16px; }
+.hero-txt{ flex:1; min-width:0; }
+.hero-txt h2{ margin-bottom:4px; }
+
+/* ── Anillo de progreso ──────────────────────────────────────────────── */
+.anillo{ position:relative; width:104px; height:104px; flex:0 0 104px; }
+.anillo svg{ width:100%; height:100%; transform:rotate(-90deg); }
+.anillo circle{ fill:none; stroke-width:9; stroke-linecap:round; }
+.anillo .pista{ stroke:rgba(255,255,255,.07); }
+.anillo .valor{ stroke:url(#degAnillo); transition:stroke-dashoffset .6s ease; }
+.anillo b{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; font-size:23px; font-weight:700; letter-spacing:-.03em;
+}
+.anillo b span{ font-size:9.5px; font-weight:600; color:var(--tenue); letter-spacing:.1em; text-transform:uppercase; }
+
+/* ── Fichas (chips) ──────────────────────────────────────────────────── */
+.chips{ display:flex; flex-wrap:wrap; gap:7px; }
+.chip{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:8px 12px; min-height:38px;
+  background:var(--tarjeta2); border:1px solid var(--borde);
+  border-radius:999px; color:var(--texto); font-size:13px; font-weight:600;
+  cursor:pointer; font-family:inherit;
+}
+.chip .cuenta{ font-size:11.5px; color:var(--tenue); font-variant-numeric:tabular-nums; }
+.chip.on{ background:var(--acento-tap); border-color:var(--acento); color:#fff; }
+.chip.completa{ border-color:rgba(53,211,154,.45); }
+.chip.completa .cuenta{ color:var(--ok); }
+.chip.activa{ border-color:var(--acento); box-shadow:0 0 0 1px rgba(124,92,255,.35) inset; }
+.chip.activa .cuenta{ color:var(--acento2); }
+.chip.espera{ opacity:.5; }
+.chip.quitar::after{ content:'×'; font-size:17px; color:var(--tenue); margin-left:2px; }
+
+/* ── Botones ─────────────────────────────────────────────────────────── */
+button{ font-family:inherit; }
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  min-height:48px; padding:12px 18px;
+  border-radius:14px; border:1px solid var(--borde);
+  background:var(--tarjeta2); color:var(--texto);
+  font-size:15px; font-weight:700; cursor:pointer;
+}
+.btn:disabled{ opacity:.38; cursor:not-allowed; }
+.btn.pri{
+  background:linear-gradient(120deg,var(--acento),var(--acento2));
+  border-color:transparent; color:#fff;
+  box-shadow:0 8px 22px -10px rgba(124,92,255,.9);
+}
+.btn.ok{ background:linear-gradient(120deg,#1f9e73,#35d39a); border-color:transparent; color:#04231a; }
+.btn.fantasma{ background:transparent; }
+.btn.peligro{ color:var(--error); border-color:rgba(255,107,127,.35); background:transparent; }
+.btn.ancho{ width:100%; }
+.btn.grande{ min-height:56px; font-size:16px; border-radius:17px; }
+.btn.pequeno{ min-height:40px; padding:8px 14px; font-size:13.5px; border-radius:11px; }
+.acciones{ display:flex; flex-wrap:wrap; gap:9px; margin-top:12px; }
+.acciones .btn{ flex:1 1 130px; }
+
+/* ── Formularios ─────────────────────────────────────────────────────── */
+label.campo{ display:block; margin-bottom:12px; }
+label.campo > span{ display:block; font-size:12.5px; font-weight:700; color:var(--tenue); margin-bottom:6px; }
+input[type=text],input[type=search],input[type=password],textarea,select{
+  width:100%; padding:13px 14px; min-height:48px;
+  background:var(--fondo2); color:var(--texto);
+  border:1px solid var(--borde); border-radius:13px;
+  font-size:16px; /* 16px evita que iOS haga zoom al enfocar */
+  font-family:inherit; line-height:1.45;
+}
+textarea{ resize:vertical; min-height:88px; }
+select{ appearance:none; background-image:linear-gradient(45deg,transparent 50%,var(--tenue) 50%),linear-gradient(135deg,var(--tenue) 50%,transparent 50%);
+  background-position:calc(100% - 20px) 22px,calc(100% - 14px) 22px; background-size:6px 6px,6px 6px; background-repeat:no-repeat; padding-right:40px; }
+input:focus,textarea:focus,select:focus{ outline:none; border-color:var(--acento); box-shadow:0 0 0 3px rgba(124,92,255,.16); }
+.rejilla2{ display:grid; grid-template-columns:1fr; gap:10px; }
+.paso{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; margin-right:8px; border-radius:8px;
+  background:var(--acento-tap); color:var(--acento2); font-size:12.5px; font-weight:800;
+}
+
+/* ── Listas de selección ─────────────────────────────────────────────── */
+.opciones{ display:flex; flex-direction:column; gap:7px; max-height:330px; overflow-y:auto; margin-top:10px; padding-right:2px; }
+.opcion{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  width:100%; text-align:left; padding:12px 14px; min-height:50px;
+  background:var(--fondo2); border:1px solid var(--borde); border-radius:var(--r-sm);
+  color:var(--texto); font-size:14.5px; cursor:pointer;
+}
+.opcion small{ color:var(--tenue); font-size:12px; }
+.opcion.on{ border-color:var(--acento); background:var(--acento-tap); }
+
+/* ── Filas de producción ─────────────────────────────────────────────── */
+.filas{ display:flex; flex-direction:column; gap:8px; }
+.fila{
+  display:flex; align-items:center; gap:11px; width:100%; text-align:left;
+  padding:12px 13px; min-height:56px;
+  background:var(--fondo2); border:1px solid var(--borde);
+  border-left:3px solid var(--tenue2);
+  border-radius:var(--r-sm); color:var(--texto); cursor:pointer;
+}
+.fila:disabled{ cursor:default; }
+.fila .nom{ flex:1; min-width:0; font-size:14px; font-weight:600; }
+.fila .nom small{ display:block; font-weight:400; font-size:11.5px; color:var(--tenue); }
+.fila.sel{ background:var(--acento-tap); border-color:var(--acento); }
+.fila.pending{ border-left-color:var(--tenue2); }
+.fila.generating{ border-left-color:var(--acento2); }
+.fila.review{ border-left-color:var(--aviso); }
+.fila.approved{ border-left-color:var(--ok); }
+.fila.caduco{ border-left-color:var(--error); }
+
+.etiq{
+  display:inline-block; padding:4px 9px; border-radius:999px;
+  font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+  border:1px solid var(--borde); color:var(--tenue); white-space:nowrap;
+}
+.etiq.pending{ color:var(--tenue); }
+.etiq.generating{ color:var(--acento2); border-color:rgba(176,108,255,.4); background:rgba(176,108,255,.10); }
+.etiq.review{ color:var(--aviso); border-color:rgba(255,180,84,.45); background:rgba(255,180,84,.10); }
+.etiq.approved{ color:var(--ok); border-color:rgba(53,211,154,.42); background:rgba(53,211,154,.10); }
+.etiq.caduco{ color:var(--error); border-color:rgba(255,107,127,.42); background:rgba(255,107,127,.10); }
+.etiq.bloq{ color:#dcd3ff; border-color:var(--borde2); background:rgba(124,92,255,.12); }
+
+/* ── Avisos ──────────────────────────────────────────────────────────── */
+.nota{
+  padding:12px 14px; border-radius:var(--r-sm); font-size:13.5px;
+  background:rgba(124,92,255,.09); border:1px solid var(--borde); color:#d9d5ff;
+  margin-bottom:11px;
+}
+.nota.aviso{ background:rgba(255,180,84,.09); border-color:rgba(255,180,84,.35); color:#ffdfae; }
+.nota.mala{ background:rgba(255,107,127,.09); border-color:rgba(255,107,127,.35); color:#ffc5cd; }
+.nota.buena{ background:rgba(53,211,154,.09); border-color:rgba(53,211,154,.32); color:#b6f2da; }
+.nota b{ color:#fff; }
+
+/* ── Medios ──────────────────────────────────────────────────────────── */
+.medio{
+  background:#05070f; border:1px solid var(--borde); border-radius:var(--r-sm);
+  overflow:hidden; margin-bottom:11px;
+}
+.medio img,.medio video{ display:block; width:100%; max-height:62vh; object-fit:contain; background:#05070f; }
+.medio audio{ display:block; width:100%; padding:14px; }
+.medio-vacio{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+  min-height:190px; padding:26px 18px; text-align:center; color:var(--tenue); font-size:13.5px;
+}
+
+.girando{
+  width:30px; height:30px; border-radius:50%;
+  border:3px solid rgba(255,255,255,.12); border-top-color:var(--acento2);
+  animation:girar .9s linear infinite;
+}
+@keyframes girar{ to{ transform:rotate(360deg); } }
+.punto{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--acento2); animation:latir 1.4s ease-in-out infinite; }
+@keyframes latir{ 0%,100%{ opacity:.35; transform:scale(.8) } 50%{ opacity:1; transform:scale(1.15) } }
+
+/* ── Detalles plegables ──────────────────────────────────────────────── */
+details{ border:1px solid var(--borde); border-radius:var(--r-sm); background:var(--fondo2); margin-bottom:11px; }
+summary{ padding:13px 14px; min-height:48px; display:flex; align-items:center; font-size:13.5px; font-weight:700; color:var(--tenue); cursor:pointer; list-style:none; }
+summary::-webkit-details-marker{ display:none; }
+summary::after{ content:'▾'; margin-left:auto; color:var(--tenue2); }
+details[open] summary::after{ content:'▴'; }
+details .cuerpo{ padding:0 14px 14px; }
+details pre{ white-space:pre-wrap; word-break:break-word; background:#05070f; border:1px solid var(--borde); border-radius:11px; padding:12px; color:#cfd0ee; margin-bottom:10px; }
+
+/* ── Tablas y listas de datos ────────────────────────────────────────── */
+.desliza{ overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -4px; padding:0 4px; }
+table{ border-collapse:collapse; width:100%; font-size:12.5px; min-width:560px; }
+th,td{ text-align:left; padding:8px 9px; border-bottom:1px solid var(--borde); vertical-align:top; }
+th{ color:var(--tenue); font-size:11px; text-transform:uppercase; letter-spacing:.06em; white-space:nowrap; }
+
+.datos div{ display:flex; gap:10px; padding:7px 0; border-bottom:1px solid rgba(146,124,255,.08); font-size:13.5px; }
+.datos dt{ flex:0 0 40%; max-width:150px; color:var(--tenue); font-size:12.5px; }
+.datos dd{ flex:1; min-width:0; }
+
+.tiempos{ display:flex; flex-direction:column; gap:5px; }
+.tiempos li{ display:flex; align-items:center; gap:9px; padding:8px 11px; background:var(--fondo2); border:1px solid var(--borde); border-radius:10px; font-size:12.5px; list-style:none; }
+.tiempos .tc{ font-variant-numeric:tabular-nums; color:var(--acento2); font-weight:700; }
+.tiempos .cl{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tiempos li.rep{ border-style:dashed; }
+
+.reglas li{ margin-left:18px; font-size:13px; color:#cfd0ee; padding:3px 0; }
+
+.eventos{ display:flex; flex-direction:column; gap:6px; }
+.eventos li{ display:flex; gap:9px; font-size:12.5px; color:#c9cbee; list-style:none; padding:5px 0; border-bottom:1px solid rgba(146,124,255,.07); }
+.eventos time{ color:var(--tenue2); font-variant-numeric:tabular-nums; flex:0 0 auto; }
+
+/* ── Galería de la biblioteca ────────────────────────────────────────── */
+.galeria{ display:grid; grid-template-columns:repeat(auto-fill,minmax(148px,1fr)); gap:10px; }
+.galeria figure{ background:var(--fondo2); border:1px solid var(--borde); border-radius:var(--r-sm); overflow:hidden; }
+.galeria img,.galeria video{ width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#05070f; }
+.galeria audio{ width:100%; padding:8px; }
+.galeria figcaption{ padding:8px 10px; font-size:11.5px; color:var(--tenue); }
+
+/* ── Pestañas internas del proyecto ──────────────────────────────────── */
+.subtabs{ display:flex; gap:6px; background:var(--fondo2); border:1px solid var(--borde); border-radius:15px; padding:5px; margin-bottom:14px; }
+.subtabs button{ flex:1; min-height:44px; border:none; border-radius:11px; background:transparent; color:var(--tenue); font-size:13.5px; font-weight:700; cursor:pointer; }
+.subtabs button.on{ background:var(--acento-tap); color:#fff; box-shadow:0 0 0 1px var(--borde2) inset; }
+
+/* ── Barra inferior fija ─────────────────────────────────────────────── */
+.barra{
+  position:fixed; left:0; right:0; bottom:0; z-index:40;
+  display:flex; align-items:flex-end; justify-content:space-around;
+  height:calc(var(--alto-barra) + env(safe-area-inset-bottom));
+  padding:0 6px env(safe-area-inset-bottom);
+  background:rgba(10,14,34,.94); backdrop-filter:blur(16px);
+  border-top:1px solid var(--borde);
+}
+.barra button{
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  height:var(--alto-barra); border:none; background:transparent;
+  color:var(--tenue2); font-size:10.5px; font-weight:700; cursor:pointer;
+}
+.barra button .ic{ font-size:19px; line-height:1; }
+.barra button.on{ color:var(--acento2); }
+.barra .crear{ flex:0 0 68px; }
+.barra .crear .ic{
+  display:flex; align-items:center; justify-content:center;
+  width:52px; height:52px; margin-bottom:2px; border-radius:18px; font-size:27px; color:#fff;
+  background:linear-gradient(135deg,var(--acento),var(--acento2));
+  box-shadow:0 10px 24px -10px rgba(124,92,255,1);
+}
+
+/* ── Acceso ──────────────────────────────────────────────────────────── */
+.acceso{ position:relative; z-index:1; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px 18px calc(24px + env(safe-area-inset-bottom)); }
+.acceso .caja{ width:100%; max-width:390px; }
+.acceso .logo{ text-align:center; margin-bottom:22px; }
+.acceso .logo .ic{ font-size:44px; }
+.acceso .logo h1{ font-size:26px; margin-top:6px; }
+.acceso .logo p{ color:var(--tenue); font-size:13px; margin-top:4px; }
+
+/* ── Mensajes flotantes ──────────────────────────────────────────────── */
+#avisos{
+  position:fixed; z-index:60; left:12px; right:12px;
+  bottom:calc(var(--alto-barra) + env(safe-area-inset-bottom) + 12px);
+  display:flex; flex-direction:column; gap:8px; pointer-events:none;
+}
+#avisos div{
+  pointer-events:auto; padding:13px 15px; border-radius:14px; font-size:13.5px; font-weight:600;
+  background:#1d1140; border:1px solid rgba(255,107,127,.45); color:#ffd3d9;
+  box-shadow:0 14px 34px -14px #000;
+  animation:entra .22s ease;
+}
+#avisos div.ok{ border-color:rgba(53,211,154,.45); color:#c2f5e2; }
+@keyframes entra{ from{ opacity:0; transform:translateY(10px) } }
+
+/* ══ Escritorio: tres columnas ═════════════════════════════════════════ */
+@media (min-width:900px){
+  #vista{ padding:18px 24px 40px; }
+  .barra{ position:sticky; top:0; bottom:auto; height:auto; border-top:none; border-bottom:1px solid var(--borde); justify-content:center; gap:6px; padding:8px; }
+  .barra button{ flex:0 0 auto; flex-direction:row; gap:8px; height:46px; padding:0 16px; border-radius:13px; font-size:13.5px; }
+  .barra button.on{ background:var(--acento-tap); }
+  .barra .crear{ flex:0 0 auto; }
+  .barra .crear .ic{ width:30px; height:30px; font-size:19px; border-radius:11px; margin:0; }
+  .app{ display:flex; flex-direction:column-reverse; }
+  .rejilla2{ grid-template-columns:1fr 1fr; gap:14px; }
+
+  /* La sala de producción se despliega entera: configuración a la
+     izquierda, producción en el centro, previsualización a la derecha.
+     Las pestañas sólo existen para el móvil, así que aquí desaparecen. */
+  .subtabs{ display:none; }
+  .sala{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr); gap:16px; align-items:start; }
+  .col{ display:block !important; min-width:0; }
+  .col-a{ order:1; } .col-b{ order:2; } .col-c{ order:3; }
+  .galeria{ grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); }
+  .anillo{ width:120px; height:120px; flex-basis:120px; }
+}
+@media (max-width:899px){
+  .col{ display:none; }
+  .col.on{ display:block; }
+}
+</style>
+</head>
+<body>
+
+<!-- Degradado del anillo de progreso. Vive en un SVG oculto porque un
+     gradiente sólo se puede referenciar desde el mismo documento. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="degAnillo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7c5cff"/>
+      <stop offset="100%" stop-color="#e879f9"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div id="acceso" class="acceso oculto">
+  <div class="caja">
+    <div class="logo">
+      <div class="ic">🎬</div>
+      <h1 class="marca">AI Music Short Studio</h1>
+      <p>Cortometrajes musicales instrumentales</p>
+    </div>
+    <div class="tarjeta">
+      <label class="campo">
+        <span>Contraseña de la aplicación</span>
+        <input type="password" id="clave" autocomplete="current-password" placeholder="Tu clave privada">
+      </label>
+      <button class="btn pri ancho grande" data-accion="entrar">Entrar</button>
+      <div id="acceso-error" class="nota mala oculto" style="margin-top:12px"></div>
+      <p class="mini tenue" style="margin-top:14px">
+        La clave se guarda sólo en este teléfono y viaja en la cabecera
+        <code>x-app-key</code>. Protege tus créditos: sin ella el servidor no
+        genera nada.
+      </p>
+      <button class="btn fantasma ancho pequeno" style="margin-top:10px" data-accion="salud-acceso">Comprobar el estado del servidor</button>
+      <div id="acceso-salud" class="oculto" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="app oculto">
+  <main id="vista"></main>
+  <nav class="barra" id="barra"></nav>
+</div>
+
+<div id="avisos"></div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AI Music Short Studio — interfaz completa en un solo archivo.
+
+   La regla del producto manda sobre todo lo demás: la IA propone y genera,
+   pero NADA queda aprobado sin que el usuario pulse «Aprobar». Por eso el
+   estado «en revisión» se pinta en ámbar y con contadores por todas partes:
+   es la única cosa que la herramienta necesita que el usuario vea.
+
+   No hay compilación ni dependencias. Las vistas se dibujan con cadenas de
+   HTML y los clics se recogen con un único delegador sobre `document`, que
+   es lo que menos código y menos sorpresas da cuando todo vive junto.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// ───────────────────────────────────────────────────────────────────────
+// Utilidades
+// ───────────────────────────────────────────────────────────────────────
+
+function $(id){ return document.getElementById(id); }
+
+/** Escapa texto para meterlo en HTML. TODO lo que venga del servidor pasa por aquí. */
+function esc(v){
+  if (v === null || v === undefined) return '';
+  return String(v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/** Sin acentos y en minúsculas: así «violin» encuentra «Violín». */
+function normalizar(v){
+  // El rango se escribe con escapes: los signos diacríticos sueltos son
+  // invisibles en un editor y se pierden al copiar el archivo.
+  return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function fmtTiempo(seg){
+  var t = Math.max(0, Math.round(Number(seg) || 0));
+  var m = String(Math.floor(t / 60)).padStart(2,'0');
+  var s = String(t % 60).padStart(2,'0');
+  return m + ':' + s;
+}
+
+function fmtFecha(iso){
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('es-ES', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+function fmtHora(iso){
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+function fmtBytes(n){
+  var b = Number(n) || 0;
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024) return Math.round(b / 1024) + ' KB';
+  return b + ' B';
+}
+
+/**
+ * Sustituye el contenido de un contenedor SIN pisar lo que el usuario está
+ * escribiendo. El repintado automático llega cada pocos segundos mientras se
+ * consulta el estado de una generación; sin esta guarda, escribir la
+ * descripción del vídeo era imposible porque el texto desaparecía a media
+ * frase.
+ */
+function pintarEn(id, html){
+  var caja = $(id);
+  if (!caja) return;
+  var foco = document.activeElement;
+  if (foco && caja.contains(foco) && /^(INPUT|TEXTAREA|SELECT)$/.test(foco.tagName)) return;
+  caja.innerHTML = html;
+}
+
+/** Mensaje flotante. `tipo` puede ser 'ok'; cualquier otra cosa se pinta como error. */
+function avisar(texto, tipo){
+  var caja = $('avisos');
+  var el = document.createElement('div');
+  if (tipo === 'ok') el.className = 'ok';
+  el.textContent = texto;
+  caja.appendChild(el);
+  setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, tipo === 'ok' ? 3200 : 7000);
+}
+
+/** Un error de verdad dice QUÉ ha fallado; nunca «error». */
+function avisarError(e){
+  var msg = (e && e.message) ? e.message : String(e || 'Fallo desconocido');
+  if (e && e.configError) msg += ' — esto se arregla en las variables de entorno de Vercel, no reintentando.';
+  if (e && e.detalle) msg += ' (' + e.detalle + ')';
+  avisar(msg);
+  console.error('[ams]', e);
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Estado de la aplicación
+// ───────────────────────────────────────────────────────────────────────
+
+var CLAVE_ALMACEN = 'ams_clave';
+
+var estado = {
+  clave: '',
+  vista: 'panel',          // panel | proyectos | crear | biblioteca | perfil | proyecto
+  subtab: 'produccion',    // pestañas internas del proyecto (sólo móvil)
+  resumenes: null,         // lista de /api/proyectos
+  proyecto: null,          // proyecto completo abierto
+  proyectoId: null,
+  faltanParaMontar: null,  // lo que diga el servidor, si lo dice
+  catalogo: null,
+  activoSel: null,         // activo que se está revisando
+  genVista: null,          // generación concreta que se está mirando
+  trabajando: false,       // hay una acción del usuario en vuelo
+  montajeJob: null,        // identificador del montaje en curso
+  filtroBib: 'todo',
+  form: null,              // borrador de la pantalla de configuración
+  salud: null
+};
+
+// ───────────────────────────────────────────────────────────────────────
+// Llamadas al servidor
+// ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Toda llamada lleva la cabecera x-app-key.
+ *
+ * Un 401 NO siempre significa «tu sesión caducó»: puede venir reenviado de
+ * Google o de otro proveedor. Sólo se vuelve a pedir la contraseña cuando el
+ * cuerpo trae code:'APP_AUTH', que es el que pone nuestra propia puerta; si no,
+ * el error real quedaría tapado por la pantalla de acceso.
+ */
+async function pedir(ruta, opciones){
+  var o = opciones || {};
+  var cabeceras = { 'Content-Type': 'application/json' };
+  if (estado.clave) cabeceras['x-app-key'] = estado.clave;
+
+  var res;
+  try {
+    res = await fetch('/api/' + ruta, {
+      method: o.metodo || 'GET',
+      headers: cabeceras,
+      body: o.cuerpo ? JSON.stringify(o.cuerpo) : undefined
+    });
+  } catch (e) {
+    throw new Error('No hay conexión con el servidor. Comprueba la red y vuelve a intentarlo.');
+  }
+
+  var texto = await res.text();
+  var datos = {};
+  if (texto) {
+    try { datos = JSON.parse(texto); }
+    catch (e) { datos = null; }
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 && datos && datos.code === 'APP_AUTH') {
+      cerrarSesion(datos.error || 'Tu sesión ha caducado. Vuelve a entrar con tu contraseña.');
+      throw new Error(datos.error || 'No autorizado.');
+    }
+    // Vercel devuelve HTML cuando la función no existe. Decirlo con esas
+    // palabras ahorra media hora de mirar la consola desde el móvil.
+    if (!datos) {
+      var falta = res.status === 404
+        ? 'El endpoint /api/' + ruta.split('?')[0] + ' no existe en el servidor (404).'
+        : 'El servidor respondió ' + res.status + ' sin datos legibles en /api/' + ruta.split('?')[0] + '.';
+      throw new Error(falta);
+    }
+    var err = new Error(datos.error || ('El servidor respondió ' + res.status + ' en /api/' + ruta.split('?')[0] + '.'));
+    err.status = res.status;
+    err.configError = !!datos.configError;
+    err.detalle = datos.detalle;
+    throw err;
+  }
+
+  return datos || {};
+}
+
+/** Los endpoints los escribe otro agente: se acepta el nombre en los dos idiomas. */
+function desenvolver(d, claves){
+  if (!d) return null;
+  for (var i = 0; i < claves.length; i++) {
+    if (d[claves[i]] !== undefined && d[claves[i]] !== null) return d[claves[i]];
+  }
+  return d;
+}
+
+var api = {
+  salud: function(){ return pedir('salud'); },
+  catalogo: async function(){
+    var d = await pedir('catalogo');
+    return desenvolver(d, ['catalogo','catalog']);
+  },
+  proyectos: async function(){
+    var d = await pedir('proyectos');
+    var lista = desenvolver(d, ['proyectos','projects','items']);
+    return Array.isArray(lista) ? lista : [];
+  },
+  crear: async function(config){
+    // El endpoint puede esperar la configuración anidada en `config` o suelta
+    // en la raíz. Se manda de las dos formas: duplicar unas claves no cuesta
+    // nada y evita un 400 por un detalle de nombres.
+    var cuerpo = Object.assign({ config: config, configuracion: config }, config);
+    var d = await pedir('proyectos', { metodo:'POST', cuerpo: cuerpo });
+    return d;
+  },
+  proyecto: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id)); },
+  generar: function(id, activo){ return pedir('generar', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
+  estadoGeneracion: function(id, activo, gen){
+    return pedir('generar?id=' + encodeURIComponent(id) + '&activo=' + encodeURIComponent(activo) + '&gen=' + encodeURIComponent(gen));
+  },
+  aprobar: function(id, activo, gen){ return pedir('aprobar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
+  rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
+  desbloquear: function(id, activo){ return pedir('desbloquear', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
+  montar: function(id){ return pedir('montar', { metodo:'POST', cuerpo:{ id:id } }); },
+  estadoMontaje: function(id, job){
+    return pedir('montar?id=' + encodeURIComponent(id) + (job ? '&job=' + encodeURIComponent(job) : ''));
+  },
+  entrega: function(id, titulo, descripcion, hashtags){
+    return pedir('entrega', { metodo:'POST', cuerpo:{ id:id, titulo:titulo, descripcion:descripcion, hashtags:hashtags } });
+  }
+};
+
+// ───────────────────────────────────────────────────────────────────────
+// Reglas de producción, calculadas aquí mismo
+//
+// El servidor manda su propio `status`, pero la interfaz necesita algo más
+// que contadores: necesita poder decir EXACTAMENTE qué está bloqueando cada
+// activo. Todo eso sale del proyecto, que ya viene entero, así que se calcula
+// en el navegador (mismo criterio que api/_lib/progreso.js) y así la pantalla
+// no depende de la forma concreta de la respuesta.
+// ───────────────────────────────────────────────────────────────────────
+
+var ETAPAS_ACTIVOS = ['images','videos','music','ambient'];
+var ETAPAS = ['concept','images','videos','music','ambient','edit','delivery'];
+
+var ETIQ_ETAPA = {
+  concept: 'Concepto', images: 'Imágenes', videos: 'Vídeos',
+  music: 'Música', ambient: 'Ambiente', edit: 'Montaje', delivery: 'Entrega'
+};
+
+var ETIQ_ESTADO = {
+  pending: 'Pendiente', generating: 'Generando', review: 'En revisión', approved: 'Aprobado'
+};
+
+var ETIQ_MEDIO = { image:'Imagen', video:'Vídeo', audio:'Audio' };
+
+var MEDIO_DE_TIPO = {
+  master_character:'image', master_environment:'image', master_scene:'image',
+  shot_image:'image', clip:'video', music:'audio', ambient:'audio'
+};
+
+var ETIQ_MONTAJE = {
+  pending: 'sin montar', building: 'montando', review: 'previsualización en revisión',
+  approved: 'montaje aprobado', exported: 'MP4 exportado', failed: 'el montaje falló'
+};
+
+var ETIQ_PULSO = { opening:'apertura', development:'desarrollo', climax:'clímax', closing:'cierre' };
+var ETIQ_TRANSICION = { cut:'corte', dip_to_black:'fundido a negro', fade_in:'entra fundido', fade_out:'sale fundido' };
+
+function activos(p){ return (p && Array.isArray(p.assets)) ? p.assets : []; }
+
+function porOrden(p){
+  return activos(p).slice().sort(function(a,b){ return (a.order||0) - (b.order||0); });
+}
+
+function estaAprobado(a){ return !!a.approvedGenerationId; }
+
+/** Aprobado Y vigente: un activo desactualizado no cuenta como terminado. */
+function cuenta(a){ return estaAprobado(a) && !a.stale; }
+
+function activosDeEtapa(p, etapa){
+  return porOrden(p).filter(function(a){ return a.stage === etapa; });
+}
+
+function etapaCompleta(p, etapa){
+  var lista = activosDeEtapa(p, etapa);
+  if (!lista.length) return true;
+  return lista.every(cuenta);
+}
+
+function etapaAbierta(p, etapa){
+  var i = ETAPAS_ACTIVOS.indexOf(etapa);
+  if (i === -1) return false;
+  for (var j = 0; j < i; j++) if (!etapaCompleta(p, ETAPAS_ACTIVOS[j])) return false;
+  return true;
+}
+
+function dependenciasQueFaltan(p, a){
+  var indice = {};
+  activos(p).forEach(function(x){ indice[x.id] = x; });
+  var faltan = [];
+  (a.dependsOn || []).forEach(function(id){
+    var dep = indice[id];
+    if (dep && !cuenta(dep)) faltan.push(dep);
+  });
+  return faltan;
+}
+
+/** Activos que se construyen sobre este (directa o indirectamente). */
+function dependientes(p, id){
+  var salida = {}, cola = [id];
+  while (cola.length) {
+    var actual = cola.shift();
+    activos(p).forEach(function(a){
+      if ((a.dependsOn || []).indexOf(actual) === -1) return;
+      if (salida[a.id]) return;
+      salida[a.id] = a;
+      cola.push(a.id);
+    });
+  }
+  return Object.keys(salida).map(function(k){ return salida[k]; });
+}
+
+/** { ok } o { ok:false, motivo } — el motivo se enseña tal cual en pantalla. */
+function puedeGenerar(p, a){
+  if (!etapaAbierta(p, a.stage)) {
+    return { ok:false, motivo: 'La etapa «' + ETIQ_ETAPA[a.stage] + '» todavía no está abierta: falta aprobar entera la etapa anterior.' };
+  }
+  var faltan = dependenciasQueFaltan(p, a);
+  if (faltan.length) {
+    return { ok:false, motivo: 'Faltan por aprobar: ' + faltan.map(function(x){ return x.label; }).join(', ') + '.' };
+  }
+  if (a.status === 'generating') return { ok:false, motivo:'Ya hay una generación en curso para este activo.' };
+  if (a.locked) return { ok:false, motivo:'El activo está aprobado y bloqueado. Desbloquéalo para regenerarlo.' };
+  return { ok:true };
+}
+
+/** Estado de producción completo: etapas con contadores, filas y siguiente acción. */
+function situacion(p){
+  var etapas = ETAPAS.map(function(etapa){
+    var lista = activosDeEtapa(p, etapa);
+    var aprobados = lista.filter(cuenta).length;
+    var cortado = (p.finalCut && p.finalCut.status) || 'pending';
+    var como;
+    if (etapa === 'concept') como = 'complete';
+    else if (etapa === 'edit') {
+      como = (cortado === 'approved' || cortado === 'exported') ? 'complete'
+           : ETAPAS_ACTIVOS.every(function(s){ return etapaCompleta(p, s); }) ? 'active' : 'pending';
+    }
+    else if (etapa === 'delivery') como = (cortado === 'exported') ? 'complete' : 'pending';
+    else if (etapaCompleta(p, etapa)) como = 'complete';
+    else if (etapaAbierta(p, etapa)) como = 'active';
+    else como = 'pending';
+    return { etapa: etapa, label: ETIQ_ETAPA[etapa], estado: como, aprobados: aprobados, total: lista.length };
+  });
+
+  var ordenados = porOrden(p);
+  var enRevision = ordenados.filter(function(a){ return a.status === 'review'; });
+  var generando = ordenados.filter(function(a){ return a.status === 'generating'; });
+
+  // Lo que ya espera una decisión del usuario va SIEMPRE primero: es lo único
+  // que sólo puede resolver él.
+  var siguiente = enRevision[0] || null;
+  if (!siguiente) {
+    siguiente = ordenados.find(function(a){ return !cuenta(a) && puedeGenerar(p, a).ok; }) || null;
+  }
+
+  var totales = ordenados.length;
+  var listos = ordenados.filter(cuenta).length;
+
+  return {
+    etapas: etapas,
+    filas: ordenados,
+    enRevision: enRevision,
+    generando: generando,
+    siguiente: siguiente,
+    aprobados: listos,
+    total: totales,
+    porcentaje: totales ? Math.round((listos / totales) * 100) : 0,
+    listoParaMontar: ETAPAS_ACTIVOS.every(function(s){ return etapaCompleta(p, s); })
+  };
+}
+
+function generacionVista(a){
+  if (!a || !a.generations || !a.generations.length) return null;
+  if (estado.genVista) {
+    var elegida = a.generations.find(function(g){ return g.id === estado.genVista; });
+    if (elegida) return elegida;
+  }
+  var enCurso = a.generations.filter(function(g){ return g.status === 'generating'; }).pop();
+  if (enCurso) return enCurso;
+  var aprobada = a.generations.find(function(g){ return g.id === a.approvedGenerationId; });
+  var ultima = a.generations[a.generations.length - 1];
+  // Si la última ya está descartada pero hay una aprobada, se enseña la buena:
+  // es la que representa al proyecto.
+  if (ultima && ultima.status === 'rejected' && aprobada) return aprobada;
+  return ultima || aprobada || null;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Sesión
+// ───────────────────────────────────────────────────────────────────────
+
+function cerrarSesion(mensaje){
+  estado.clave = '';
+  try { localStorage.removeItem(CLAVE_ALMACEN); } catch (e) {}
+  $('app').classList.add('oculto');
+  $('acceso').classList.remove('oculto');
+  var caja = $('acceso-error');
+  if (mensaje) { caja.textContent = mensaje; caja.classList.remove('oculto'); }
+  else caja.classList.add('oculto');
+}
+
+async function entrar(){
+  var campo = $('clave');
+  var valor = (campo.value || '').trim();
+  var caja = $('acceso-error');
+  caja.classList.add('oculto');
+  if (!valor) { caja.textContent = 'Escribe la contraseña.'; caja.classList.remove('oculto'); return; }
+
+  estado.clave = valor;
+  try {
+    // Se valida contra un endpoint real y barato: si la clave está mal, el
+    // servidor contesta APP_AUTH y no se guarda nada.
+    estado.resumenes = await api.proyectos();
+    try { localStorage.setItem(CLAVE_ALMACEN, valor); } catch (e) {}
+    $('acceso').classList.add('oculto');
+    $('app').classList.remove('oculto');
+    campo.value = '';
+    await arrancar();
+  } catch (e) {
+    estado.clave = '';
+    caja.textContent = (e && e.message) || 'No se pudo entrar.';
+    caja.classList.remove('oculto');
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Navegación
+// ───────────────────────────────────────────────────────────────────────
+
+function irA(ruta){
+  if (location.hash === ruta) leerRuta();
+  else location.hash = ruta;
+}
+
+function leerRuta(){
+  var h = (location.hash || '').replace(/^#\/?/, '');
+  var partes = h.split('/').filter(Boolean);
+  var antes = estado.vista, antesId = estado.proyectoId;
+
+  if (!partes.length) estado.vista = 'panel';
+  else if (partes[0] === 'proyectos') estado.vista = 'proyectos';
+  else if (partes[0] === 'crear') estado.vista = 'crear';
+  else if (partes[0] === 'biblioteca') estado.vista = 'biblioteca';
+  else if (partes[0] === 'perfil') estado.vista = 'perfil';
+  else if (partes[0] === 'proyecto' && partes[1]) { estado.vista = 'proyecto'; estado.proyectoId = partes[1]; }
+  else estado.vista = 'panel';
+
+  // Cambiar de proyecto tira la selección: revisar el activo de otro corto no
+  // tiene sentido y era una fuente de pantallas en blanco.
+  if (estado.proyectoId !== antesId) { estado.activoSel = null; estado.genVista = null; }
+  if (antes !== estado.vista) { window.scrollTo(0, 0); }
+
+  pintar();
+  cargarLoQueFalte();
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Carga de datos
+// ───────────────────────────────────────────────────────────────────────
+
+async function cargarResumenes(){
+  try { estado.resumenes = await api.proyectos(); }
+  catch (e) { avisarError(e); estado.resumenes = estado.resumenes || []; }
+}
+
+async function cargarCatalogo(){
+  if (estado.catalogo) return;
+  try { estado.catalogo = await api.catalogo(); }
+  catch (e) { avisarError(e); }
+}
+
+async function cargarProyecto(id, silencioso){
+  try {
+    var d = await api.proyecto(id);
+    var p = desenvolver(d, ['project','proyecto']);
+    if (!p || !p.id) throw new Error('El servidor no devolvió ningún proyecto para «' + id + '».');
+    estado.proyecto = p;
+    estado.proyectoId = p.id;
+    var st = d.status || d.estado;
+    estado.faltanParaMontar = (st && (st.missingForEdit || st.faltanParaMontar)) || null;
+    if (p.finalCut) {
+      // El identificador del montaje puede venir con varios nombres según cómo
+      // lo guarde el servidor; cualquiera de ellos sirve para seguir el trabajo.
+      estado.montajeJob = p.finalCut.job || p.finalCut.jobId || p.finalCut.buildId || estado.montajeJob;
+    }
+    return p;
+  } catch (e) {
+    if (!silencioso) avisarError(e);
+    return null;
+  }
+}
+
+/** Elige el proyecto que el panel debe enseñar: el último tocado y sin terminar. */
+function proyectoEnCurso(){
+  var lista = estado.resumenes || [];
+  if (!lista.length) return null;
+  var orden = lista.slice().sort(function(a,b){
+    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  });
+  return orden.find(function(p){ return p.finalCutStatus !== 'exported'; }) || orden[0];
+}
+
+var cargando = false;
+
+async function cargarLoQueFalte(){
+  if (cargando) return;
+  cargando = true;
+  try {
+    if (estado.vista === 'crear') {
+      await cargarCatalogo();
+      if (!estado.form) prepararFormulario();
+      pintar();
+      return;
+    }
+    if (estado.vista === 'proyecto' && estado.proyectoId) {
+      if (!estado.proyecto || estado.proyecto.id !== estado.proyectoId) {
+        estado.proyecto = null;
+        pintar();
+        await cargarProyecto(estado.proyectoId);
+        pintar();
+      }
+      return;
+    }
+    if (estado.vista === 'panel' || estado.vista === 'proyectos') {
+      if (!estado.resumenes) { await cargarResumenes(); pintar(); }
+      if (estado.vista === 'panel') {
+        var res = proyectoEnCurso();
+        if (res && (!estado.proyecto || estado.proyecto.id !== res.id)) {
+          await cargarProyecto(res.id, true);
+          pintar();
+        }
+      }
+      return;
+    }
+  } finally {
+    cargando = false;
+  }
+}
+
+async function arrancar(){
+  await cargarResumenes();
+  leerRuta();
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Piezas de HTML reutilizables
+// ───────────────────────────────────────────────────────────────────────
+
+function htmlAnillo(pct){
+  var r = 52, largo = 2 * Math.PI * r;
+  var off = largo * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  return '<div class="anillo">' +
+    '<svg viewBox="0 0 120 120" aria-hidden="true">' +
+      '<circle class="pista" cx="60" cy="60" r="' + r + '"></circle>' +
+      '<circle class="valor" cx="60" cy="60" r="' + r + '" stroke-dasharray="' + largo.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '"></circle>' +
+    '</svg>' +
+    '<b>' + pct + '%<span>aprobado</span></b>' +
+  '</div>';
+}
+
+function htmlChipsEtapas(sit){
+  return '<div class="chips">' + sit.etapas.filter(function(e){
+    return e.etapa !== 'concept' && e.etapa !== 'delivery';
+  }).map(function(e){
+    var clase = e.estado === 'complete' ? 'completa' : (e.estado === 'active' ? 'activa' : 'espera');
+    var cuenta = e.total ? '<span class="cuenta">' + e.aprobados + '/' + e.total + '</span>'
+                         : '<span class="cuenta">' + (e.estado === 'complete' ? 'hecho' : '—') + '</span>';
+    return '<span class="chip ' + clase + '">' + esc(e.label) + cuenta + '</span>';
+  }).join('') + '</div>';
+}
+
+function htmlEtiquetaActivo(a){
+  if (a.stale) return '<span class="etiq caduco">Desactualizado</span>';
+  return '<span class="etiq ' + esc(a.status) + '">' + esc(ETIQ_ESTADO[a.status] || a.status) + '</span>';
+}
+
+function htmlFilaActivo(a, seleccionado){
+  var clases = ['fila', a.stale ? 'caduco' : a.status];
+  if (seleccionado) clases.push('sel');
+  var gens = (a.generations || []).length;
+  return '<button class="' + clases.join(' ') + '" data-accion="abrir-activo" data-activo="' + esc(a.id) + '">' +
+    '<span class="nom">' + esc(a.label) +
+      '<small>' + esc(ETIQ_ETAPA[a.stage] || a.stage) + (gens ? ' · ' + gens + (gens === 1 ? ' generación' : ' generaciones') : '') +
+      (a.locked ? ' · bloqueado' : '') + '</small>' +
+    '</span>' + htmlEtiquetaActivo(a) +
+  '</button>';
+}
+
+function htmlDatos(pares){
+  var filas = pares.filter(function(p){ return p[1] !== undefined && p[1] !== null && p[1] !== ''; })
+    .map(function(p){ return '<div><dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd></div>'; }).join('');
+  return filas ? '<dl class="datos">' + filas + '</dl>' : '';
+}
+
+function htmlVacio(icono, titulo, texto, botonTexto, botonRuta){
+  return '<div class="tarjeta centro" style="padding:34px 20px">' +
+    '<div style="font-size:40px">' + icono + '</div>' +
+    '<h2 style="margin:10px 0 6px">' + esc(titulo) + '</h2>' +
+    '<p class="tenue mini">' + esc(texto) + '</p>' +
+    (botonTexto ? '<button class="btn pri grande" style="margin-top:16px" data-accion="ir" data-ruta="' + esc(botonRuta) + '">' + esc(botonTexto) + '</button>' : '') +
+  '</div>';
+}
+
+function htmlCargando(texto){
+  return '<div class="tarjeta centro" style="padding:34px 20px">' +
+    '<div class="girando" style="margin:0 auto 12px"></div>' +
+    '<p class="tenue mini">' + esc(texto) + '</p>' +
+  '</div>';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Pintado general
+// ───────────────────────────────────────────────────────────────────────
+
+function pintar(){
+  pintarBarra();
+  var v = $('vista');
+  if (estado.vista === 'panel') v.innerHTML = vistaPanel();
+  else if (estado.vista === 'proyectos') v.innerHTML = vistaProyectos();
+  else if (estado.vista === 'crear') v.innerHTML = vistaCrear();
+  else if (estado.vista === 'biblioteca') v.innerHTML = vistaBiblioteca();
+  else if (estado.vista === 'perfil') v.innerHTML = vistaPerfil();
+  else if (estado.vista === 'proyecto') v.innerHTML = vistaProyecto();
+}
+
+function pintarBarra(){
+  var v = estado.vista;
+  var enProyecto = (v === 'proyecto');
+  var items = [
+    { id:'panel', ruta:'#/', ic:'◎', txt:'Panel', on:(v === 'panel') },
+    { id:'proyectos', ruta:'#/proyectos', ic:'▤', txt:'Proyectos', on:(v === 'proyectos' || enProyecto) },
+    { id:'crear', ruta:'#/crear', ic:'+', txt:'', on:(v === 'crear'), crear:true },
+    { id:'biblioteca', ruta:'#/biblioteca', ic:'▣', txt:'Biblioteca', on:(v === 'biblioteca') },
+    { id:'perfil', ruta:'#/perfil', ic:'☺', txt:'Perfil', on:(v === 'perfil') }
+  ];
+  $('barra').innerHTML = items.map(function(i){
+    return '<button class="' + (i.crear ? 'crear ' : '') + (i.on ? 'on' : '') + '" data-accion="ir" data-ruta="' + i.ruta + '" ' +
+      'aria-label="' + esc(i.txt || 'Crear un corto nuevo') + '">' +
+      '<span class="ic">' + i.ic + '</span>' + (i.txt ? '<span>' + i.txt + '</span>' : '') +
+    '</button>';
+  }).join('');
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: panel (dashboard)
+// ───────────────────────────────────────────────────────────────────────
+
+function vistaPanel(){
+  var cab = '<div class="cab"><div class="cab-tit">' +
+    '<h1 class="marca">AI Music Short Studio</h1>' +
+    '<p>Cortometrajes musicales instrumentales</p>' +
+  '</div></div>';
+
+  if (!estado.resumenes) return cab + htmlCargando('Cargando tus proyectos…');
+  if (!estado.resumenes.length) {
+    return cab + htmlVacio('🎬', 'Todavía no hay ningún corto',
+      'Elige instrumento, escenario y estilo, y el equipo de producción preparará el plan. Tú apruebas cada pieza.',
+      'Crear mi primer corto', '#/crear');
+  }
+
+  var res = proyectoEnCurso();
+  var p = (estado.proyecto && res && estado.proyecto.id === res.id) ? estado.proyecto : null;
+
+  if (!p) {
+    return cab + '<div class="tarjeta hero"><div class="hero-fila">' +
+      '<div class="hero-txt"><p class="sube">Proyecto en curso</p><h2>' + esc(res.title || 'Sin título') + '</h2>' +
+      '<p class="tenue mini">Cargando el estado de producción…</p></div>' +
+      '<div class="girando"></div></div></div>' + htmlListaProyectos();
+  }
+
+  var sit = situacion(p);
+  var esperan = sit.enRevision.length;
+  var enMarcha = sit.generando.length;
+
+  var html = cab;
+
+  html += '<div class="tarjeta hero">' +
+    '<div class="hero-fila">' +
+      '<div class="hero-txt">' +
+        '<p class="sube">Proyecto en curso</p>' +
+        '<h2>' + esc(p.delivery && p.delivery.title ? p.delivery.title : (p.plan && p.plan.concept ? p.plan.concept.title : 'Sin título')) + '</h2>' +
+        '<p class="tenue mini">' + fmtTiempo(p.config.durationSec) + ' · ' +
+          esc(sit.etapas.filter(function(e){ return e.estado === 'active'; }).map(function(e){ return e.label; })[0] || 'Todo aprobado') +
+          ' · ' + sit.aprobados + '/' + sit.total + ' activos</p>' +
+      '</div>' +
+      htmlAnillo(sit.porcentaje) +
+    '</div>' +
+    '<div style="margin-top:14px">' + htmlChipsEtapas(sit) + '</div>' +
+    (esperan
+      ? '<div class="nota aviso" style="margin-top:14px"><b>' + esperan + (esperan === 1 ? ' elemento espera' : ' elementos esperan') + ' tu decisión.</b> Nada avanza hasta que lo apruebes o lo mandes regenerar.</div>'
+      : (enMarcha
+        ? '<div class="nota" style="margin-top:14px"><span class="punto"></span> ' + enMarcha + (enMarcha === 1 ? ' generación en curso' : ' generaciones en curso') + '. Puedes revisar otras cosas mientras tanto.</div>'
+        : '')) +
+    '<button class="btn pri ancho grande" style="margin-top:14px" data-accion="continuar" data-id="' + esc(p.id) + '">' +
+      (sit.siguiente ? 'Continuar Producción' : (sit.listoParaMontar ? 'Ir al montaje final' : 'Abrir la sala de producción')) +
+    '</button>' +
+  '</div>';
+
+  // Lista de producción: lo que espera decisión primero, luego lo que está en
+  // marcha, luego lo que ya se puede generar.
+  var pendientes = sit.enRevision
+    .concat(sit.generando)
+    .concat(sit.filas.filter(function(a){
+      return a.status === 'pending' && puedeGenerar(p, a).ok;
+    }))
+    .concat(sit.filas.filter(function(a){ return a.stale; }));
+  var vistos = {};
+  pendientes = pendientes.filter(function(a){ if (vistos[a.id]) return false; vistos[a.id] = 1; return true; }).slice(0, 8);
+
+  html += '<div class="tarjeta">' +
+    '<h3>Lista de producción</h3>' +
+    (pendientes.length
+      ? '<div class="filas">' + pendientes.map(function(a){ return htmlFilaActivo(a, false); }).join('') + '</div>'
+      : '<p class="tenue mini">Todos los activos están aprobados. Sólo queda montar y entregar.</p>') +
+    '<button class="btn fantasma ancho pequeno" style="margin-top:12px" data-accion="ir" data-ruta="#/proyecto/' + esc(p.id) + '">Ver la sala de producción completa</button>' +
+  '</div>';
+
+  html += htmlListaProyectos(p.id);
+  return html;
+}
+
+function htmlListaProyectos(excluir){
+  var lista = (estado.resumenes || []).filter(function(r){ return r.id !== excluir; });
+  if (!lista.length) return '';
+  return '<div class="tarjeta"><h3>Otros proyectos</h3><div class="filas">' +
+    lista.slice(0, 5).map(function(r){
+      return '<button class="fila" data-accion="ir" data-ruta="#/proyecto/' + esc(r.id) + '">' +
+        '<span class="nom">' + esc(r.title || 'Sin título') +
+        '<small>' + esc(ETIQ_ETAPA[r.currentStage] || r.currentStage || '') + ' · ' +
+          (r.approvedAssets || 0) + '/' + (r.totalAssets || 0) + ' aprobados</small></span>' +
+        '<span class="etiq">' + esc(fmtTiempo(r.durationSec)) + '</span>' +
+      '</button>';
+    }).join('') + '</div></div>';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: proyectos
+// ───────────────────────────────────────────────────────────────────────
+
+function vistaProyectos(){
+  var cab = '<div class="cab"><div class="cab-tit"><h1>Proyectos</h1>' +
+    '<p>Cada proyecto guarda su plan, todas sus generaciones y el montaje.</p></div>' +
+    '<button class="btn pri pequeno" data-accion="ir" data-ruta="#/crear">Nuevo</button></div>';
+
+  if (!estado.resumenes) return cab + htmlCargando('Cargando proyectos…');
+  if (!estado.resumenes.length) {
+    return cab + htmlVacio('📁', 'Sin proyectos', 'Crea el primer corto para empezar.', 'Crear un corto', '#/crear');
+  }
+
+  var orden = estado.resumenes.slice().sort(function(a,b){
+    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  });
+
+  return cab + orden.map(function(r){
+    var pct = r.totalAssets ? Math.round((r.approvedAssets / r.totalAssets) * 100) : 0;
+    return '<div class="tarjeta" data-accion="ir" data-ruta="#/proyecto/' + esc(r.id) + '" style="cursor:pointer">' +
+      '<div class="hero-fila">' +
+        '<div class="hero-txt">' +
+          '<h3 style="margin-bottom:4px">' + esc(r.title || 'Sin título') + '</h3>' +
+          '<p class="tenue mini">' + fmtTiempo(r.durationSec) + ' · ' + esc(ETIQ_ETAPA[r.currentStage] || r.currentStage || '') + '</p>' +
+          '<p class="tenue mini">' + (r.approvedAssets || 0) + '/' + (r.totalAssets || 0) + ' activos aprobados · ' +
+            esc(ETIQ_MONTAJE[r.finalCutStatus] || r.finalCutStatus || '') + '</p>' +
+          '<p class="tenue mini" style="margin-top:4px;color:var(--tenue2)">Actualizado ' + esc(fmtFecha(r.updatedAt)) + '</p>' +
+        '</div>' + htmlAnillo(pct) +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: crear (configuración del corto)
+// ───────────────────────────────────────────────────────────────────────
+
+function prepararFormulario(){
+  var c = estado.catalogo || {};
+  var primera = function(lista, id){
+    if (!Array.isArray(lista) || !lista.length) return '';
+    var hallado = lista.find(function(x){ return x.id === id; });
+    return (hallado || lista[0]).id;
+  };
+  estado.form = {
+    busqueda: '',
+    categoria: '',
+    instrumentos: [],
+    formacion: primera(c.formations, 'solo'),
+    genero: primera(c.performerGenders, 'female'),
+    tipo: '',
+    escenario: primera(c.scenarios, 'forest'),
+    escenarioTexto: '',
+    estilo: primera(c.visualStyles, 'anime_cinematic'),
+    estiloTexto: '',
+    duracion: 120,
+    direccion: ''
+  };
+  ajustarTipos();
+}
+
+/** Los tipos de intérprete dependen del género elegido: se recalculan siempre. */
+function tiposDisponibles(){
+  var c = estado.catalogo || {};
+  var f = estado.form;
+  return (c.performerTypes || []).filter(function(t){
+    return !t.genderIds || t.genderIds.indexOf(f.genero) !== -1;
+  });
+}
+
+function ajustarTipos(){
+  var lista = tiposDisponibles();
+  if (!lista.length) { estado.form.tipo = ''; return; }
+  if (!lista.some(function(t){ return t.id === estado.form.tipo; })) estado.form.tipo = lista[0].id;
+}
+
+function instrumentosFiltrados(){
+  var c = estado.catalogo || {};
+  var f = estado.form;
+  var lista = c.instruments || [];
+  if (f.categoria) lista = lista.filter(function(i){ return i.categoryId === f.categoria; });
+  var q = normalizar(f.busqueda);
+  if (q) {
+    lista = lista.filter(function(i){
+      var campos = [i.name, i.id].concat(i.aliases || []).concat([i.origin || '']);
+      return campos.some(function(v){ return normalizar(v).indexOf(q) !== -1; });
+    });
+  }
+  return lista.slice(0, 40);
+}
+
+function htmlInstrumentos(){
+  var c = estado.catalogo || {};
+  var f = estado.form;
+  var cats = {};
+  (c.instrumentCategories || []).forEach(function(x){ cats[x.id] = x.label; });
+  var lista = instrumentosFiltrados();
+  if (!lista.length) {
+    return '<p class="tenue mini" style="margin-top:12px">Ningún instrumento coincide con «' + esc(f.busqueda) + '».</p>';
+  }
+  return '<div class="opciones">' + lista.map(function(i){
+    var puesto = f.instrumentos.indexOf(i.id) !== -1;
+    return '<button class="opcion' + (puesto ? ' on' : '') + '" data-accion="instr" data-id="' + esc(i.id) + '">' +
+      '<span><b>' + esc(i.name) + '</b><br><small>' + esc(cats[i.categoryId] || '') +
+      (i.origin ? ' · ' + esc(i.origin) : '') + '</small></span>' +
+      '<span class="etiq' + (puesto ? ' approved' : '') + '">' + (puesto ? 'elegido' : 'añadir') + '</span>' +
+    '</button>';
+  }).join('') + '</div>';
+}
+
+function htmlChipsElegidos(){
+  var c = estado.catalogo || {};
+  var f = estado.form;
+  if (!f.instrumentos.length) {
+    return '<p class="tenue mini" style="margin-top:10px">Elige al menos un instrumento.</p>';
+  }
+  var porId = {};
+  (c.instruments || []).forEach(function(i){ porId[i.id] = i; });
+  return '<div class="chips" style="margin-top:10px">' + f.instrumentos.map(function(id){
+    return '<button class="chip on quitar" data-accion="instr" data-id="' + esc(id) + '">' +
+      esc(porId[id] ? porId[id].name : id) + '</button>';
+  }).join('') + '</div>';
+}
+
+function htmlTipos(){
+  var lista = tiposDisponibles();
+  if (!lista.length) return '<p class="tenue mini">No hay tipos para este intérprete.</p>';
+  return '<div class="chips">' + lista.map(function(t){
+    return '<button class="chip' + (estado.form.tipo === t.id ? ' on' : '') + '" data-accion="tipo" data-id="' + esc(t.id) + '">' +
+      esc(t.label) + '</button>';
+  }).join('') + '</div>';
+}
+
+function vistaCrear(){
+  var cab = '<div class="cab"><div class="cab-tit"><h1>Nuevo corto</h1>' +
+    '<p>La IA propone; tú apruebas cada pieza.</p></div></div>';
+
+  if (!estado.catalogo) return cab + htmlCargando('Cargando los catálogos…');
+  if (!estado.form) prepararFormulario();
+
+  var c = estado.catalogo, f = estado.form;
+  var duraciones = c.durations && c.durations.length ? c.durations
+    : [{ seconds:60, label:'1 min' }, { seconds:120, label:'2 min' }, { seconds:180, label:'3 min' }];
+
+  var html = cab;
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">1</span>Instrumentos</h3>' +
+    '<input type="search" id="f-busqueda" placeholder="Buscar: erhu, guzheng, violonchelo, taiko…" value="' + esc(f.busqueda) + '" data-campo="busqueda">' +
+    '<div class="chips" style="margin-top:10px">' +
+      '<button class="chip' + (f.categoria === '' ? ' on' : '') + '" data-accion="categoria" data-id="">Todas</button>' +
+      (c.instrumentCategories || []).map(function(k){
+        return '<button class="chip' + (f.categoria === k.id ? ' on' : '') + '" data-accion="categoria" data-id="' + esc(k.id) + '">' + esc(k.label) + '</button>';
+      }).join('') +
+    '</div>' +
+    '<div id="chips-elegidos">' + htmlChipsElegidos() + '</div>' +
+    '<div id="lista-instr">' + htmlInstrumentos() + '</div>' +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">2</span>Formación e intérprete</h3>' +
+    '<label class="campo"><span>Formación musical</span>' +
+      '<select data-campo="formacion">' + (c.formations || []).map(function(x){
+        return '<option value="' + esc(x.id) + '"' + (f.formacion === x.id ? ' selected' : '') + '>' + esc(x.label) +
+          (x.performerCount ? ' (' + x.performerCount + ')' : '') + '</option>';
+      }).join('') + '</select></label>' +
+    '<label class="campo"><span>Intérprete</span>' +
+      '<select data-campo="genero">' + (c.performerGenders || []).map(function(x){
+        return '<option value="' + esc(x.id) + '"' + (f.genero === x.id ? ' selected' : '') + '>' + esc(x.label) + '</option>';
+      }).join('') + '</select></label>' +
+    '<span style="display:block;font-size:12.5px;font-weight:700;color:var(--tenue);margin-bottom:6px">Tipo visual</span>' +
+    '<div id="tipos-interprete">' + htmlTipos() + '</div>' +
+  '</div>';
+
+  var escOtro = (f.escenario === 'other');
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">3</span>Escenario</h3>' +
+    '<label class="campo"><select data-campo="escenario">' + (c.scenarios || []).map(function(x){
+      return '<option value="' + esc(x.id) + '"' + (f.escenario === x.id ? ' selected' : '') + '>' + esc(x.label) + '</option>';
+    }).join('') + '</select></label>' +
+    '<textarea data-campo="escenarioTexto" rows="2" placeholder="' +
+      (escOtro ? 'Describe el escenario personalizado (obligatorio)' : 'Opcional: matiza el escenario («bosque de bambú con niebla baja»)') +
+      '">' + esc(f.escenarioTexto) + '</textarea>' +
+  '</div>';
+
+  var estOtro = (f.estilo === 'other');
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">4</span>Estilo visual</h3>' +
+    '<label class="campo"><select data-campo="estilo">' + (c.visualStyles || []).map(function(x){
+      return '<option value="' + esc(x.id) + '"' + (f.estilo === x.id ? ' selected' : '') + '>' + esc(x.label) + '</option>';
+    }).join('') + '</select></label>' +
+    '<textarea data-campo="estiloTexto" rows="2" placeholder="' +
+      (estOtro ? 'Describe el estilo personalizado (obligatorio)' : 'Opcional: instrucciones de estilo adicionales') +
+      '">' + esc(f.estiloTexto) + '</textarea>' +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">5</span>Duración</h3>' +
+    '<div class="chips">' + duraciones.map(function(d){
+      return '<button class="chip' + (f.duracion === d.seconds ? ' on' : '') + '" data-accion="duracion" data-seg="' + d.seconds + '">' + esc(d.label) + '</button>';
+    }).join('') + '</div>' +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">6</span>Dirección creativa</h3>' +
+    '<p class="tenue mini" style="margin-bottom:10px">Escribe libremente: apariencia, vestuario, ambiente, luz, época, colores, intención emocional. No hace falta que suene a prompt técnico; el equipo lo traduce.</p>' +
+    '<textarea data-campo="direccion" rows="6" placeholder="Describe libremente lo que quieres ver…">' + esc(f.direccion) + '</textarea>' +
+  '</div>';
+
+  html += '<button class="btn pri ancho grande" data-accion="crear-proyecto">Crear el corto y planificarlo</button>' +
+    '<p class="tenue mini centro" style="margin-top:10px">La planificación tarda unos segundos: la IA escribe el concepto, la biblia visual y el plan de tomas.</p>';
+
+  return html;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: proyecto (sala de producción)
+// ───────────────────────────────────────────────────────────────────────
+
+function vistaProyecto(){
+  if (!estado.proyecto || estado.proyecto.id !== estado.proyectoId) {
+    return '<div class="cab"><div class="cab-tit"><h1>Sala de producción</h1></div></div>' +
+      htmlCargando('Abriendo el proyecto…');
+  }
+
+  var p = estado.proyecto;
+  var sit = situacion(p);
+  var titulo = (p.delivery && p.delivery.title) || (p.plan && p.plan.concept && p.plan.concept.title) || 'Sin título';
+
+  var cab = '<div class="cab">' +
+    '<button class="btn fantasma pequeno" data-accion="ir" data-ruta="#/proyectos" aria-label="Volver">‹</button>' +
+    '<div class="cab-tit"><h1>' + esc(titulo) + '</h1>' +
+    '<p>' + fmtTiempo(p.config.durationSec) + ' · ' + sit.aprobados + '/' + sit.total + ' aprobados · ' +
+      esc(ETIQ_MONTAJE[(p.finalCut && p.finalCut.status) || 'pending']) + '</p></div>' +
+    '<button class="btn fantasma pequeno" data-accion="refrescar" aria-label="Actualizar">⟳</button>' +
+  '</div>';
+
+  var tabs = '<div class="subtabs">' +
+    ['produccion','plan','montaje'].map(function(t){
+      var etiq = t === 'produccion' ? 'Producción' : (t === 'plan' ? 'Plan' : 'Montaje');
+      return '<button class="' + (estado.subtab === t ? 'on' : '') + '" data-accion="subtab" data-tab="' + t + '">' + etiq + '</button>';
+    }).join('') + '</div>';
+
+  var colA = '<div class="col col-a' + (estado.subtab === 'plan' ? ' on' : '') + '" id="col-a">' + panelPlan(p) + '</div>';
+  var colB = '<div class="col col-b' + (estado.subtab === 'produccion' ? ' on' : '') + '" id="col-b">' + panelProduccion(p, sit) + '</div>';
+  var colC = '<div class="col col-c' + (estado.subtab === 'montaje' ? ' on' : '') + '" id="col-c">' + panelMontaje(p, sit) + '</div>';
+
+  return cab + tabs + '<div class="sala">' + colA + colB + colC + '</div>';
+}
+
+// ── Columna central: producción y revisión ─────────────────────────────
+
+function panelProduccion(p, sit){
+  var html = '';
+
+  html += '<div class="tarjeta hero">' +
+    '<div class="hero-fila">' +
+      '<div class="hero-txt">' +
+        '<p class="sube">Producción</p>' +
+        '<h2 style="font-size:16px">' + esc(sit.etapas.filter(function(e){ return e.estado === 'active'; }).map(function(e){ return e.label; })[0] || 'Todo aprobado') + '</h2>' +
+        '<p class="tenue mini">' + sit.aprobados + ' de ' + sit.total + ' activos aprobados</p>' +
+      '</div>' + htmlAnillo(sit.porcentaje) +
+    '</div>' +
+    '<div style="margin-top:14px">' + htmlChipsEtapas(sit) + '</div>' +
+    (sit.enRevision.length
+      ? '<div class="nota aviso" style="margin-top:14px"><b>' + sit.enRevision.length +
+        (sit.enRevision.length === 1 ? ' elemento espera' : ' elementos esperan') + ' tu decisión.</b> Una generación terminada NO queda aprobada sola.</div>'
+      : '') +
+    (sit.siguiente
+      ? '<button class="btn pri ancho grande" style="margin-top:14px" data-accion="continuar" data-id="' + esc(p.id) + '">Continuar Producción</button>'
+      : (sit.listoParaMontar
+        ? '<button class="btn pri ancho grande" style="margin-top:14px" data-accion="subtab" data-tab="montaje">Ir al montaje final</button>'
+        : '')) +
+  '</div>';
+
+  html += '<div class="tarjeta" id="caja-revision">' + htmlRevision(p) + '</div>';
+
+  // Lista completa, agrupada por etapa para que en el móvil no sea un muro.
+  html += '<div class="tarjeta"><h3>Todos los activos</h3>';
+  ETAPAS_ACTIVOS.forEach(function(etapa){
+    var lista = activosDeEtapa(p, etapa);
+    if (!lista.length) return;
+    var aprobados = lista.filter(cuenta).length;
+    var abierta = etapaAbierta(p, etapa);
+    var completa = etapaCompleta(p, etapa);
+    var desplegar = abierta && !completa;
+    html += '<details' + (desplegar ? ' open' : '') + '>' +
+      '<summary>' + esc(ETIQ_ETAPA[etapa]) + ' · ' + aprobados + '/' + lista.length +
+        (!abierta ? ' · bloqueada' : (completa ? ' · completa' : '')) + '</summary>' +
+      '<div class="cuerpo">' +
+        (!abierta ? '<p class="nota">Esta etapa se abre cuando la anterior esté aprobada entera.</p>' : '') +
+        '<div class="filas">' + lista.map(function(a){
+          return htmlFilaActivo(a, estado.activoSel === a.id);
+        }).join('') + '</div>' +
+      '</div></details>';
+  });
+  html += '</div>';
+
+  html += '<div class="tarjeta"><h3>Actividad</h3><ul class="eventos">' +
+    (p.events || []).slice(-18).reverse().map(function(ev){
+      return '<li><time>' + esc(fmtHora(ev.at)) + '</time><span>' + esc(ev.message) + '</span></li>';
+    }).join('') + '</ul></div>';
+
+  return html;
+}
+
+/** La tarjeta de revisión: el corazón de la herramienta. */
+function htmlRevision(p){
+  var a = activos(p).find(function(x){ return x.id === estado.activoSel; });
+  if (!a) {
+    var sit = situacion(p);
+    if (sit.siguiente) {
+      return '<h3>Revisión</h3><p class="tenue mini">Elige un activo de la lista, o pulsa «Continuar Producción» para ir directo a lo siguiente.</p>';
+    }
+    return '<h3>Revisión</h3><p class="tenue mini">No queda nada por revisar: todos los activos están aprobados.</p>';
+  }
+
+  var medio = MEDIO_DE_TIPO[a.kind] || 'image';
+  var gen = generacionVista(a);
+  var puerta = puedeGenerar(p, a);
+  var bloqueantes = dependenciasQueFaltan(p, a);
+  var generando = (a.status === 'generating');
+  var esperaDecision = !!(gen && gen.status === 'review');
+
+  var html = '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">' +
+    '<div style="flex:1;min-width:0">' +
+      '<p class="sube">' + esc(ETIQ_MEDIO[medio]) + ' · ' + esc(ETIQ_ETAPA[a.stage]) + '</p>' +
+      '<h2>' + esc(a.label) + '</h2>' +
+      '<p class="tenue mini">' + esc(a.spec && a.spec.objective ? a.spec.objective : '') + '</p>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">' +
+      htmlEtiquetaActivo(a) + (a.locked ? '<span class="etiq bloq">Bloqueado</span>' : '') +
+    '</div>' +
+  '</div>';
+
+  if (a.stale) {
+    html += '<div class="nota mala">' + esc(a.staleReason || 'Un activo del que depende ha cambiado.') +
+      ' Revísalo y vuelve a generarlo si ya no encaja.</div>';
+  }
+  if (bloqueantes.length) {
+    html += '<div class="nota aviso">Este activo se apoya en material que todavía no está aprobado: <b>' +
+      esc(bloqueantes.map(function(x){ return x.label; }).join(', ')) + '</b>.</div>';
+  }
+
+  // ── Previsualización del medio ──
+  html += '<div class="medio">';
+  if (generando) {
+    html += '<div class="medio-vacio"><div class="girando"></div>' +
+      '<p><b>Generando…</b></p>' +
+      '<p>La IA está trabajando. Puede tardar varios minutos si es un clip de vídeo. ' +
+      'Puedes revisar otras cosas mientras tanto: la pantalla se actualiza sola.</p></div>';
+  } else if (!gen || !gen.file || !gen.file.url) {
+    html += '<div class="medio-vacio"><div style="font-size:30px">' +
+      (medio === 'image' ? '🖼️' : medio === 'video' ? '🎞️' : '🎵') + '</div>' +
+      '<p>Todavía no hay ninguna generación.</p>' +
+      '<p>' + esc(a.spec && a.spec.objective ? a.spec.objective : '') + '</p></div>';
+  } else if (medio === 'image') {
+    html += '<img src="' + esc(gen.file.url) + '" alt="Generación ' + esc(gen.index) + ' de ' + esc(a.label) + '">';
+  } else if (medio === 'video') {
+    html += '<video src="' + esc(gen.file.url) + '" controls playsinline preload="metadata"></video>';
+  } else {
+    html += '<audio src="' + esc(gen.file.url) + '" controls preload="metadata"></audio>';
+  }
+  html += '</div>';
+
+  // ── Navegador de generaciones: cada intento se conserva y se puede comparar ──
+  if (a.generations && a.generations.length) {
+    html += '<div class="chips" style="margin-bottom:10px">' + a.generations.map(function(g){
+      var marca = g.id === a.approvedGenerationId ? ' ✓'
+        : g.status === 'rejected' ? ' ✕'
+        : g.status === 'failed' ? ' !'
+        : g.status === 'generating' ? ' …' : '';
+      return '<button class="chip' + (gen && gen.id === g.id ? ' on' : '') + '" data-accion="ver-gen" data-gen="' + esc(g.id) + '">#' + esc(g.index) + marca + '</button>';
+    }).join('') + '</div>';
+  }
+
+  if (gen) {
+    var prov = gen.provider ? ((gen.provider.name || '') + (gen.provider.model ? ' · ' + gen.provider.model : '')) : '';
+    var dur = gen.file && gen.file.durationSec ? ' · ' + Number(gen.file.durationSec).toFixed(1) + ' s' : '';
+    var peso = gen.file && gen.file.bytes ? ' · ' + fmtBytes(gen.file.bytes) : '';
+    var tardo = gen.elapsedMs ? ' · tardó ' + Math.round(gen.elapsedMs / 1000) + ' s' : '';
+    html += '<p class="tenue mini" style="margin-bottom:10px">Generación #' + esc(gen.index) +
+      (gen.id === a.approvedGenerationId ? ' — <b style="color:var(--ok)">APROBADA</b>' : '') +
+      (gen.status === 'rejected' ? ' — descartada' : '') +
+      (gen.status === 'failed' ? ' — <b style="color:var(--error)">falló</b>' : '') +
+      (prov ? ' · ' + esc(prov) : '') + esc(dur + peso + tardo) + '</p>';
+  }
+
+  if (gen && gen.error) html += '<div class="nota mala">' + esc(gen.error) + '</div>';
+
+  // ── Las dos decisiones ──
+  var textoGenerar = (a.generations && a.generations.length) ? 'Regenerar' : 'Generar';
+  var puedePulsarGenerar = !estado.trabajando && !generando && (puerta.ok || a.locked);
+
+  html += '<div class="acciones">' +
+    '<button class="btn ok" data-accion="aprobar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen ? gen.id : '') + '"' +
+      (esperaDecision && !estado.trabajando ? '' : ' disabled') + '>Aprobar</button>' +
+    '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '"' + (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>' +
+  '</div>';
+
+  if (esperaDecision) {
+    html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="rechazar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen.id) + '">Descartar esta generación</button>';
+  }
+  if (a.locked) {
+    html += '<div class="nota" style="margin-top:11px">Este activo está aprobado y bloqueado: es la versión oficial del corto. ' +
+      'Al regenerarlo se desbloquea y todo lo que dependa de él quedará marcado como desactualizado' +
+      (dependientes(p, a.id).length ? ' (' + dependientes(p, a.id).length + ' activos)' : '') + '.</div>';
+  } else if (!puerta.ok && !generando) {
+    html += '<div class="nota" style="margin-top:11px">' + esc(puerta.motivo) + '</div>';
+  }
+  if (esperaDecision) {
+    html += '<div class="nota aviso" style="margin-top:11px">Esta generación ha terminado bien, pero <b>no está aprobada</b>. Nada que dependa de ella puede empezar hasta que lo decidas.</div>';
+  }
+
+  // ── El prompt y las referencias, siempre consultables ──
+  var promptTexto = (gen && gen.prompt) || (a.spec && a.spec.prompt) || '';
+  var negativo = (gen && gen.negativePrompt) || (a.spec && a.spec.negativePrompt) || '';
+  var refs = (gen && gen.referenceAssetIds) || (a.spec && a.spec.referenceAssetIds) || [];
+  var porId = {};
+  activos(p).forEach(function(x){ porId[x.id] = x; });
+
+  html += '<details style="margin-top:12px"><summary>Ver el prompt y las referencias</summary><div class="cuerpo">' +
+    '<h4>Prompt</h4><pre>' + esc(promptTexto) + '</pre>' +
+    (negativo ? '<h4>Prompt negativo</h4><pre>' + esc(negativo) + '</pre>' : '') +
+    (refs.length ? '<h4>Referencias aprobadas utilizadas</h4><ul class="reglas">' + refs.map(function(id){
+      return '<li>' + esc(porId[id] ? porId[id].label : id) + '</li>';
+    }).join('') + '</ul>' : '') +
+    (a.spec && a.spec.continuityNotes && a.spec.continuityNotes.length
+      ? '<h4>Continuidad</h4><ul class="reglas">' + a.spec.continuityNotes.map(function(n){ return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>'
+      : '') +
+    (gen && gen.seed !== undefined && gen.seed !== null ? '<p class="tenue mini">Semilla: ' + esc(gen.seed) + '</p>' : '') +
+  '</div></details>';
+
+  if (a.generations && a.generations.length > 1) {
+    html += '<details><summary>Historial de generaciones (' + a.generations.length + ')</summary><div class="cuerpo"><div class="filas">' +
+      a.generations.slice().reverse().map(function(g){
+        var etiq = g.status === 'approved' ? 'aprobada'
+          : g.status === 'rejected' ? 'descartada'
+          : g.status === 'failed' ? 'falló'
+          : g.status === 'generating' ? 'generando…' : 'en revisión';
+        return '<button class="fila' + (gen && gen.id === g.id ? ' sel' : '') + '" data-accion="ver-gen" data-gen="' + esc(g.id) + '">' +
+          '<span class="nom">Generación #' + esc(g.index) + '<small>' + esc(fmtFecha(g.createdAt)) + '</small></span>' +
+          '<span class="etiq">' + esc(etiq) + '</span></button>';
+      }).join('') +
+      '</div><p class="tenue mini" style="margin-top:9px">Sólo la versión aprobada se usa en la producción; las demás se conservan para poder comparar.</p></div></details>';
+  }
+
+  return html;
+}
+
+// ── Columna izquierda: ficha del proyecto y plan completo ──────────────
+
+function panelPlan(p){
+  var plan = p.plan || {};
+  var cfg = p.config || {};
+  var concepto = plan.concept || {};
+  var biblia = plan.visualBible || {};
+  var html = '';
+
+  // Ficha de configuración: lo que el usuario pidió, tal cual.
+  html += '<div class="tarjeta"><h3>Configuración</h3>' +
+    htmlDatos([
+      ['Duración', fmtTiempo(cfg.durationSec)],
+      ['Instrumentos', (biblia.instrument && biblia.instrument.names) ? biblia.instrument.names.join(' + ') : (cfg.instrumentIds || []).join(', ')],
+      ['Formación', cfg.formationId],
+      ['Intérprete', cfg.performerTypeId],
+      ['Escenario', cfg.scenarioCustom || cfg.scenarioId],
+      ['Estilo visual', cfg.visualStyleCustom || cfg.visualStyleId],
+      ['Creado', fmtFecha(p.createdAt)]
+    ]) +
+    (cfg.creativeDirection
+      ? '<h4 style="margin-top:12px">Dirección creativa</h4><p class="mini" style="margin-top:6px;color:#cfd0ee">' + esc(cfg.creativeDirection) + '</p>'
+      : '') +
+  '</div>';
+
+  html += '<div class="tarjeta"><h3>Concepto</h3>' +
+    (concepto.logline ? '<p class="mini" style="margin-bottom:10px;color:#dcdaf7">' + esc(concepto.logline) + '</p>' : '') +
+    htmlDatos([
+      ['Título', concepto.title],
+      ['Intención', concepto.emotionalIntent],
+      ['Arco', concepto.emotionalArc],
+      ['Atmósfera', (concepto.mood || []).join(' · ')],
+      ['Paleta', (concepto.palette || []).join(' · ')],
+      ['Luz', concepto.timeOfDay],
+      ['Planificado por', plan.plannedBy === 'claude' ? 'Claude' : 'Equipo interno (determinista)']
+    ]) +
+  '</div>';
+
+  if (biblia.character || biblia.environment) {
+    var per = biblia.character || {}, ent = biblia.environment || {}, ins = biblia.instrument || {}, luz = biblia.lighting || {}, est = biblia.aesthetic || {};
+    html += '<div class="tarjeta"><h3>Biblia visual</h3>' +
+      htmlDatos([
+        ['Personaje', per.summary], ['Rostro', per.face], ['Cabello', per.hair],
+        ['Vestuario', per.wardrobe], ['Complexión', per.build],
+        ['Instrumento', (ins.names || []).join(' + ') + (ins.appearance ? ' — ' + ins.appearance : '')],
+        ['Posición', ins.positioning],
+        ['Escenario', ent.location], ['Elementos', (ent.primaryElements || []).join(', ')],
+        ['Iluminación', [luz.direction, luz.intensity].filter(Boolean).join('; ')],
+        ['Tratamiento', est.treatment]
+      ]) +
+      ((biblia.continuityRules && biblia.continuityRules.length)
+        ? '<h4 style="margin-top:12px">Reglas de continuidad</h4><ul class="reglas" style="margin-top:6px">' +
+          biblia.continuityRules.map(function(r){ return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>'
+        : '') +
+    '</div>';
+  }
+
+  if (plan.shots && plan.shots.length) {
+    var ec = plan.economics || {};
+    html += '<div class="tarjeta"><h3>Plan de tomas</h3>' +
+      '<p class="tenue mini" style="margin-bottom:10px">' +
+        (ec.uniqueShots || plan.shots.length) + ' tomas únicas · ' + (ec.timelineSlots || 0) + ' bloques · ' +
+        (ec.reusedSlots || 0) + ' reutilizaciones · ' + (ec.generatedFootageSec || 0) + ' s generados para ' +
+        (ec.runtimeSec || cfg.durationSec || 0) + ' s de corto.</p>' +
+      '<div class="desliza"><table><thead><tr>' +
+        '<th>Toma</th><th>Bloque</th><th>Plano</th><th>Cámara</th><th>Dur.</th><th>Clips</th><th>Propósito</th>' +
+      '</tr></thead><tbody>' +
+      plan.shots.map(function(s){
+        return '<tr><td>' + esc(s.label) + '</td>' +
+          '<td>' + esc(ETIQ_PULSO[s.beat] || s.beat) + '</td>' +
+          '<td>' + esc(String(s.shotType || '').replace(/_/g,' ')) + '</td>' +
+          '<td>' + esc(String(s.cameraMove || '').replace(/_/g,' ')) + '</td>' +
+          '<td>' + esc(s.durationSec) + ' s</td>' +
+          '<td>' + esc((s.clips || []).map(function(c){ return c.suffix || c.label || ''; }).join(', ')) + '</td>' +
+          '<td>' + esc(s.purpose) + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }
+
+  if (plan.timeline && plan.timeline.length) {
+    html += '<div class="tarjeta"><h3>Línea de tiempo</h3><ul class="tiempos">' +
+      plan.timeline.map(function(t){
+        return '<li' + (t.reused ? ' class="rep"' : '') + '>' +
+          '<span class="tc">' + esc(fmtTiempo(t.startSec)) + '</span>' +
+          '<span class="cl">' + esc(String(t.clipId || '').replace(/_/g,' ')) + '</span>' +
+          '<span class="tenue">' + esc(t.durationSec) + ' s</span>' +
+          '<span class="tenue">' + esc(ETIQ_TRANSICION[t.transitionIn] || t.transitionIn || '') + '</span>' +
+          (t.reused ? '<span class="etiq">reutilizado</span>' : '') +
+        '</li>';
+      }).join('') + '</ul></div>';
+  }
+
+  if (plan.music || plan.ambient) {
+    var mu = plan.music || {}, am = plan.ambient || {};
+    html += '<div class="tarjeta"><h3>Música y ambiente</h3>' +
+      htmlDatos([
+        ['Título', mu.title], ['Estilo', mu.style], ['Carácter', mu.mood],
+        ['Tonalidad', [mu.key, mu.scale, mu.tempoBpm ? mu.tempoBpm + ' BPM' : ''].filter(Boolean).join(' · ')],
+        ['Estructura', mu.structure],
+        ['Instrumentación', (mu.instrumentation || []).join(', ')],
+        ['Capas de ambiente', (am.layers || []).join(', ')],
+        ['Ambiente', am.description], ['Acústica', am.acoustics]
+      ]) +
+      '<p class="tenue mini" style="margin-top:8px">El corto es instrumental: sin voz, sin coros y sin narración.</p>' +
+    '</div>';
+  }
+
+  if (plan.notes) {
+    var n = plan.notes;
+    html += '<div class="tarjeta"><h3>Notas del equipo</h3>' +
+      htmlDatos([
+        ['Director', n.director], ['Productor', n.producer], ['Dirección de arte', n.artDirector],
+        ['Fotografía', n.cinematographer], ['Guion', n.screenwriter], ['Montaje', n.editor]
+      ]) + '</div>';
+  }
+
+  return html;
+}
+
+// ── Columna derecha: montaje, previsualización y entrega ───────────────
+
+function panelMontaje(p, sit){
+  var corte = p.finalCut || { status:'pending' };
+  var entrega = p.delivery || {};
+  var html = '';
+
+  var faltan = estado.faltanParaMontar;
+  if (!faltan) {
+    faltan = sit.filas.filter(function(a){ return !cuenta(a); }).map(function(a){ return a.label; });
+  }
+
+  html += '<div class="tarjeta"><h3>Montaje final</h3>';
+
+  if (faltan.length) {
+    html += '<div class="nota aviso">El montador sólo recibe activos aprobados. Faltan <b>' + faltan.length + '</b>: ' +
+      esc(faltan.slice(0, 6).join(', ')) + (faltan.length > 6 ? ' y ' + (faltan.length - 6) + ' más' : '') + '.</div>';
+  } else if (corte.status === 'pending') {
+    html += '<div class="nota buena">Todo está aprobado. Monta la previsualización para verla entera antes de exportar.</div>';
+  }
+
+  if (corte.status === 'building') {
+    html += '<div class="nota"><span class="punto"></span> Montando el corto. Esto tarda unos minutos; puedes seguir revisando otras cosas.</div>';
+  }
+  if (corte.status === 'failed') {
+    html += '<div class="nota mala">' + esc(corte.error || 'El montaje falló y el servidor no dijo por qué.') + '</div>';
+  }
+  if (corte.status === 'review') {
+    html += '<div class="nota aviso">La previsualización está lista pero <b>no está aprobada</b>. Míralas entera antes de exportar el MP4.</div>';
+  }
+
+  html += '<div class="acciones">' +
+    '<button class="btn" data-accion="montar"' +
+      ((faltan.length || corte.status === 'building' || estado.trabajando) ? ' disabled' : '') + '>' +
+      (corte.preview ? 'Volver a montar' : 'Montar previsualización') + '</button>' +
+  '</div></div>';
+
+  if (corte.preview && corte.preview.url) {
+    html += '<div class="tarjeta"><h3>Previsualización</h3>' +
+      '<div class="medio"><video src="' + esc(corte.preview.url) + '" controls playsinline preload="metadata"></video></div>' +
+      '<p class="tenue mini">' + esc(fmtBytes(corte.preview.bytes)) + ' · ' +
+        Math.round(corte.preview.durationSec || 0) + ' s' +
+        (corte.preview.width ? ' · ' + corte.preview.width + '×' + corte.preview.height : '') +
+        (corte.builtAt ? ' · montado ' + esc(fmtFecha(corte.builtAt)) : '') + '</p>' +
+    '</div>';
+  }
+
+  if (corte.edl && corte.edl.length) {
+    html += '<div class="tarjeta"><h3>Lista de cortes</h3><ul class="tiempos">' +
+      corte.edl.map(function(e){
+        return '<li' + (e.reused ? ' class="rep"' : '') + '>' +
+          '<span class="tc">' + esc(e.timecode || fmtTiempo(e.startSec)) + '</span>' +
+          '<span class="cl">' + esc(e.label) + '</span>' +
+          '<span class="tenue">' + esc(e.durationSec) + ' s</span>' +
+          (e.reused ? '<span class="etiq">reutilizado</span>' : '') + '</li>';
+      }).join('') + '</ul></div>';
+  }
+
+  // Metadatos de entrega. Se pintan en su propio contenedor porque el
+  // refresco automático no debe tocar un campo que se está escribiendo.
+  html += '<div class="tarjeta" id="caja-entrega">' + htmlEntrega(p, corte, entrega) + '</div>';
+
+  if (corte['export'] && corte['export'].url) {
+    html += '<div class="tarjeta"><h3>MP4 final</h3>' +
+      '<div class="nota buena">El corto está exportado y listo para publicar.</div>' +
+      '<a class="btn pri ancho grande" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>' +
+      '<p class="tenue mini centro" style="margin-top:8px">' + esc(fmtBytes(corte['export'].bytes)) + ' · ' +
+        Math.round(corte['export'].durationSec || 0) + ' s' +
+        (corte.exportedAt ? ' · exportado ' + esc(fmtFecha(corte.exportedAt)) : '') + '</p>' +
+    '</div>';
+  }
+
+  return html;
+}
+
+function htmlEntrega(p, corte, entrega){
+  var listoParaEntregar = (corte.status === 'review' || corte.status === 'approved' || corte.status === 'exported');
+  return '<h3>Entrega</h3>' +
+    '<label class="campo"><span>Título</span>' +
+      '<input type="text" id="e-titulo" maxlength="120" value="' + esc(entrega.title || '') + '"></label>' +
+    '<label class="campo"><span>Descripción</span>' +
+      '<textarea id="e-descripcion" rows="3">' + esc(entrega.description || '') + '</textarea></label>' +
+    '<label class="campo"><span>Hashtags (separados por espacios)</span>' +
+      '<input type="text" id="e-hashtags" value="' + esc((entrega.hashtags || []).join(' ')) + '"></label>' +
+    '<button class="btn pri ancho grande" data-accion="entregar"' + (listoParaEntregar && !estado.trabajando ? '' : ' disabled') + '>' +
+      (corte.status === 'exported' ? 'Volver a exportar el MP4' : 'Aprobar y exportar el MP4') + '</button>' +
+    (!listoParaEntregar
+      ? '<p class="tenue mini" style="margin-top:9px">Monta primero la previsualización: el MP4 no se exporta sin que tú hayas visto y aprobado el corte.</p>'
+      : '<p class="tenue mini" style="margin-top:9px">Al pulsar apruebas la previsualización y se exporta el MP4 con estos metadatos.</p>');
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: biblioteca
+// ───────────────────────────────────────────────────────────────────────
+
+function vistaBiblioteca(){
+  var cab = '<div class="cab"><div class="cab-tit"><h1>Biblioteca</h1>' +
+    '<p>Todo lo aprobado del proyecto abierto.</p></div></div>';
+
+  var p = estado.proyecto;
+  if (!p) {
+    return cab + htmlVacio('▣', 'No hay ningún proyecto abierto',
+      'Abre un proyecto y aquí verás todas sus imágenes, clips y pistas aprobadas.',
+      'Ver proyectos', '#/proyectos');
+  }
+
+  var filtros = [
+    { id:'todo', txt:'Todo' }, { id:'image', txt:'Imágenes' },
+    { id:'video', txt:'Vídeos' }, { id:'audio', txt:'Audio' }
+  ];
+
+  var aprobados = porOrden(p).filter(function(a){
+    if (!estaAprobado(a)) return false;
+    if (estado.filtroBib !== 'todo' && MEDIO_DE_TIPO[a.kind] !== estado.filtroBib) return false;
+    return true;
+  });
+
+  var html = cab +
+    '<div class="tarjeta plana"><p class="tenue mini" style="margin-bottom:9px">' +
+      esc((p.delivery && p.delivery.title) || 'Proyecto') + '</p>' +
+    '<div class="chips">' + filtros.map(function(f){
+      return '<button class="chip' + (estado.filtroBib === f.id ? ' on' : '') + '" data-accion="filtro-bib" data-f="' + f.id + '">' + f.txt + '</button>';
+    }).join('') + '</div></div>';
+
+  var corte = p.finalCut || {};
+  if (corte['export'] && corte['export'].url && (estado.filtroBib === 'todo' || estado.filtroBib === 'video')) {
+    html += '<div class="tarjeta"><h3>Corto terminado</h3>' +
+      '<div class="medio"><video src="' + esc(corte['export'].url) + '" controls playsinline preload="metadata"></video></div>' +
+      '<a class="btn pri ancho" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a></div>';
+  }
+
+  if (!aprobados.length) {
+    html += '<div class="tarjeta"><p class="tenue mini">Todavía no hay nada aprobado con este filtro. Lo aprobado aparece aquí en cuanto pulses «Aprobar» en la sala de producción.</p></div>';
+    return html;
+  }
+
+  html += '<div class="tarjeta"><h3>Material aprobado (' + aprobados.length + ')</h3><div class="galeria">' +
+    aprobados.map(function(a){
+      var g = (a.generations || []).find(function(x){ return x.id === a.approvedGenerationId; });
+      var url = g && g.file ? g.file.url : '';
+      var medio = MEDIO_DE_TIPO[a.kind] || 'image';
+      var cuerpo = !url ? '<div class="medio-vacio" style="min-height:96px">Sin archivo</div>'
+        : medio === 'image' ? '<img src="' + esc(url) + '" alt="' + esc(a.label) + '" loading="lazy">'
+        : medio === 'video' ? '<video src="' + esc(url) + '" controls playsinline preload="metadata"></video>'
+        : '<audio src="' + esc(url) + '" controls preload="metadata"></audio>';
+      return '<figure>' + cuerpo + '<figcaption>' + esc(a.label) + '</figcaption></figure>';
+    }).join('') + '</div></div>';
+
+  return html;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Vista: perfil
+// ───────────────────────────────────────────────────────────────────────
+
+function vistaPerfil(){
+  var cab = '<div class="cab"><div class="cab-tit"><h1>Perfil</h1><p>Acceso y diagnóstico.</p></div></div>';
+
+  var clave = estado.clave || '';
+  var enmascarada = clave ? clave.slice(0, 2) + '•'.repeat(Math.max(3, clave.length - 2)) : '(sin clave)';
+
+  var html = cab +
+    '<div class="tarjeta"><h3>Acceso</h3>' +
+      htmlDatos([
+        ['Clave guardada', enmascarada],
+        ['Proyectos', String((estado.resumenes || []).length)]
+      ]) +
+      '<div class="acciones">' +
+        '<button class="btn" data-accion="salir">Cerrar sesión</button>' +
+      '</div>' +
+      '<p class="tenue mini" style="margin-top:10px">La clave sólo vive en este navegador. Se envía en la cabecera <code>x-app-key</code> a cada llamada para que nadie más pueda gastar tus créditos.</p>' +
+    '</div>' +
+    '<div class="tarjeta"><h3>Diagnóstico del servidor</h3>' +
+      '<p class="tenue mini" style="margin-bottom:10px">Comprueba credenciales, almacenamiento, APIs y montador. Si algo no genera, la respuesta de aquí dice por qué.</p>' +
+      '<button class="btn ancho" data-accion="salud">Comprobar ahora</button>' +
+      '<div id="caja-salud" style="margin-top:12px">' + htmlSalud(estado.salud) + '</div>' +
+    '</div>' +
+    '<div class="tarjeta"><h3>Cómo funciona</h3>' +
+      '<ul class="reglas">' +
+        '<li>La IA propone y genera; tú apruebas. Una generación correcta nunca queda aprobada sola.</li>' +
+        '<li>Las etapas van en orden: imágenes → vídeos → música → ambiente → montaje.</li>' +
+        '<li>Cada intento se conserva: puedes comparar generaciones antes de decidir.</li>' +
+        '<li>Los cortos son instrumentales: sin voz, sin diálogo y sin narración.</li>' +
+      '</ul>' +
+    '</div>';
+
+  return html;
+}
+
+/** El diagnóstico se pinta de forma genérica: sirva la forma que sirva la respuesta. */
+function htmlSalud(s){
+  if (!s) return '<p class="tenue mini">Sin comprobar todavía.</p>';
+  if (s.__error) return '<div class="nota mala">' + esc(s.__error) + '</div>';
+
+  function valor(v){
+    if (v === true) return '<span class="etiq approved">OK</span>';
+    if (v === false) return '<span class="etiq caduco">NO</span>';
+    if (v === null || v === undefined) return '<span class="etiq">—</span>';
+    if (typeof v === 'object') return '<span class="mini">' + esc(JSON.stringify(v)) + '</span>';
+    return '<span class="mini">' + esc(v) + '</span>';
+  }
+
+  var filas = Object.keys(s).map(function(k){
+    return '<div><dt>' + esc(k) + '</dt><dd>' + valor(s[k]) + '</dd></div>';
+  }).join('');
+
+  return '<dl class="datos">' + filas + '</dl>';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Acciones del usuario
+// ───────────────────────────────────────────────────────────────────────
+
+/** Envuelve una acción: bloquea los botones, refresca y enseña el error real. */
+async function ejecutar(fn){
+  if (estado.trabajando) return;
+  estado.trabajando = true;
+  pintar();
+  try { await fn(); }
+  catch (e) { avisarError(e); }
+  finally {
+    estado.trabajando = false;
+    pintar();
+  }
+}
+
+async function crearProyecto(){
+  var f = estado.form;
+  if (!f.instrumentos.length) { avisar('Elige al menos un instrumento.'); return; }
+  if (f.escenario === 'other' && !f.escenarioTexto.trim()) { avisar('Describe el escenario personalizado.'); return; }
+  if (f.estilo === 'other' && !f.estiloTexto.trim()) { avisar('Describe el estilo visual personalizado.'); return; }
+
+  var config = {
+    instrumentIds: f.instrumentos.slice(),
+    formationId: f.formacion,
+    performerGenderId: f.genero,
+    performerTypeId: f.tipo,
+    scenarioId: f.escenario,
+    visualStyleId: f.estilo,
+    creativeDirection: f.direccion.trim(),
+    durationSec: f.duracion
+  };
+  if (f.escenarioTexto.trim()) config.scenarioCustom = f.escenarioTexto.trim();
+  if (f.estiloTexto.trim()) config.visualStyleCustom = f.estiloTexto.trim();
+
+  await ejecutar(async function(){
+    var d = await api.crear(config);
+    var p = desenvolver(d, ['project','proyecto']);
+    if (!p || !p.id) throw new Error('El servidor creó algo pero no devolvió el proyecto.');
+    estado.proyecto = p;
+    estado.proyectoId = p.id;
+    estado.form = null;
+    await cargarResumenes();
+    avisar('Corto creado y planificado. Ahora te toca aprobar.', 'ok');
+    irA('#/proyecto/' + p.id);
+  });
+}
+
+async function accionGenerar(activoId){
+  var p = estado.proyecto;
+  if (!p) return;
+  var a = activos(p).find(function(x){ return x.id === activoId; });
+  if (!a) return;
+
+  // Regenerar algo aprobado invalida todo lo que se apoyaba en ello. Se avisa
+  // con el número exacto: es una decisión cara, no un clic más.
+  if (a.locked) {
+    var deps = dependientes(p, a.id).length;
+    var texto = 'Este activo está aprobado y bloqueado.\n\nAl regenerarlo se desbloquea' +
+      (deps ? ' y ' + deps + ' activos que dependen de él quedarán marcados como desactualizados' : '') + '.\n\n¿Continuar?';
+    if (!window.confirm(texto)) return;
+  }
+
+  await ejecutar(async function(){
+    if (a.locked) await api.desbloquear(p.id, a.id);
+    await api.generar(p.id, a.id);
+    estado.genVista = null;
+    await cargarProyecto(p.id);
+    latir(true);
+  });
+}
+
+async function accionAprobar(activoId, genId){
+  var p = estado.proyecto;
+  if (!p || !genId) return;
+  await ejecutar(async function(){
+    await api.aprobar(p.id, activoId, genId);
+    estado.genVista = null;
+    await cargarProyecto(p.id);
+    var sit = situacion(estado.proyecto);
+    // Encadenar la revisión: tras aprobar, lo natural es saltar a lo siguiente.
+    estado.activoSel = sit.siguiente ? sit.siguiente.id : null;
+    avisar('Aprobado.', 'ok');
+  });
+}
+
+async function accionRechazar(activoId, genId){
+  var p = estado.proyecto;
+  if (!p || !genId) return;
+  await ejecutar(async function(){
+    await api.rechazar(p.id, activoId, genId);
+    estado.genVista = null;
+    await cargarProyecto(p.id);
+  });
+}
+
+async function accionMontar(){
+  var p = estado.proyecto;
+  if (!p) return;
+  await ejecutar(async function(){
+    var d = await api.montar(p.id);
+    estado.montajeJob = d.job || d.trabajo || d.jobId || d.buildId || estado.montajeJob;
+    await cargarProyecto(p.id);
+    latir(true);
+    avisar('Montaje lanzado. Tarda unos minutos.', 'ok');
+  });
+}
+
+async function accionEntregar(){
+  var p = estado.proyecto;
+  if (!p) return;
+  var titulo = ($('e-titulo') && $('e-titulo').value.trim()) || '';
+  var descripcion = ($('e-descripcion') && $('e-descripcion').value.trim()) || '';
+  var crudos = ($('e-hashtags') && $('e-hashtags').value) || '';
+  var hashtags = crudos.split(/[\s,]+/).filter(Boolean);
+  if (!titulo) { avisar('El corto necesita un título antes de exportarse.'); return; }
+
+  await ejecutar(async function(){
+    await api.entrega(p.id, titulo, descripcion, hashtags);
+    await cargarProyecto(p.id);
+    avisar('Entrega enviada. El MP4 aparece abajo cuando esté listo.', 'ok');
+  });
+}
+
+function accionContinuar(id){
+  var p = estado.proyecto;
+  if (!p || p.id !== id) { irA('#/proyecto/' + id); return; }
+  var sit = situacion(p);
+  estado.subtab = sit.siguiente ? 'produccion' : (sit.listoParaMontar ? 'montaje' : 'produccion');
+  estado.activoSel = sit.siguiente ? sit.siguiente.id : null;
+  estado.genVista = null;
+  if (estado.vista !== 'proyecto' || estado.proyectoId !== id) { irA('#/proyecto/' + id); return; }
+  pintar();
+  var caja = $('caja-revision');
+  if (caja) caja.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+async function comprobarSalud(destino){
+  try {
+    var s = await api.salud();
+    estado.salud = s;
+  } catch (e) {
+    estado.salud = { __error: (e && e.message) || 'No se pudo consultar /api/salud.' };
+  }
+  if (destino === 'acceso') {
+    var caja = $('acceso-salud');
+    caja.classList.remove('oculto');
+    caja.innerHTML = htmlSalud(estado.salud);
+  } else {
+    pintarEn('caja-salud', htmlSalud(estado.salud));
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Delegación de eventos
+// ───────────────────────────────────────────────────────────────────────
+
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest('[data-accion]');
+  if (!el) return;
+  var accion = el.getAttribute('data-accion');
+
+  if (accion === 'entrar') { entrar(); return; }
+  if (accion === 'salud-acceso') { comprobarSalud('acceso'); return; }
+  if (accion === 'salud') { comprobarSalud('perfil'); return; }
+  if (accion === 'salir') { cerrarSesion(''); return; }
+
+  if (accion === 'ir') { irA(el.getAttribute('data-ruta')); return; }
+  if (accion === 'refrescar') {
+    if (estado.proyectoId) cargarProyecto(estado.proyectoId).then(function(){ pintar(); });
+    else cargarResumenes().then(pintar);
+    return;
+  }
+
+  if (accion === 'subtab') { estado.subtab = el.getAttribute('data-tab'); pintar(); window.scrollTo(0,0); return; }
+  if (accion === 'continuar') { accionContinuar(el.getAttribute('data-id')); return; }
+
+  if (accion === 'abrir-activo') {
+    var id = el.getAttribute('data-activo');
+    // Desde el panel, un activo pertenece a un proyecto que quizá no está
+    // abierto: primero se navega y luego se selecciona.
+    if (estado.vista !== 'proyecto' && estado.proyecto) {
+      estado.activoSel = id; estado.genVista = null; estado.subtab = 'produccion';
+      irA('#/proyecto/' + estado.proyecto.id);
+      return;
+    }
+    estado.activoSel = id;
+    estado.genVista = null;
+    estado.subtab = 'produccion';
+    pintar();
+    var caja = $('caja-revision');
+    if (caja) caja.scrollIntoView({ behavior:'smooth', block:'start' });
+    return;
+  }
+
+  if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
+  if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo')); return; }
+  if (accion === 'aprobar') { accionAprobar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
+  if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
+  if (accion === 'montar') { accionMontar(); return; }
+  if (accion === 'entregar') { accionEntregar(); return; }
+  if (accion === 'filtro-bib') { estado.filtroBib = el.getAttribute('data-f'); pintar(); return; }
+
+  // ── Formulario de creación: se actualiza por trozos para no perder el foco ──
+  if (accion === 'instr') {
+    var iid = el.getAttribute('data-id');
+    var pos = estado.form.instrumentos.indexOf(iid);
+    if (pos === -1) {
+      if (estado.form.instrumentos.length >= 8) { avisar('Ocho instrumentos es el máximo razonable para un corto.'); return; }
+      estado.form.instrumentos.push(iid);
+    } else estado.form.instrumentos.splice(pos, 1);
+    pintarEn('chips-elegidos', htmlChipsElegidos());
+    pintarEn('lista-instr', htmlInstrumentos());
+    return;
+  }
+  if (accion === 'categoria') {
+    estado.form.categoria = el.getAttribute('data-id');
+    pintar();
+    return;
+  }
+  if (accion === 'tipo') { estado.form.tipo = el.getAttribute('data-id'); pintarEn('tipos-interprete', htmlTipos()); return; }
+  if (accion === 'duracion') { estado.form.duracion = Number(el.getAttribute('data-seg')); pintar(); return; }
+  if (accion === 'crear-proyecto') { crearProyecto(); return; }
+});
+
+document.addEventListener('input', function(ev){
+  var el = ev.target;
+  if (el.id === 'clave') { var c = $('acceso-error'); if (c) c.classList.add('oculto'); return; }
+  var campo = el.getAttribute && el.getAttribute('data-campo');
+  if (!campo || !estado.form) return;
+  estado.form[campo] = el.value;
+  // Sólo la búsqueda repinta, y sólo su lista: los textos largos se escriben
+  // sin que nada se mueva debajo del dedo.
+  if (campo === 'busqueda') pintarEn('lista-instr', htmlInstrumentos());
+});
+
+document.addEventListener('change', function(ev){
+  var el = ev.target;
+  var campo = el.getAttribute && el.getAttribute('data-campo');
+  if (!campo || !estado.form) return;
+  estado.form[campo] = el.value;
+  if (campo === 'genero') { ajustarTipos(); pintarEn('tipos-interprete', htmlTipos()); }
+  if (campo === 'escenario' || campo === 'estilo') pintar();
+});
+
+document.addEventListener('keydown', function(ev){
+  if (ev.key === 'Enter' && ev.target.id === 'clave') { ev.preventDefault(); entrar(); }
+});
+
+window.addEventListener('hashchange', leerRuta);
+
+// ───────────────────────────────────────────────────────────────────────
+// Latido: consultar el estado sin bloquear la pantalla
+//
+// Las etapas largas no se esperan. Se lanza el trabajo y se pregunta cada
+// pocos segundos por su estado. Nada de SSE: en Vercel no funciona, y además
+// la consulta es lo que hace avanzar el trabajo en un entorno sin servidor.
+// ───────────────────────────────────────────────────────────────────────
+
+var latidoTimer = null;
+var latidoOcupado = false;
+
+function latir(inmediato){
+  if (latidoTimer) clearTimeout(latidoTimer);
+  latidoTimer = setTimeout(tic, inmediato ? 800 : 5000);
+}
+
+async function tic(){
+  latidoTimer = null;
+  if (latidoOcupado) { latir(); return; }
+
+  var p = estado.proyecto;
+  if (!p || estado.clave === '') { latir(); return; }
+
+  var generando = activos(p).filter(function(a){ return a.status === 'generating'; });
+  var montando = p.finalCut && p.finalCut.status === 'building';
+  if (!generando.length && !montando) { latir(); return; }
+
+  latidoOcupado = true;
+  try {
+    // Sólo unas pocas por vuelta: veinte consultas simultáneas desde un móvil
+    // son más lentas que cuatro seguidas, y agotan el límite del proveedor.
+    for (var i = 0; i < Math.min(generando.length, 4); i++) {
+      var a = generando[i];
+      var gen = (a.generations || []).filter(function(g){ return g.status === 'generating'; }).pop();
+      if (!gen) continue;
+      try { await api.estadoGeneracion(p.id, a.id, gen.id); }
+      catch (e) {
+        // Un fallo al consultar no debe romper el bucle: el proyecto que se
+        // recarga a continuación es la fuente de verdad.
+        console.warn('[ams] consulta de generación', a.id, e && e.message);
+      }
+    }
+
+    if (montando) {
+      try { await api.estadoMontaje(p.id, estado.montajeJob); }
+      catch (e) { console.warn('[ams] consulta de montaje', e && e.message); }
+    }
+
+    var antes = huella(p);
+    await cargarProyecto(p.id, true);
+    if (estado.proyecto && huella(estado.proyecto) !== antes) {
+      // Sólo se repinta cuando algo ha cambiado de verdad: si no, un vídeo que
+      // se está reproduciendo volvería al principio cada cinco segundos.
+      pintar();
+    }
+  } finally {
+    latidoOcupado = false;
+    latir();
+  }
+}
+
+/** Resumen del proyecto que cambia sólo cuando cambia algo visible. */
+function huella(p){
+  return String(p.updatedAt || '') + '|' +
+    activos(p).map(function(a){
+      return a.id + ':' + a.status + ':' + (a.approvedGenerationId || '') + ':' + (a.generations || []).length + ':' + (a.stale ? 1 : 0);
+    }).join(',') + '|' + ((p.finalCut && p.finalCut.status) || '');
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Arranque
+// ───────────────────────────────────────────────────────────────────────
+
+(function inicio(){
+  var guardada = '';
+  try { guardada = localStorage.getItem(CLAVE_ALMACEN) || ''; } catch (e) {}
+  latir();
+
+  if (!guardada) { $('acceso').classList.remove('oculto'); return; }
+
+  estado.clave = guardada;
+  $('app').classList.remove('oculto');
+  arrancar().catch(function(e){
+    // Si la clave guardada ya no vale, pedir() habrá abierto el acceso; si el
+    // fallo es otro, se enseña tal cual en vez de dejar la pantalla vacía.
+    avisarError(e);
+  });
+})();
+</script>
+</body>
+</html>

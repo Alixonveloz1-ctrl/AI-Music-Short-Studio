@@ -1,0 +1,33 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/proyectos.js": { "maxDuration": 60 },
+    "api/proyecto.js": { "maxDuration": 30 },
+    "api/generar.js": { "maxDuration": 60 },
+    "api/aprobar.js": { "maxDuration": 30 },
+    "api/rechazar.js": { "maxDuration": 30 },
+    "api/desbloquear.js": { "maxDuration": 30 },
+    "api/montar.js": { "maxDuration": 60 },
+    "api/entrega.js": { "maxDuration": 30 },
+    "api/catalogo.js": { "maxDuration": 15 },
+    "api/salud.js": { "maxDuration": 30 },
+    "api/archivo.js": { "maxDuration": 15 }
+  },
+  "headers": [
+    {
+      "source": "/",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
+    },
+    {
+      "source": "/index.html",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
+    },
+    {
+      "source": "/i.sh",
+      "headers": [
+        { "key": "Content-Type", "value": "text/x-shellscript; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ]
+}
