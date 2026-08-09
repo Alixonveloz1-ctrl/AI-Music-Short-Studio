@@ -113,7 +113,7 @@ function canGenerate(project, asset) {
 
 /**
  * Estado de producción completo: { stages, rows, nextActionableAssetId,
- * readyForEdit }.
+ * readyForEdit, missingForEdit }.
  */
 function computeProductionStatus(project) {
   const { STAGES, STAGE_LABELS } = constantes();
@@ -177,6 +177,14 @@ function computeProductionStatus(project) {
     rows,
     nextActionableAssetId,
     readyForEdit: ASSET_STAGES.every((s) => isStageComplete(project, s)),
+    // Los NOMBRES de lo que falta para poder montar, no solo un sí/no. El
+    // servidor ya lo sabe calcular y lo redacta bien cuando rechaza un
+    // montaje; sin mandarlo aquí, el panel tenía que volver a deducirlo por su
+    // cuenta y las dos versiones podían no decir lo mismo.
+    missingForEdit: project.assets
+      .filter((a) => ASSET_STAGES.indexOf(a.stage) !== -1)
+      .filter((a) => !hasApprovedVersion(a) || a.stale)
+      .map((a) => a.label),
   };
 }
 

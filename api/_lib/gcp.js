@@ -357,6 +357,46 @@ async function gcsReadText(token, bucket, objectPath) {
   return { texto, generacion };
 }
 
+/**
+ * Copia un objeto dentro de Google, sin que los bytes pasen por Vercel.
+ *
+ * Es `rewriteTo` y no `copyTo` porque los objetos grandes se copian por tramos:
+ * Google devuelve un testigo y hay que volver a llamar hasta que dice `done`.
+ * Un MP4 de tres minutos suele ir en una sola pasada, pero con el testigo
+ * funciona igual cuando no.
+ *
+ * Devuelve el tamaño en bytes del objeto resultante.
+ */
+async function gcsCopy(token, bucketOrigen, objetoOrigen, bucketDestino, objetoDestino) {
+  const base =
+    'https://storage.googleapis.com/storage/v1/b/' + encodeURIComponent(bucketOrigen) +
+    '/o/' + encodeURIComponent(objetoOrigen) +
+    '/rewriteTo/b/' + encodeURIComponent(bucketDestino) +
+    '/o/' + encodeURIComponent(objetoDestino);
+
+  let testigo = '';
+  for (let vuelta = 0; vuelta < 40; vuelta += 1) {
+    const r = await fetch(base + (testigo ? '?rewriteToken=' + encodeURIComponent(testigo) : ''), {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!r.ok) {
+      const detalle = (await r.text().catch(() => '')).slice(0, 200);
+      const err = new Error('No se pudo copiar ' + objetoOrigen + ': ' + r.status + ' ' + detalle);
+      err.status = 502;
+      throw err;
+    }
+    const d = await r.json().catch(() => ({}));
+    if (d.done) return Number((d.resource && d.resource.size) || d.objectSize || 0);
+    testigo = d.rewriteToken || '';
+    if (!testigo) break;
+  }
+  const err = new Error('La copia de ' + objetoOrigen + ' no terminó tras muchos intentos.');
+  err.status = 502;
+  throw err;
+}
+
 async function gcsDelete(token, bucket, objectPath) {
   const r = await fetch(
     'https://storage.googleapis.com/storage/v1/b/' + bucket + '/o/' + encodeURIComponent(objectPath),
@@ -417,6 +457,7 @@ module.exports = {
   CORS_BUCKET,
   gcsUpload,
   gcsReadText,
+  gcsCopy,
   gcsDelete,
   gcsList,
   vertexUrl,
