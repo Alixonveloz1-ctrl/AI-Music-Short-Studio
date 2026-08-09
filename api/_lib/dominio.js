@@ -1,0 +1,639 @@
+'use strict';
+
+/**
+ * La máquina de estados de aprobación.
+ *
+ * Este módulo es el punto donde se hace cumplir la regla fundacional del
+ * producto (PRD §4, §46): una generación que ha terminado bien NO está
+ * aprobada. Aterriza en REVISIÓN y se queda ahí hasta que el usuario diga otra
+ * cosa. Nada aguas abajo puede consumirla hasta entonces.
+ *
+ * Aquí viven también los identificadores y la construcción del proyecto, que
+ * en el original estaban en domain/ids.ts y domain/project.ts.
+ */
+
+const { randomBytes } = require('node:crypto');
+const { computeCurrentStage, hasApprovedVersion } = require('./progreso.js');
+
+// Los módulos hermanos se cargan de forma perezosa. En CommonJS un require en
+// la cabecera se resuelve al cargar el archivo, así que un ciclo entre módulos
+// hermanos devolvería un objeto a medio construir; además así este archivo se
+// puede cargar por sí solo aunque los prompts todavía no hagan falta.
+let _constantes = null;
+function constantes() {
+  if (!_constantes) _constantes = require('./constantes.js');
+  return _constantes;
+}
+
+// El módulo del director artístico (los constructores de prompts) es un
+// archivo hermano cuyo nombre puede variar; se prueban los nombres conocidos y
+// se avisa en español si no aparece ninguno, en vez de reventar con un
+// "MODULE_NOT_FOUND" que no dice nada.
+let _equipo = null;
+function equipo() {
+  if (_equipo) return _equipo;
+  const candidatos = ['./equipo.js', './director-artistico.js', './equipo-creativo.js'];
+  for (const nombre of candidatos) {
+    try {
+      _equipo = require(nombre);
+      return _equipo;
+    } catch (err) {
+      // Sólo se ignora "no existe ESE archivo"; un fallo dentro del módulo se propaga.
+      if (err.code !== 'MODULE_NOT_FOUND' || !String(err.message).includes(nombre)) throw err;
+    }
+  }
+  throw new Error(
+    `No se encuentra el módulo del director artístico (se buscó: ${candidatos.join(', ')}).`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Errores de dominio
+// ---------------------------------------------------------------------------
+
+/**
+ * Error con código HTTP asociado. El orden de los parámetros es (mensaje,
+ * estado) y el estado por defecto es 400, igual que en el original: las rutas
+ * leen `err.status` para decidir la respuesta.
+ */
+class DomainError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.name = 'DomainError';
+    this.status = status;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Identificadores
+// ---------------------------------------------------------------------------
+
+// Sin la "l" ni la "1" ni el "0": estos identificadores se leen y se dictan en
+// voz alta, y esos caracteres se confunden entre sí.
+const ALPHABET = 'abcdefghijkmnopqrstuvwxyz23456789';
+
+function shortId(length = 10) {
+  const bytes = randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += ALPHABET[bytes[i] % ALPHABET.length];
+  }
+  return out;
+}
+
+function projectId() {
+  return `prj_${shortId(12)}`;
+}
+
+function generationId() {
+  return `gen_${shortId(12)}`;
+}
+
+function eventId() {
+  return `evt_${shortId(12)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Consultas sobre activos y generaciones
+// ---------------------------------------------------------------------------
+
+function getAsset(project, assetId) {
+  const asset = project.assets.find((a) => a.id === assetId);
+  if (!asset) throw new DomainError(`Activo desconocido: ${assetId}`, 404);
+  return asset;
+}
+
+function getGeneration(asset, genId) {
+  const generation = asset.generations.find((g) => g.id === genId);
+  if (!generation) throw new DomainError(`Generación desconocida: ${genId}`, 404);
+  return generation;
+}
+
+function approvedGenerationOf(asset) {
+  if (!asset.approvedGenerationId) return null;
+  return asset.generations.find((g) => g.id === asset.approvedGenerationId) || null;
+}
+
+function approvedFileOf(asset) {
+  const generation = approvedGenerationOf(asset);
+  return generation && generation.file ? generation.file : null;
+}
+
+/** Dependientes directos de un activo. */
+function dependentsOf(project, assetId) {
+  return project.assets.filter((a) => a.dependsOn.includes(assetId));
+}
+
+/** Todos los activos que (transitivamente) se construyen sobre este. */
+function transitiveDependents(project, assetId) {
+  const out = new Map();
+  const queue = [assetId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const dependent of dependentsOf(project, current)) {
+      if (out.has(dependent.id)) continue;
+      out.set(dependent.id, dependent);
+      queue.push(dependent.id);
+    }
+  }
+  return Array.from(out.values());
+}
+
+// ---------------------------------------------------------------------------
+// Transiciones de generación
+// ---------------------------------------------------------------------------
+
+/**
+ * args: { prompt, negativePrompt?, referenceAssetIds, provider, seed }
+ * Devuelve la generación creada.
+ */
+function startGeneration(project, asset, args) {
+  const generation = {
+    id: generationId(),
+    assetId: asset.id,
+    index: asset.generations.length + 1,
+    status: 'generating',
+    createdAt: new Date().toISOString(),
+    prompt: args.prompt,
+    negativePrompt: args.negativePrompt,
+    referenceAssetIds: args.referenceAssetIds,
+    provider: args.provider,
+    seed: args.seed,
+  };
+  asset.generations.push(generation);
+  asset.status = 'generating';
+  asset.locked = false;
+  project.events.push(
+    makeEvent('generation_started', `${asset.label}: generación #${generation.index} en curso`, {
+      assetId: asset.id,
+      generationId: generation.id,
+      stage: asset.stage,
+    }),
+  );
+  touch(project);
+  return generation;
+}
+
+/**
+ * Una generación terminada pasa a REVISIÓN — nunca directamente a aprobada.
+ * Esta es la transición más importante del producto (PRD §46).
+ */
+function completeGeneration(project, asset, generation, file, elapsedMs) {
+  generation.status = 'review';
+  generation.file = file;
+  generation.completedAt = new Date().toISOString();
+  generation.elapsedMs = elapsedMs;
+  asset.status = 'review';
+  project.events.push(
+    makeEvent(
+      'generation_ready',
+      `${asset.label}: generación #${generation.index} lista para revisión`,
+      { assetId: asset.id, generationId: generation.id, stage: asset.stage },
+    ),
+  );
+  touch(project);
+}
+
+function failGeneration(project, asset, generation, error) {
+  generation.status = 'failed';
+  generation.error = error;
+  generation.completedAt = new Date().toISOString();
+  asset.status = restingStatus(asset);
+  asset.locked = hasApprovedVersion(asset);
+  project.events.push(
+    makeEvent('generation_failed', `${asset.label}: la generación #${generation.index} falló — ${error}`, {
+      assetId: asset.id,
+      generationId: generation.id,
+      stage: asset.stage,
+    }),
+  );
+  touch(project);
+}
+
+/**
+ * Aprobar es SIEMPRE un acto explícito del usuario: sólo se llega aquí desde
+ * la ruta de aprobación, nunca desde el final de una generación.
+ */
+function approveGeneration(project, assetId, genId) {
+  const asset = getAsset(project, assetId);
+  const generation = getGeneration(asset, genId);
+  if (generation.status === 'approved') return asset;
+  if (generation.status !== 'review') {
+    throw new DomainError(
+      `Solo se puede aprobar una generación en revisión (estado actual: ${generation.status}).`,
+    );
+  }
+  if (!generation.file) {
+    throw new DomainError('La generación no tiene archivo asociado.');
+  }
+
+  const previousApprovedId = asset.approvedGenerationId;
+  // Sólo existe una versión oficial a la vez (PRD §38).
+  for (const other of asset.generations) {
+    if (other.id !== generation.id && other.status === 'approved') {
+      other.status = 'rejected';
+    }
+  }
+  generation.status = 'approved';
+  asset.approvedGenerationId = generation.id;
+  asset.status = 'approved';
+  asset.locked = true;
+  asset.stale = false;
+  delete asset.staleReason;
+
+  project.events.push(
+    makeEvent('generation_approved', `${asset.label}: generación #${generation.index} APROBADA y bloqueada`, {
+      assetId: asset.id,
+      generationId: generation.id,
+      stage: asset.stage,
+    }),
+  );
+
+  // Sustituir una versión ya aprobada invalida todo lo que se construyó encima.
+  if (previousApprovedId && previousApprovedId !== generation.id) {
+    markDependentsStale(project, asset, `Se aprobó una versión nueva de "${asset.label}".`);
+    invalidateFinalCut(project, `Se aprobó una versión nueva de "${asset.label}".`);
+  } else {
+    invalidateFinalCutIfBuilt(project, asset);
+  }
+
+  project.currentStage = computeCurrentStage(project);
+  touch(project);
+  return asset;
+}
+
+function rejectGeneration(project, assetId, genId) {
+  const asset = getAsset(project, assetId);
+  const generation = getGeneration(asset, genId);
+  if (generation.status === 'rejected') return asset;
+  if (generation.status !== 'review' && generation.status !== 'approved') {
+    throw new DomainError(
+      `Solo se puede descartar una generación en revisión o aprobada (estado actual: ${generation.status}).`,
+    );
+  }
+
+  const wasApproved = asset.approvedGenerationId === generation.id;
+  generation.status = 'rejected';
+  if (wasApproved) {
+    asset.approvedGenerationId = null;
+    markDependentsStale(project, asset, `Se descartó la versión aprobada de "${asset.label}".`);
+    invalidateFinalCut(project, `Se descartó la versión aprobada de "${asset.label}".`);
+  }
+  asset.status = restingStatus(asset);
+  asset.locked = hasApprovedVersion(asset);
+
+  project.events.push(
+    makeEvent('generation_rejected', `${asset.label}: generación #${generation.index} descartada`, {
+      assetId: asset.id,
+      generationId: generation.id,
+      stage: asset.stage,
+    }),
+  );
+  project.currentStage = computeCurrentStage(project);
+  touch(project);
+  return asset;
+}
+
+/**
+ * Los activos aprobados quedan BLOQUEADOS (PRD §23). Regenerar uno está
+ * permitido, pero tiene que ser un acto deliberado, así que primero hay que
+ * levantar el bloqueo.
+ */
+function unlockAsset(project, assetId) {
+  const asset = getAsset(project, assetId);
+  if (!asset.locked) return asset;
+  asset.locked = false;
+  project.events.push(
+    makeEvent('asset_unlocked', `${asset.label}: desbloqueado para regenerar`, {
+      assetId: asset.id,
+      stage: asset.stage,
+    }),
+  );
+  touch(project);
+  return asset;
+}
+
+/** Marca como desactualizados los dependientes TRANSITIVOS, no sólo los directos. */
+function markDependentsStale(project, asset, reason) {
+  for (const dependent of transitiveDependents(project, asset.id)) {
+    // Un dependiente que nunca se ha generado no está "desactualizado": todavía
+    // no existe nada que pueda quedarse obsoleto.
+    if (!hasApprovedVersion(dependent) && dependent.generations.length === 0) continue;
+    if (dependent.stale) continue;
+    dependent.stale = true;
+    dependent.staleReason = reason;
+    project.events.push(
+      makeEvent('asset_stale', `${dependent.label}: marcado como desactualizado — ${reason}`, {
+        assetId: dependent.id,
+        stage: dependent.stage,
+      }),
+    );
+  }
+}
+
+function invalidateFinalCut(project, reason) {
+  if (project.finalCut.status === 'pending') return;
+  // Se conservan edl / preview / export para que el usuario siga viendo el
+  // montaje anterior mientras rehace el nuevo; lo que se pierde es su validez.
+  project.finalCut = {
+    status: 'pending',
+    error: undefined,
+    builtFrom: undefined,
+    edl: project.finalCut.edl,
+    preview: project.finalCut.preview,
+    export: project.finalCut.export,
+  };
+  project.events.push(makeEvent('cut_failed', `El montaje debe rehacerse: ${reason}`));
+}
+
+function invalidateFinalCutIfBuilt(project, asset) {
+  const builtFrom = project.finalCut.builtFrom;
+  if (!builtFrom) return;
+  const usedGeneration = builtFrom[asset.id];
+  if (usedGeneration && usedGeneration !== asset.approvedGenerationId) {
+    invalidateFinalCut(project, `"${asset.label}" cambió después de montar.`);
+  }
+}
+
+function restingStatus(asset) {
+  return hasApprovedVersion(asset) ? 'approved' : 'pending';
+}
+
+function touch(project) {
+  project.updatedAt = new Date().toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// Construcción del proyecto (original: domain/project.ts)
+//
+// Convierte un plan de producción terminado en la lista concreta de activos
+// que el usuario revisará uno a uno (PRD §5, §20, §26, §29, §31).
+//
+// Todos los activos nacen PENDIENTE y sin generaciones: no existe nada hasta
+// que el usuario lo pide, y nada avanza hasta que el usuario lo aprueba.
+// ---------------------------------------------------------------------------
+
+const MASTER_CHARACTER_ID = 'master_character';
+const MASTER_ENVIRONMENT_ID = 'master_environment';
+const MASTER_SCENE_ID = 'master_scene';
+const MUSIC_ASSET_ID = 'music';
+const AMBIENT_ASSET_ID = 'ambient';
+
+// Rellena los campos de estado que NUNCA los define quien crea el activo:
+// así es imposible construir un activo que nazca aprobado o bloqueado.
+function asset(partial) {
+  return Object.assign({}, partial, {
+    status: 'pending',
+    locked: false,
+    approvedGenerationId: null,
+    generations: [],
+    stale: false,
+  });
+}
+
+function buildAssets(config, plan) {
+  const { ASSET_KIND_STAGE } = constantes();
+  const {
+    buildCharacterPrompt,
+    buildEnvironmentPrompt,
+    buildScenePrompt,
+    buildShotImagePrompt,
+    buildClipPrompt,
+    NEGATIVE_VIDEO_EXTRA,
+  } = equipo();
+
+  const bible = plan.visualBible;
+  const assets = [];
+  // El orden salta de 10 en 10 para poder intercalar activos más adelante sin
+  // renumerar todo.
+  let order = 0;
+  const next = () => (order += 10);
+
+  const characterSpec = {
+    objective: 'Definir el aspecto oficial del intérprete para todo el corto.',
+    prompt: buildCharacterPrompt(bible, config),
+    negativePrompt: bible.negativePrompt,
+    referenceAssetIds: [],
+    continuityNotes: bible.continuityRules.slice(0, 4),
+  };
+  assets.push(
+    asset({
+      id: MASTER_CHARACTER_ID,
+      kind: 'master_character',
+      stage: ASSET_KIND_STAGE.master_character,
+      label: 'Personaje maestro',
+      order: next(),
+      spec: characterSpec,
+      dependsOn: [],
+    }),
+  );
+
+  assets.push(
+    asset({
+      id: MASTER_ENVIRONMENT_ID,
+      kind: 'master_environment',
+      stage: ASSET_KIND_STAGE.master_environment,
+      label: 'Escenario maestro',
+      order: next(),
+      spec: {
+        objective: 'Definir el aspecto oficial del escenario para todo el corto.',
+        prompt: buildEnvironmentPrompt(bible),
+        negativePrompt: bible.negativePrompt,
+        referenceAssetIds: [],
+        continuityNotes: [
+          `Elementos que deben repetirse: ${bible.environment.primaryElements.join(', ')}`,
+        ],
+      },
+      dependsOn: [],
+    }),
+  );
+
+  assets.push(
+    asset({
+      id: MASTER_SCENE_ID,
+      kind: 'master_scene',
+      stage: ASSET_KIND_STAGE.master_scene,
+      label: 'Escena maestra',
+      order: next(),
+      spec: {
+        objective: 'Fijar la relación entre el intérprete, el instrumento y el escenario.',
+        prompt: buildScenePrompt(bible, config),
+        negativePrompt: bible.negativePrompt,
+        referenceAssetIds: [MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+        continuityNotes: bible.continuityRules,
+      },
+      dependsOn: [MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+    }),
+  );
+
+  // Primero TODAS las imágenes de toma y después TODOS los clips: el orden de
+  // esta lista es el orden en que el usuario revisa, y así no salta entre etapas.
+  for (const shot of plan.shots) {
+    const imageId = `${shot.id}_image`;
+    assets.push(
+      asset({
+        id: imageId,
+        kind: 'shot_image',
+        stage: ASSET_KIND_STAGE.shot_image,
+        label: `${shot.label} — imagen`,
+        order: next(),
+        shotId: shot.id,
+        spec: {
+          objective: shot.purpose,
+          prompt: buildShotImagePrompt(bible, shot),
+          negativePrompt: bible.negativePrompt,
+          referenceAssetIds: [MASTER_SCENE_ID, MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+          continuityNotes: bible.continuityRules,
+        },
+        dependsOn: [MASTER_SCENE_ID],
+      }),
+    );
+  }
+
+  for (const shot of plan.shots) {
+    shot.clips.forEach((clip) => {
+      assets.push(
+        asset({
+          id: clip.id,
+          kind: 'clip',
+          stage: ASSET_KIND_STAGE.clip,
+          label: `${shot.label} — ${clip.label}`,
+          order: next(),
+          shotId: shot.id,
+          clipId: clip.id,
+          spec: {
+            objective: `${shot.purpose} (${clip.motionNote})`,
+            prompt: buildClipPrompt(bible, shot, clip, shot.clips.length),
+            negativePrompt: `${bible.negativePrompt}, ${NEGATIVE_VIDEO_EXTRA}`,
+            referenceAssetIds: [`${shot.id}_image`],
+            continuityNotes: [
+              'El primer fotograma debe coincidir con la imagen aprobada de la toma',
+              ...bible.continuityRules.slice(0, 4),
+            ],
+            durationSec: clip.durationSec,
+          },
+          dependsOn: [`${shot.id}_image`],
+        }),
+      );
+    });
+  }
+
+  assets.push(
+    asset({
+      id: MUSIC_ASSET_ID,
+      kind: 'music',
+      stage: ASSET_KIND_STAGE.music,
+      label: `Música — ${plan.music.title}`,
+      order: next(),
+      spec: {
+        objective: 'Componer la pieza instrumental completa del corto.',
+        prompt: plan.music.prompt,
+        negativePrompt: plan.music.negativePrompt,
+        referenceAssetIds: [],
+        continuityNotes: [
+          'Exclusivamente instrumental: sin voz, sin coros y sin letra',
+          `Duración objetivo: ${plan.music.durationSec} s`,
+        ],
+        durationSec: plan.music.durationSec,
+      },
+      dependsOn: [],
+    }),
+  );
+
+  assets.push(
+    asset({
+      id: AMBIENT_ASSET_ID,
+      kind: 'ambient',
+      stage: ASSET_KIND_STAGE.ambient,
+      label: 'Sonido ambiental',
+      order: next(),
+      spec: {
+        objective: 'Crear el lecho ambiental coherente con el escenario.',
+        prompt: plan.ambient.prompt,
+        negativePrompt: 'voces, palabras, música',
+        referenceAssetIds: [],
+        continuityNotes: [`Capas: ${plan.ambient.layers.join(', ')}`],
+        durationSec: plan.ambient.durationSec,
+      },
+      dependsOn: [],
+    }),
+  );
+
+  return assets;
+}
+
+function createProject(config, plan) {
+  const now = new Date().toISOString();
+  const assets = buildAssets(config, plan);
+  return {
+    id: projectId(),
+    createdAt: now,
+    updatedAt: now,
+    config,
+    plan,
+    assets,
+    currentStage: 'images',
+    finalCut: { status: 'pending' },
+    delivery: Object.assign({}, plan.delivery),
+    events: [
+      makeEvent('project_created', `Proyecto creado: ${plan.concept.title}`),
+      makeEvent(
+        'plan_ready',
+        `Plan de producción listo: ${plan.shots.length} tomas, ${plan.timeline.length} cortes, ${plan.economics.reusedSlots} reutilizaciones.`,
+      ),
+    ],
+  };
+}
+
+/** extra admite { assetId, generationId, stage }. */
+function makeEvent(type, message, extra = {}) {
+  return Object.assign(
+    {
+      id: eventId(),
+      at: new Date().toISOString(),
+      type,
+      message,
+    },
+    extra,
+  );
+}
+
+/** Añade una entrada al registro de auditoría del proyecto y la devuelve. */
+function makeEventAndPush(project, type, message, extra = {}) {
+  const event = makeEvent(type, message, extra);
+  project.events.push(event);
+  project.updatedAt = event.at;
+  return event;
+}
+
+module.exports = {
+  DomainError,
+  shortId,
+  projectId,
+  generationId,
+  eventId,
+  getAsset,
+  getGeneration,
+  approvedGenerationOf,
+  approvedFileOf,
+  dependentsOf,
+  transitiveDependents,
+  startGeneration,
+  completeGeneration,
+  failGeneration,
+  approveGeneration,
+  rejectGeneration,
+  unlockAsset,
+  markDependentsStale,
+  invalidateFinalCut,
+  touch,
+  MASTER_CHARACTER_ID,
+  MASTER_ENVIRONMENT_ID,
+  MASTER_SCENE_ID,
+  MUSIC_ASSET_ID,
+  AMBIENT_ASSET_ID,
+  buildAssets,
+  createProject,
+  makeEvent,
+  makeEventAndPush,
+};
