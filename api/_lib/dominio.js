@@ -25,26 +25,14 @@ function constantes() {
   return _constantes;
 }
 
-// El módulo del director artístico (los constructores de prompts) es un
-// archivo hermano cuyo nombre puede variar; se prueban los nombres conocidos y
-// se avisa en español si no aparece ninguno, en vez de reventar con un
-// "MODULE_NOT_FOUND" que no dice nada.
-let _equipo = null;
+// El director artístico (los constructores de prompts) se carga de forma
+// perezosa: `arte.js` no necesita nada de aquí, pero cargarlo arriba del todo
+// crearía un ciclo el día que lo necesite, y los ciclos de CommonJS no fallan
+// — devuelven un objeto a medio construir, que es mucho peor de diagnosticar.
+let _arte = null;
 function equipo() {
-  if (_equipo) return _equipo;
-  const candidatos = ['./equipo.js', './director-artistico.js', './equipo-creativo.js'];
-  for (const nombre of candidatos) {
-    try {
-      _equipo = require(nombre);
-      return _equipo;
-    } catch (err) {
-      // Sólo se ignora "no existe ESE archivo"; un fallo dentro del módulo se propaga.
-      if (err.code !== 'MODULE_NOT_FOUND' || !String(err.message).includes(nombre)) throw err;
-    }
-  }
-  throw new Error(
-    `No se encuentra el módulo del director artístico (se buscó: ${candidatos.join(', ')}).`,
-  );
+  if (!_arte) _arte = require('./arte.js');
+  return _arte;
 }
 
 // ---------------------------------------------------------------------------

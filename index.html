@@ -1049,7 +1049,35 @@ function htmlCargando(texto){
 // Pintado general
 // ───────────────────────────────────────────────────────────────────────
 
-function pintar(){
+/** Huella del proyecto tal y como está pintado ahora mismo en la pantalla. */
+var huellaPintada = '';
+
+/** ¿Hay un vídeo o un audio sonando dentro de la vista? */
+function medioSonando(){
+  var caja = $('vista');
+  if (!caja || !caja.querySelectorAll) return false;
+  var medios = caja.querySelectorAll('video, audio');
+  for (var i = 0; i < medios.length; i++) if (!medios[i].paused && !medios[i].ended) return true;
+  return false;
+}
+
+/**
+ * Repinta la vista actual. Devuelve false si ha decidido NO tocar nada.
+ *
+ * `auto` marca los repintados que no ha pedido el usuario (los que dispara la
+ * consulta periódica). Esos se saltan mientras hay un campo enfocado o un clip
+ * reproduciéndose: perder media descripción escrita, o que el vídeo que estás
+ * juzgando vuelva al segundo cero justo cuando ibas a aprobarlo, es peor que
+ * enseñar un contador desfasado unos segundos. No se pierde nada: `huellaPintada`
+ * sólo se actualiza cuando el repintado ocurre de verdad, así que el siguiente
+ * latido lo vuelve a intentar.
+ */
+function pintar(auto){
+  if (auto) {
+    var foco = document.activeElement;
+    if (foco && /^(INPUT|TEXTAREA|SELECT)$/.test(foco.tagName)) return false;
+    if (medioSonando()) return false;
+  }
   pintarBarra();
   var v = $('vista');
   if (estado.vista === 'panel') v.innerHTML = vistaPanel();
@@ -1058,6 +1086,8 @@ function pintar(){
   else if (estado.vista === 'biblioteca') v.innerHTML = vistaBiblioteca();
   else if (estado.vista === 'perfil') v.innerHTML = vistaPerfil();
   else if (estado.vista === 'proyecto') v.innerHTML = vistaProyecto();
+  huellaPintada = estado.proyecto ? huella(estado.proyecto) : '';
+  return true;
 }
 
 function pintarBarra(){
@@ -2248,13 +2278,11 @@ async function tic(){
       catch (e) { console.warn('[ams] consulta de montaje', e && e.message); }
     }
 
-    var antes = huella(p);
     await cargarProyecto(p.id, true);
-    if (estado.proyecto && huella(estado.proyecto) !== antes) {
-      // Sólo se repinta cuando algo ha cambiado de verdad: si no, un vídeo que
-      // se está reproduciendo volvería al principio cada cinco segundos.
-      pintar();
-    }
+    // Se compara contra lo que hay PINTADO, no contra lo que había cargado: si
+    // el repintado se saltó (porque estabas escribiendo o mirando un clip), la
+    // diferencia sigue ahí y el siguiente latido lo reintenta.
+    if (estado.proyecto && huella(estado.proyecto) !== huellaPintada) pintar(true);
   } finally {
     latidoOcupado = false;
     latir();
