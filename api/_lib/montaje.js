@@ -1,0 +1,384 @@
+// ════════════════════════════════════════════════════════════════
+// MONTAJE DEL MP4 — con Cloud Build como ejecutor de ffmpeg.
+//
+// POR QUÉ CLOUD BUILD Y NO CLOUD RUN
+//
+// El montaje necesita ffmpeg, que no existe en Vercel, y necesita más
+// de 60 segundos. La salida habitual es desplegar un contenedor en
+// Cloud Run, pero eso obliga al usuario a desplegar algo, y este
+// usuario trabaja solo desde un teléfono.
+//
+// Cloud Build no hay que desplegarlo: se enciende la API y ya está.
+// Es un servicio que arranca una máquina temporal y ejecuta los pasos
+// que le mandes, cada uno con la imagen de contenedor que le digas.
+// Nada obliga a que esos pasos "construyan" nada. Así que la app le
+// manda: baja estos archivos del bucket, corre este ffmpeg, sube el
+// resultado. Google enciende la máquina, trabaja y la apaga.
+//
+// La función de Vercel solo manda un JSON y termina en dos segundos.
+// Google regala 2.500 minutos al mes y un montaje gasta unos tres.
+//
+// NUNCA FALLA EN SILENCIO. El paso de ffmpeg lleva `allowFailure`, así
+// que aunque reviente, el último paso se ejecuta igual y sube el
+// error.txt al bucket. Desde un teléfono no hay forma cómoda de abrir
+// los registros de Cloud Build, y "exit code 1" no le dice nada a
+// nadie: el motivo real tiene que llegar a la interfaz.
+// ════════════════════════════════════════════════════════════════
+const { cfg, gcsUpload, gcsReadText } = require('./gcp');
+const {
+  OUTPUT_WIDTH,
+  OUTPUT_HEIGHT,
+  OUTPUT_FPS,
+  AUDIO_SAMPLE_RATE,
+} = require('./constantes');
+
+// Fundidos, en segundos. Los mismos que usaba el montaje local.
+const FUNDIDO_ENTRADA = 1.2;
+const FUNDIDO_SALIDA = 1.6;
+// Un fundido a negro entre bloques narrativos es más corto que el de apertura:
+// separa dos ideas, no abre la película.
+const FUNDIDO_BLOQUE = 0.4;
+
+// La música manda y el ambiente acompaña. Con las dos al mismo volumen el
+// ambiente se come el instrumento, que es justo lo que el corto viene a enseñar.
+const GANANCIA_MUSICA = 0.85;
+const GANANCIA_AMBIENTE = 0.28;
+
+/** Imagen que trae ffmpeg. Sobreescribible por si alguna vez desaparece. */
+function imagenFfmpeg() {
+  return (process.env.FFMPEG_IMAGE || 'alpine:3.20').trim();
+}
+
+/** Imagen del SDK de Google, la que sabe hablar con el bucket. */
+const IMAGEN_SDK = 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim';
+
+const n3 = (x) => Number(x).toFixed(3);
+
+/**
+ * El script de ffmpeg que monta la película.
+ *
+ * `entradas` es la línea de tiempo ya resuelta: una por corte, en orden, cada
+ * una con el archivo local de su clip, cuánto dura en la película y con qué
+ * transición entra. Un mismo archivo puede aparecer varias veces — el productor
+ * planifica la reutilización — y aquí eso no es un caso especial: se abre el
+ * archivo tantas veces como haga falta.
+ */
+function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
+  const total = entradas.reduce((suma, e) => suma + e.durationSec, 0);
+
+  const inputs = [];
+  const filtros = [];
+  const etiquetas = [];
+
+  entradas.forEach((entrada, i) => {
+    inputs.push('-i ' + comilla(entrada.local));
+
+    const primera = i === 0;
+    const ultima = i === entradas.length - 1;
+    const siguiente = entradas[i + 1];
+
+    const cadena = [
+      // El clip se recorta a lo que dura su hueco. Veo no siempre devuelve
+      // exactamente los segundos que se le pidieron, así que sin este trim la
+      // suma de la película no cuadraría con la duración planificada.
+      'trim=start=0:duration=' + n3(entrada.durationSec),
+      'setpts=PTS-STARTPTS',
+      // Encajar sin deformar: se reduce hasta caber y se rellena con negro. Un
+      // scale a pelo estiraría la imagen si el clip viniera con otra relación.
+      'scale=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':force_original_aspect_ratio=decrease',
+      'pad=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':(ow-iw)/2:(oh-ih)/2',
+      'setsar=1',
+      'fps=' + OUTPUT_FPS,
+    ];
+
+    if (primera) {
+      cadena.push('fade=t=in:st=0:d=' + FUNDIDO_ENTRADA);
+    } else if (entrada.transitionIn === 'dip_to_black') {
+      cadena.push('fade=t=in:st=0:d=' + FUNDIDO_BLOQUE);
+    }
+
+    if (ultima) {
+      cadena.push(
+        'fade=t=out:st=' + n3(Math.max(0, entrada.durationSec - FUNDIDO_SALIDA)) +
+          ':d=' + FUNDIDO_SALIDA,
+      );
+    } else if (siguiente && siguiente.transitionIn === 'dip_to_black') {
+      cadena.push(
+        'fade=t=out:st=' + n3(Math.max(0, entrada.durationSec - FUNDIDO_BLOQUE)) +
+          ':d=' + FUNDIDO_BLOQUE,
+      );
+    }
+
+    filtros.push('[' + i + ':v]' + cadena.join(',') + '[v' + i + ']');
+    etiquetas.push('[v' + i + ']');
+  });
+
+  filtros.push(etiquetas.join('') + 'concat=n=' + entradas.length + ':v=1:a=0[vout]');
+
+  const iMusica = entradas.length;
+  const iAmbiente = entradas.length + 1;
+  inputs.push('-i ' + comilla(musicaLocal));
+  inputs.push('-i ' + comilla(ambienteLocal));
+
+  // apad antes de atrim: si la pista es más corta que la película se alarga con
+  // silencio en vez de cortar el vídeo. amix con `duration=first` terminaría la
+  // mezcla al acabarse la primera entrada, y sin el apad eso deja el final mudo.
+  filtros.push(
+    '[' + iMusica + ':a]apad,atrim=0:' + n3(total) +
+      ',asetpts=PTS-STARTPTS,volume=' + GANANCIA_MUSICA + '[amus]',
+  );
+  filtros.push(
+    '[' + iAmbiente + ':a]apad,atrim=0:' + n3(total) +
+      ',asetpts=PTS-STARTPTS,volume=' + GANANCIA_AMBIENTE + '[aamb]',
+  );
+  // normalize=0 es obligatorio: por defecto amix divide cada entrada entre el
+  // número de entradas, así que mezclar dos pistas bajaría la música a la mitad
+  // sin que nada lo indique. El alimiter final evita que la suma sature.
+  filtros.push(
+    '[amus][aamb]amix=inputs=2:duration=first:normalize=0,' +
+      'afade=t=in:st=0:d=' + FUNDIDO_ENTRADA + ',' +
+      'afade=t=out:st=' + n3(Math.max(0, total - FUNDIDO_SALIDA)) + ':d=' + FUNDIDO_SALIDA + ',' +
+      'alimiter=limit=0.95[aout]',
+  );
+
+  const orden = [
+    'ffmpeg -y -hide_banner -loglevel error',
+    inputs.join(' '),
+    '-filter_complex ' + comilla(filtros.join(';')),
+    '-map "[vout]" -map "[aout]"',
+    '-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -r ' + OUTPUT_FPS,
+    '-c:a aac -b:a 192k -ar ' + AUDIO_SAMPLE_RATE,
+    '-movflags +faststart',
+    comilla(salidaLocal),
+  ].join(' \\\n  ');
+
+  return [
+    '#!/bin/sh',
+    '# Cualquier queja de ffmpeg se guarda para que la lea la aplicacion: desde',
+    '# un telefono no hay forma comoda de abrir el registro de Cloud Build.',
+    '#',
+    '# La redireccion va ANTES de set -e, y no hay ningun `cd`: el script corre',
+    '# donde esten los archivos (en Cloud Build, /workspace). Con un `cd` fijo',
+    '# delante, un fallo al entrar en el directorio mataba el script sin llegar',
+    '# a crear error.txt — justo el caso en el que mas falta hace.',
+    'exec 2>error.txt',
+    'set -eu',
+    '',
+    orden,
+    '',
+    'echo listo',
+    '',
+  ].join('\n');
+}
+
+/** Entrecomillado para /bin/sh: la única forma de escapar dentro de '' es '\''. */
+function comilla(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Prepara el encargo y lanza el trabajo en Cloud Build.
+ *
+ * Devuelve el identificador del build, que es con lo que se pregunta después.
+ * No espera a que termine: la función de Vercel tiene 60 segundos y el montaje
+ * tarda minutos.
+ */
+async function lanzarMontaje(opciones) {
+  const { token, projectId, bucket, carpeta, entradas, musica, ambiente, salida } = opciones;
+
+  if (!entradas || !entradas.length) {
+    throw new Error('No hay ninguna toma aprobada que montar.');
+  }
+
+  // Un mismo clip puede salir varias veces en la película. Se baja UNA vez y se
+  // referencia tantas como haga falta: bajar veinte veces el mismo archivo
+  // costaría más que el propio montaje.
+  const porObjeto = new Map();
+  const descargas = [];
+  const entradasLocales = entradas.map((e) => {
+    let local = porObjeto.get(e.objeto);
+    if (!local) {
+      local = 'clip_' + String(porObjeto.size).padStart(3, '0') + extension(e.objeto, '.mp4');
+      porObjeto.set(e.objeto, local);
+      descargas.push({ objeto: e.objeto, local });
+    }
+    return { local, durationSec: e.durationSec, transitionIn: e.transitionIn };
+  });
+
+  const musicaLocal = 'musica' + extension(musica, '.wav');
+  const ambienteLocal = 'ambiente' + extension(ambiente, '.wav');
+  descargas.push({ objeto: musica, local: musicaLocal });
+  descargas.push({ objeto: ambiente, local: ambienteLocal });
+
+  const salidaLocal = 'pelicula.mp4';
+  const script = construirScript(entradasLocales, musicaLocal, ambienteLocal, salidaLocal);
+
+  // El encargo queda escrito en el bucket: el script que se ejecutó y la hoja
+  // con lo que se pidió. Si algo sale raro, se puede mirar exactamente qué se
+  // mandó en vez de reconstruirlo de memoria.
+  const manifiesto = {
+    creado: new Date().toISOString(),
+    salida,
+    total: entradasLocales.reduce((s, e) => s + e.durationSec, 0),
+    entradas: entradasLocales,
+    descargas,
+  };
+  await gcsUpload(token, bucket, carpeta + '/montar.sh', Buffer.from(script), 'text/x-shellscript');
+  await gcsUpload(
+    token, bucket, carpeta + '/hoja.json',
+    Buffer.from(JSON.stringify(manifiesto, null, 2)), 'application/json',
+  );
+  // Se vacía la queja anterior, para que un fallo sin nota no herede la del
+  // intento pasado y mande a buscar un problema que ya no existe.
+  await gcsUpload(token, bucket, carpeta + '/error.txt', Buffer.from(''), 'text/plain');
+
+  const gs = (o) => 'gs://' + bucket + '/' + o;
+
+  const bajar = [
+    'set -e',
+    'cd /workspace',
+    'gcloud storage cp ' + comilla(gs(carpeta + '/montar.sh')) + ' montar.sh',
+  ]
+    .concat(
+      // En paralelo: son decenas de archivos y de uno en uno se va el tiempo en
+      // ida y vuelta, no en transferencia.
+      descargas.map(
+        (d) => 'gcloud storage cp ' + comilla(gs(d.objeto)) + ' ' + comilla(d.local) + ' &',
+      ),
+    )
+    .concat(['wait', 'ls -la'])
+    .join('\n');
+
+  const subir = [
+    'cd /workspace',
+    // El error se sube SIEMPRE, haya MP4 o no. Es lo único que la aplicación
+    // puede enseñar cuando el montaje falla.
+    'if [ -s error.txt ]; then gcloud storage cp error.txt ' + comilla(gs(carpeta + '/error.txt')) + '; fi',
+    'if [ ! -f pelicula.mp4 ]; then',
+    '  echo "El montaje terminó sin producir el MP4." >&2',
+    '  exit 1',
+    'fi',
+    'gcloud storage cp pelicula.mp4 ' + comilla(gs(salida)),
+    'echo "subido a ' + gs(salida) + '"',
+  ].join('\n');
+
+  const build = {
+    steps: [
+      { name: IMAGEN_SDK, id: 'bajar', entrypoint: 'bash', args: ['-c', bajar] },
+      {
+        name: imagenFfmpeg(),
+        id: 'montar',
+        entrypoint: 'sh',
+        args: ['-c', 'apk add --no-cache ffmpeg >/dev/null 2>&1 && sh montar.sh'],
+        // Si ffmpeg falla, el build sigue para que el paso de subida deje el
+        // error.txt en el bucket. Sin esto el build muere aquí y el motivo real
+        // se queda dentro de una máquina que ya no existe.
+        allowFailure: true,
+      },
+      { name: IMAGEN_SDK, id: 'subir', entrypoint: 'bash', args: ['-c', subir] },
+    ],
+    timeout: '1800s',
+    options: {
+      machineType: 'E2_HIGHCPU_8',
+      // Sin esto, un build lanzado por una cuenta de servicio propia se rechaza
+      // antes de empezar porque no tiene dónde escribir el registro.
+      logging: 'CLOUD_LOGGING_ONLY',
+    },
+    tags: ['ams-montaje'],
+  };
+
+  const r = await fetch('https://cloudbuild.googleapis.com/v1/projects/' + projectId + '/builds', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(build),
+  });
+  const texto = await r.text();
+
+  if (!r.ok) {
+    throw new Error('No se pudo lanzar el montaje: ' + explicar(r.status, texto));
+  }
+
+  let d = {};
+  try { d = JSON.parse(texto); } catch (e) { /* respuesta no-JSON */ }
+  const buildId = (d.metadata && d.metadata.build && d.metadata.build.id) || '';
+  if (!buildId) throw new Error('Cloud Build aceptó el trabajo pero no devolvió su identificador.');
+  return { buildId, carpeta, salida };
+}
+
+/**
+ * Traduce los rechazos de Cloud Build a algo accionable.
+ *
+ * Los mensajes de Google aquí nombran permisos internos que no significan nada
+ * para quien solo quiere montar un vídeo, y el que más se olvida
+ * (`iam.serviceAccountUser`) produce un texto especialmente críptico.
+ */
+function explicar(status, texto) {
+  const t = String(texto);
+  if (status === 403 && /serviceAccounts?\.actAs|act as|serviceAccountUser/i.test(t)) {
+    return 'a la cuenta de servicio le falta el rol "Usuario de cuenta de servicio" ' +
+      '(roles/iam.serviceAccountUser). Se añade en IAM, en la misma pantalla que los demás.';
+  }
+  if (status === 403 && /cloudbuild\.builds\.create|permission/i.test(t)) {
+    return 'a la cuenta de servicio le falta el rol "Editor de Cloud Build" ' +
+      '(roles/cloudbuild.builds.editor).';
+  }
+  if (status === 403 && /has not been used|disabled|SERVICE_DISABLED/i.test(t)) {
+    return 'la API de Cloud Build no está habilitada en este proyecto ' +
+      '(cloudbuild.googleapis.com).';
+  }
+  if (status === 404) return 'no se encuentra el proyecto de Google Cloud.';
+  return status + ' — ' + t.slice(0, 300);
+}
+
+/** Estado de un montaje ya lanzado. */
+async function estadoMontaje(token, projectId, buildId, bucket, carpeta) {
+  const r = await fetch(
+    'https://cloudbuild.googleapis.com/v1/projects/' + projectId + '/builds/' + encodeURIComponent(buildId),
+    { headers: { Authorization: 'Bearer ' + token } },
+  );
+  if (!r.ok) {
+    return { estado: 'desconocido', error: 'No se pudo consultar el montaje: ' + r.status };
+  }
+  const d = await r.json();
+
+  // QUEUED y WORKING son "sigue en marcha"; el resto son finales.
+  const enMarcha = d.status === 'QUEUED' || d.status === 'WORKING' || d.status === 'PENDING';
+  if (enMarcha) {
+    return { estado: 'montando', fase: d.status === 'QUEUED' ? 'en cola' : 'montando' };
+  }
+
+  if (d.status === 'SUCCESS') return { estado: 'listo' };
+
+  // Cloud Build solo sabe decir FAILURE. El motivo real lo escribió el propio
+  // script en error.txt, que es lo único legible desde un teléfono.
+  let motivo = '';
+  if (bucket && carpeta) {
+    const nota = await gcsReadText(token, bucket, carpeta + '/error.txt');
+    if (nota && nota.texto && nota.texto.trim()) motivo = nota.texto.trim().slice(-700);
+  }
+  const porEstado = {
+    TIMEOUT: 'el montaje tardó más de 30 minutos y se canceló.',
+    CANCELLED: 'el montaje se canceló.',
+    EXPIRED: 'el montaje caducó en la cola.',
+    INTERNAL_ERROR: 'Cloud Build tuvo un error interno.',
+  };
+  return {
+    estado: 'fallo',
+    error: motivo || porEstado[d.status] || 'el montaje falló (' + d.status + ').',
+  };
+}
+
+function extension(ruta, porDefecto) {
+  const m = /(\.[a-z0-9]{2,4})$/i.exec(String(ruta || ''));
+  return m ? m[1].toLowerCase() : porDefecto;
+}
+
+module.exports = {
+  construirScript,
+  lanzarMontaje,
+  estadoMontaje,
+  FUNDIDO_ENTRADA,
+  FUNDIDO_SALIDA,
+  GANANCIA_MUSICA,
+  GANANCIA_AMBIENTE,
+};
