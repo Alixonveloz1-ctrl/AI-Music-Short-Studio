@@ -365,6 +365,49 @@ async function principal() {
     }
   });
 
+  await comprobarAsync('una llamada que no contesta se convierte en un error visible', async () => {
+    // EL FALLO, tal como lo vivió el usuario: media hora mirando «Generando…».
+    // La llamada a Vertex no tenía límite de espera, así que cuando el modelo
+    // tardaba más que la función de Vercel, la función MORÍA. No lanzaba una
+    // excepción: se apagaba. Nadie capturaba nada, no se apuntaba ningún error,
+    // y el activo se quedaba en «generando» para siempre mientras el latido lo
+    // reintentaba en bucle.
+    const original = globalThis.fetch;
+    // Un Google que acepta la conexión y no contesta jamás.
+    globalThis.fetch = (url, opciones) => new Promise((resolve, reject) => {
+      const señal = opciones && opciones.signal;
+      if (!señal) return; // sin señal no hay salida: eso es justamente el fallo
+      if (señal.aborted) return reject(Object.assign(new Error('abortada'), { name: 'AbortError' }));
+      señal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('abortada'), { name: 'AbortError' }));
+      });
+      void resolve;
+    });
+
+    try {
+      let error = null;
+      const empezo = Date.now();
+      try {
+        await vertex.generarMusica({
+          token: 't', projectId: 'p', prompt: 'instrumental piece',
+          segundos: 60, presupuestoMs: 300,
+        });
+      } catch (e) {
+        error = e;
+      }
+      const tardo = Date.now() - empezo;
+
+      cierto(error, 'una llamada que no contesta debería dar error, no colgarse');
+      cierto(/tardó más de/.test(error.message),
+        'el error no explica que fue una espera agotada: ' + error.message);
+      cierto(error.status === 504, 'el error no se marca como tiempo agotado: ' + error.status);
+      // Y se rinde cuando toca, no cuando lo mate el servidor.
+      cierto(tardo < 3000, 'tardó ' + tardo + ' ms en rendirse con un presupuesto de 300 ms');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   comprobar('ninguna URL de Vertex sale con undefined dentro', () => {
     // El fallo: los modelos de Veo llevan region:'' para heredar la del
     // proyecto, pero vertex.js llamaba a regionVideo() sin pasar el valor por

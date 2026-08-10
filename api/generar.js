@@ -55,7 +55,11 @@ const ESPERA_MAX_VIDEO_MS = 20 * 60 * 1000;
 
 // La música son N llamadas a Lyria de una en una, empujadas por el latido de la
 // interfaz. Si en veinte minutos no ha juntado sus fragmentos, no va a hacerlo.
-const ESPERA_MAX_MUSICA_MS = 20 * 60 * 1000;
+// La música es UNA llamada que tiene que caber en una función de 60 s. Si a
+// los cuatro minutos no ha salido, no es que vaya lenta: es que cada intento se
+// está muriendo. Veinte minutos era dejar al usuario media hora mirando una
+// ruedecita, que es exactamente lo que pasó.
+const ESPERA_MAX_MUSICA_MS = 4 * 60 * 1000;
 
 // Margen para una generación que consta como «generando» pero no ha llegado a
 // apuntar ningún trabajo. Lo normal es que el POST siga corriendo (una imagen
@@ -146,7 +150,7 @@ async function lanzar(res, id, activoId) {
         actualizado = await arrancarClip(proyecto, activo, gen);
         break;
       case 'music':
-        actualizado = await arrancarMusica(proyecto, activo, gen);
+        actualizado = await arrancarMusica(proyecto, activo, gen, inicio);
         break;
       case 'ambient':
         actualizado = await hacerAmbiente(proyecto, activo, gen, inicio);
@@ -209,7 +213,10 @@ function proveedorDe(proyecto, activo) {
     case 'clip':
       return { name: 'Veo', model: modeloVideoDe(proyecto).id };
     case 'music':
-      return { name: 'Lyria', model: cfg.musicModel };
+      // El modelo REAL, no el de la configuración: la ficha del activo decía
+      // «lyria-002» mientras la llamada iba a Lyria 3 Pro, y eso convertía la
+      // pantalla en una pista falsa a la hora de buscar el fallo.
+      return { name: 'Lyria', model: vertex.MODELO_MUSICA_PRO };
     case 'ambient':
       return { name: 'Síntesis local', model: 'audio.js' };
     default: {
@@ -483,7 +490,7 @@ function fotogramaFinalDe(proyecto, activo) {
  * pulsar, y el resto lo empuja el latido de la interfaz. Hacerlos todos no cabe
  * en 60 segundos ni de lejos.
  */
-async function arrancarMusica(proyecto, activo, gen) {
+async function arrancarMusica(proyecto, activo, gen, inicio) {
   const spec = activo.spec || {};
   const durationSec = Number(spec.durationSec || (proyecto.plan && proyecto.plan.music && proyecto.plan.music.durationSec) || 60);
   const fragmentos = vertex.fragmentosNecesarios(durationSec);
@@ -495,7 +502,7 @@ async function arrancarMusica(proyecto, activo, gen) {
     g.trabajo = { tipo: 'musica', fragmentos, hechos: [], durationSec, tropiezos: 0, desde: Date.now() };
   });
 
-  return hacerFragmento(registrado, activo.id, gen.id, 1);
+  return hacerFragmento(registrado, activo.id, gen.id, 1, inicio);
 }
 
 /** El trabajo apuntado en una generación, si lo tiene. */
@@ -504,7 +511,23 @@ function trabajoDe(gen) {
 }
 
 /** Genera el fragmento `indice`, lo guarda en el bucket y apunta el avance. */
-async function hacerFragmento(proyecto, activoId, genId, indice) {
+/**
+ * Lo que queda de los 60 segundos de la función, menos lo que hace falta
+ * después para subir el audio y guardar el proyecto.
+ *
+ * Se calcula en vez de fijarse porque la petición ya ha gastado tiempo antes de
+ * llegar aquí —leer el proyecto del bucket, escribir el registro de la
+ * generación— y ese tiempo hay que descontarlo o la función muere igualmente,
+ * que es justo lo que se quiere evitar.
+ */
+const RESERVA_PARA_GUARDAR_MS = 12000;
+
+function presupuestoRestante(inicio) {
+  const gastado = Date.now() - (inicio || Date.now());
+  return Math.max(8000, 58000 - gastado - RESERVA_PARA_GUARDAR_MS);
+}
+
+async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
   const activo = dominio.getAsset(proyecto, activoId);
   const gen = generacionDe(activo, genId);
   const { token, projectId } = await auth();
@@ -525,6 +548,7 @@ async function hacerFragmento(proyecto, activoId, genId, indice) {
       // prompt a partir de este número. Sin él, el modelo entrega treinta
       // segundos y el corto se queda sin música a los treinta segundos.
       segundos: (trabajoDe(gen) || {}).durationSec,
+      presupuestoMs: presupuestoRestante(inicio),
     });
   } catch (e) {
     throw prefijar(e, `No se pudo componer el fragmento ${indice}`);
@@ -778,7 +802,7 @@ async function empujarMusica(proyecto, activo, gen) {
 
   let actualizado;
   try {
-    actualizado = await hacerFragmento(proyecto, activo.id, gen.id, siguiente);
+    actualizado = await hacerFragmento(proyecto, activo.id, gen.id, siguiente, Date.now());
   } catch (e) {
     // Cada intento es una llamada facturada a Lyria, así que aquí sí se cuentan
     // los tropiezos: un prompt que el filtro rechaza fallaría igual mil veces.

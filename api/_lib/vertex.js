@@ -88,18 +88,53 @@ class ProveedorError extends Error {
   }
 }
 
-async function llamar(url, token, projectId, cuerpo) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'Content-Type': 'application/json',
-      // Sin esta cabecera, la cuota se carga contra el proyecto del modelo y no
-      // contra el del usuario; algunos modelos rechazan la llamada por eso.
-      'X-Goog-User-Project': projectId,
-    },
-    body: JSON.stringify(cuerpo),
-  });
+/**
+ * El tiempo máximo que se espera a Vertex antes de rendirse.
+ *
+ * ESTO NO ES UNA PRECAUCIÓN, ES UN FALLO QUE PASÓ. La llamada a Lyria no tenía
+ * límite, así que cuando el modelo tardaba más de lo que dura una función de
+ * Vercel, la función MORÍA. No lanzaba una excepción: se apagaba. Nadie
+ * capturaba nada, no se apuntaba ningún error, y el activo se quedaba en
+ * «generando» para siempre. El latido volvía a intentarlo, moría igual, y así
+ * media hora, con el usuario mirando una ruedecita que no significaba nada.
+ *
+ * Un límite propio, por debajo del de Vercel, convierte eso en un error escrito
+ * y visible: «tardó más de 45 s». Con eso el usuario sabe qué pasó y el contador
+ * de tropiezos puede pararlo en tres intentos en vez de en veinte minutos.
+ */
+const ESPERA_MAX_MS = 45000;
+
+async function llamar(url, token, projectId, cuerpo, opciones) {
+  const limite = (opciones && opciones.timeoutMs) || ESPERA_MAX_MS;
+  const corte = new AbortController();
+  const reloj = setTimeout(() => corte.abort(), limite);
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        // Sin esta cabecera, la cuota se carga contra el proyecto del modelo y no
+        // contra el del usuario; algunos modelos rechazan la llamada por eso.
+        'X-Goog-User-Project': projectId,
+      },
+      body: JSON.stringify(cuerpo),
+      signal: corte.signal,
+    });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      throw new ProveedorError(
+        'Google tardó más de ' + Math.round(limite / 1000) + ' s en responder y la función ' +
+        'de Vercel se corta a los 60. Vuelve a intentarlo: el tiempo de respuesta varía ' +
+        'mucho de una vez a otra.',
+        504,
+      );
+    }
+    throw new ProveedorError('No se pudo hablar con Vertex AI: ' + (e && e.message), 502);
+  } finally {
+    clearTimeout(reloj);
+  }
   const texto = await r.text();
   let d = {};
   try { d = JSON.parse(texto); } catch (e) { /* respuesta no-JSON */ }
@@ -611,6 +646,10 @@ async function generarMusica(opciones) {
     lineaDeTiempo(total) + '\n\n' +
     SOLO_INSTRUMENTAL;
 
+  // Componer tres minutos de música es lo más lento que hace esta herramienta
+  // dentro de una sola petición, así que se le da todo el margen que cabe: la
+  // función se corta a los 60 s y después de esto todavía hay que subir el
+  // audio al bucket y guardar el proyecto.
   const d = await llamar(
     vertexUrl(projectId, REGION_MUSICA, MODELO_MUSICA_PRO, 'generateContent'),
     token, projectId,
@@ -620,6 +659,7 @@ async function generarMusica(opciones) {
       // conteste «Request contains an invalid argument».
       generationConfig: { responseModalities: ['AUDIO', 'TEXT'] },
     },
+    { timeoutMs: Number(opciones.presupuestoMs) || 45000 },
   );
 
   const audio = juntarAudio(d);
