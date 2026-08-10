@@ -86,6 +86,53 @@ const MOOD_SETS = [
   ['tenso', 'misterioso', 'contenido'],
 ];
 
+/**
+ * La hora del día que el usuario dejó escrita, si la dejó.
+ *
+ * El fallo: escribió «azotea de noche, decorada con luces decorativas» y el
+ * planificador sorteó «media mañana con luz difusa» de su lista. A partir de ahí
+ * el prompt llevaba dos horas del día contradictorias y el modelo eligió la
+ * suya. Lo que el usuario escribe no compite con un sorteo: lo sustituye.
+ *
+ * Se buscan las palabras dentro de un texto ya normalizado (sin tildes y en
+ * minúsculas), y gana la que aparezca ANTES en el texto, no la primera de la
+ * lista: quien escribe «azotea de noche, mejor que al atardecer» quiere noche.
+ *
+ * No entiende negaciones: «no quiero amanecer, quiero noche» se queda con
+ * amanecer. Es un fallo aceptable —el prompt sigue llevando la frase entera del
+ * usuario por delante y con prioridad declarada— y lo contrario, ponerse a
+ * interpretar, se equivocaría más veces de las que acertaría.
+ */
+const HORAS_ESCRITAS = [
+  { palabras: ['de noche', 'nocturn', 'noche', 'madrugada'], luz: 'noche cerrada, con la luz cálida de las luces prácticas del propio escenario como única fuente' },
+  { palabras: ['atardecer', 'ocaso', 'puesta de sol', 'hora dorada', 'crepuscul'], luz: 'atardecer, hora dorada con el sol muy bajo y sombras largas' },
+  { palabras: ['amanecer', 'alba', 'aurora', 'salida del sol'], luz: 'amanecer temprano, luz baja y dorada' },
+  { palabras: ['mediodia', 'pleno dia', 'a plena luz'], luz: 'mediodía, luz alta y directa' },
+  { palabras: ['de dia', 'diurn', 'por la manana', 'de tarde', 'por la tarde'], luz: 'luz de día difusa y envolvente' },
+];
+
+function sinTildes(texto) {
+  return String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+}
+
+function horaEscritaPorElUsuario(...textos) {
+  const texto = textos.map(sinTildes).filter(Boolean).join(' . ');
+  if (!texto) return null;
+  let mejor = null;
+  for (const hora of HORAS_ESCRITAS) {
+    for (const palabra of hora.palabras) {
+      const donde = texto.indexOf(palabra);
+      if (donde !== -1 && (mejor === null || donde < mejor.donde)) {
+        mejor = { donde, luz: hora.luz };
+      }
+    }
+  }
+  return mejor && mejor.luz;
+}
+
 const TIMES_OF_DAY = [
   'amanecer temprano, luz baja y dorada',
   'media mañana con luz difusa',
@@ -94,44 +141,115 @@ const TIMES_OF_DAY = [
   'noche cerrada con luz práctica cálida',
 ];
 
-const HAIR_OPTIONS = [
-  'cabello largo y oscuro recogido en una coleta baja, con mechones sueltos junto al rostro',
-  'cabello corto y ondulado, castaño, peinado hacia un lado',
-  'cabello negro liso hasta los hombros, raya al medio',
-  'cabello recogido en un moño bajo, con un mechón cayendo sobre la sien izquierda',
-  'cabello rizado y voluminoso, castaño claro, a la altura de la mandíbula',
+// --- El reparto ------------------------------------------------------------
+//
+// Estos bancos son el ÚNICO origen del aspecto de una persona cuando no hay
+// clave de Claude, así que lo que no esté aquí no puede salir en la imagen.
+//
+// La versión anterior estaba escrita como una ficha policial —«ojos hundidos,
+// cejas pobladas, boca pequeña y firme»— y devolvía exactamente eso: gente
+// correcta y del montón. El corto es una pieza musical, no un atestado: los
+// intérpretes tienen que ser guapos. Cada descripción es de una persona
+// atractiva, y las cuatro se distinguen de un vistazo leyéndolas seguidas.
+//
+// El vocabulario es neutro a propósito, sin jerga de anime: el estilo de dibujo
+// lo pone la cabecera de estilo, y estas mismas líneas tienen que funcionar
+// igual en óleo, en acuarela o en imagen realista.
+
+const ROSTROS = {
+  femenino: [
+    'rostro ovalado y armónico, ojos grandes y expresivos de iris oscuro con brillo, pestañas largas, cejas finas de arco suave, nariz pequeña y recta, labios bien perfilados, piel limpia y luminosa',
+    'rostro en forma de corazón, ojos rasgados de mirada dulce color miel, pestañas espesas, cejas suaves y arqueadas, pómulos altos y delicados, boca pequeña, tez clara con rubor natural en las mejillas',
+    'rostro de óvalo alargado y elegante, ojos almendrados grandes de iris verde profundo y mirada serena, cejas rectas y finas, nariz estrecha, labios medios de comisuras suaves, tez cálida y uniforme',
+    'rostro redondeado y suave, ojos muy grandes y brillantes de iris castaño claro, pestañas largas, cejas cortas y delicadas, nariz pequeña respingona, boca menuda de sonrisa contenida, piel tersa',
+  ],
+  masculino: [
+    'rostro de facciones limpias y proporcionadas, ojos oscuros de mirada tranquila bajo cejas rectas, nariz recta, mandíbula definida sin dureza, piel limpia y luminosa',
+    'rostro anguloso y atractivo, pómulos marcados, ojos almendrados de iris gris claro, cejas bien dibujadas, nariz fina, labios de línea serena',
+    'rostro alargado y elegante, ojos grandes de iris castaño cálido y mirada amable, cejas suaves, nariz estrecha, boca de sonrisa apenas insinuada, piel uniforme',
+    'rostro de óvalo suave y juvenil, ojos vivos de iris oscuro con brillo, pestañas marcadas, cejas finas, nariz pequeña, facciones delicadas y armónicas',
+  ],
+};
+
+const PEINADOS = {
+  femenino: [
+    'melena larga y lisa de color negro azabache, con flequillo recto y dos mechones sueltos enmarcando el rostro',
+    'cabello castaño claro ondulado hasta los hombros, raya al lado y mucho volumen suave',
+    'cabello oscuro recogido en alto con un lazo, dejando caer dos mechones largos junto a las orejas',
+    'media melena rubio ceniza con las puntas hacia dentro y una horquilla fina sobre la sien izquierda',
+    'trenza gruesa recogida sobre un hombro, cabello castaño oscuro, con el nacimiento peinado hacia atrás',
+  ],
+  masculino: [
+    'cabello negro corto y algo revuelto, con el flequillo cayendo sobre la frente',
+    'cabello castaño de largo medio peinado hacia atrás, despejando la frente',
+    'cabello oscuro corto por los lados y más largo arriba, con una onda marcada',
+    'cabello rubio ceniza a la altura de la mandíbula, con raya al lado',
+    'cabello negro recogido en una coleta baja y corta, con mechones sueltos junto a las sienes',
+  ],
+};
+
+// El vestuario NO es lo que distingue a un intérprete de otro.
+//
+// Antes sí lo era: a cada músico se le asignaba un color distinto «por encima
+// de lo que diga la prenda». Eso rompía justo lo que hace que un dúo parezca un
+// dúo. En la referencia que dio el usuario las dos chicas van vestidas igual y
+// se distinguen por la cara y el peinado. Así que el conjunto es UNO para todo
+// el grupo, y lo que cambia de una persona a otra es un detalle pequeño.
+const CONJUNTOS = [
+  {
+    nombre: 'blanco y negro de concierto',
+    femenino: 'blusa blanca de hombros descubiertos, con mangas abullonadas semitransparentes y volantes, falda negra de talle alto y sandalias negras de tacón',
+    masculino: 'camisa blanca de cuello abierto con las mangas recogidas, pantalón negro de pinzas y zapatos negros',
+  },
+  {
+    nombre: 'negro largo de gala',
+    femenino: 'vestido negro largo de gasa, caída fluida, cintura marcada y hombros descubiertos',
+    masculino: 'camisa negra de seda mate y pantalón negro de línea recta',
+  },
+  {
+    nombre: 'crudo y arena',
+    femenino: 'vestido midi color crudo de tejido ligero, con cinturón fino y manga corta abullonada',
+    masculino: 'camisa color crudo de lino remangada y pantalón color arena de pinzas',
+  },
+  {
+    nombre: 'azul profundo',
+    femenino: 'blusa de seda azul noche de manga larga vaporosa, remetida en una falda midi plisada del mismo tono',
+    masculino: 'camisa azul noche de manga larga y pantalón oscuro de corte recto',
+  },
+  {
+    nombre: 'burdeos y negro',
+    femenino: 'top burdeos de tirantes finos bajo una chaqueta corta entallada negra, con falda negra midi',
+    masculino: 'jersey fino burdeos de cuello redondo sobre camisa clara, con pantalón negro',
+  },
 ];
 
-const FACE_OPTIONS = [
-  'rostro ovalado, cejas finas y rectas, ojos oscuros de mirada baja y concentrada, nariz recta, labios discretos',
-  'rostro anguloso, pómulos marcados, ojos almendrados de color avellana, mirada serena, mandíbula definida',
-  'rostro redondeado y suave, ojos grandes y oscuros, cejas ligeramente arqueadas, expresión tranquila',
-  'rostro alargado, ojos hundidos de mirada intensa, cejas pobladas, boca pequeña y firme',
-];
-
-const WARDROBE_OPTIONS = [
-  'túnica larga de lino color crudo con cinturón trenzado y mangas amplias',
-  'abrigo de lana gris oscuro sobre camisa clara, cuello alto',
-  'vestido sencillo de tejido fluido en tono tierra, sin estampado',
-  'chaqueta corta de terciopelo azul profundo sobre camisa blanca',
-  'jersey de punto grueso color arena y pantalón oscuro',
+// El detalle que diferencia a cada intérprete sin romper el conjunto.
+const DETALLES = [
+  'un lazo de raso en el pelo',
+  'unos pendientes largos y finos',
+  'un colgante delgado al cuello',
+  'una pulsera fina en la muñeca izquierda',
+  'una cinta estrecha atada en la muñeca derecha',
+  'una horquilla brillante sobre la sien',
 ];
 
 const BUILD_OPTIONS = [
-  'complexión delgada, hombros estrechos, postura erguida',
-  'complexión media, espalda ancha, postura relajada',
-  'complexión menuda, manos finas y expresivas',
+  'complexión esbelta y estilizada, hombros finos, postura erguida y elegante',
+  'complexión atlética y proporcionada, espalda recta, postura relajada',
+  'complexión menuda y grácil, manos finas y expresivas, cuello largo',
 ];
 
-// El color de la ropa es lo que más rápido distingue a dos músicos en un plano
-// general, así que a cada uno le toca uno distinto por encima de lo que diga la
-// prenda elegida.
-const COLOR_OPTIONS = [
-  'dominante azul profundo',
-  'dominante burdeos apagado',
-  'dominante verde musgo',
-  'dominante crudo y arena',
-];
+/**
+ * Qué banco le toca al intérprete número `n` según el tipo elegido.
+ *
+ * En un grupo mixto se van alternando, empezando por el femenino, para que un
+ * dúo mixto salga siempre una y uno y no dos del mismo.
+ */
+function bancoDe(performerType, n) {
+  const generos = (performerType && performerType.genderIds) || ['female'];
+  if (generos.indexOf('mixed') !== -1) return n % 2 === 0 ? 'femenino' : 'masculino';
+  return generos.indexOf('male') !== -1 ? 'masculino' : 'femenino';
+}
 
 /**
  * Reparte `cuantos` elementos de `lista` SIN repetir mientras alcancen.
@@ -171,7 +289,12 @@ function buildHeuristicBrief(input) {
 
   const placeName = config.scenarioCustom?.trim() || scenario?.label || 'el escenario';
   const mood = pickFrom(rng, MOOD_SETS);
-  const timeOfDay = pickFrom(rng, TIMES_OF_DAY);
+  // Si el usuario escribió la hora, esa es la hora. El sorteo es sólo para
+  // cuando no dijo nada.
+  const timeOfDay =
+    horaEscritaPorElUsuario(config.scenarioCustom, config.creativeDirection) ||
+    pickFrom(rng, TIMES_OF_DAY);
+  const esDeNoche = /noche|crepusculo|crepúsculo/i.test(timeOfDay);
   const palette = style?.palette ?? ['ámbar', 'azul profundo', 'crema'];
 
   const titlePattern = pickFrom(rng, TITLE_PATTERNS);
@@ -187,31 +310,50 @@ function buildHeuristicBrief(input) {
     390,
   );
 
-  // ─── El reparto: una descripción distinta por músico ───
+  // ─── El reparto: una persona distinta por músico ───
   //
-  // El brief tenía UNA descripción de personaje y los dos retratos maestros
-  // salían de ella, así que el modelo dibujaba dos veces a la misma chica. Aquí
-  // se reparte un rostro, un peinado, una prenda y un color a cada intérprete.
+  // Dos cosas a la vez, y las dos vienen de fallos reales:
+  //
+  //  - Antes había UNA descripción de personaje para todo el proyecto y los dos
+  //    retratos maestros salían de ella, así que el modelo dibujaba dos veces a
+  //    la misma chica. Ahora se reparte un rostro y un peinado a cada uno, sin
+  //    repetir mientras alcancen las opciones.
+  //
+  //  - Y antes se les daba además un COLOR DE ROPA distinto a cada uno, que es
+  //    lo que hacía que un dúo no pareciese un dúo. El conjunto es ahora uno
+  //    solo para todo el grupo —como en la referencia que dio el usuario, las
+  //    dos vestidas igual— y lo que cambia de una persona a otra es un detalle.
   const cuantosMusicos = Math.max(1, Number(formation && formation.performerCount) || 1);
-  const caras = repartirSinRepetir(rng, FACE_OPTIONS, cuantosMusicos);
-  const pelos = repartirSinRepetir(rng, HAIR_OPTIONS, cuantosMusicos);
-  const ropas = repartirSinRepetir(rng, WARDROBE_OPTIONS, cuantosMusicos);
-  const colores = repartirSinRepetir(rng, COLOR_OPTIONS, cuantosMusicos);
+  const conjunto = pickFrom(rng, CONJUNTOS);
+  const detalles = repartirSinRepetir(rng, DETALLES, cuantosMusicos);
   const cuerpos = repartirSinRepetir(rng, BUILD_OPTIONS, cuantosMusicos);
   const edad = performerType?.id.startsWith('young') ? 'entre 18 y 24 años' : 'entre 28 y 38 años';
+
+  // Los rostros y los peinados se reparten por banco, porque en un grupo mixto
+  // los hombres tiran de una lista y las mujeres de otra.
+  const yaGastados = { femenino: [], masculino: [] };
+  const tomarDe = (mapa, banco) => {
+    const lista = mapa[banco];
+    const libres = lista.filter((x) => yaGastados[banco].indexOf(x) === -1);
+    const elegido = pickFrom(rng, libres.length ? libres : lista);
+    yaGastados[banco].push(elegido);
+    return elegido;
+  };
 
   const cast = [];
   for (let n = 0; n < cuantosMusicos; n += 1) {
     const suyo = instruments.length ? instruments[n % instruments.length] : null;
+    const banco = bancoDe(performerType, n);
     cast.push({
       instrument: suyo ? suyo.name : '',
       summary: truncate(
-        `${suyo ? 'toca ' + suyo.name + ', ' : ''}con la atención puesta en la interpretación, presencia tranquila y contenida, sin gestos teatrales.`,
+        `${suyo ? 'toca ' + suyo.name + ', ' : ''}de presencia serena y elegante, con la atención puesta en la interpretación y sin gestos teatrales.`,
         380,
       ),
-      face: truncate(caras[n], 290),
-      hair: truncate(pelos[n], 190),
-      wardrobe: truncate(`${ropas[n]}, ${colores[n]}`, 290),
+      face: truncate(tomarDe(ROSTROS, banco), 290),
+      hair: truncate(tomarDe(PEINADOS, banco), 190),
+      // El conjunto es el mismo para todos; el detalle es suyo.
+      wardrobe: truncate(`${conjunto[banco]}, con ${detalles[n]}`, 290),
       build: truncate(cuerpos[n], 190),
       apparentAge: edad,
       accessories: suyo ? [`funda del ${suyo.name}`] : [],
@@ -251,26 +393,43 @@ function buildHeuristicBrief(input) {
           `${scenario?.label ?? 'Escenario'} — ${scenario?.elements.join(', ') ?? 'entorno abierto'}`,
         290,
       ),
-      primaryElements: (scenario?.elements.length
-        ? scenario.elements
-        : ['fondo despejado', 'suelo visible']
-      ).slice(0, 6),
-      secondaryElements: ['partículas de polvo suspendidas en la luz', 'sombras largas en el suelo'],
+      // Lo que escribió el usuario va PRIMERO y como elemento obligatorio.
+      // Pidió «decorada con luces decorativas» y ese detalle no llegaba a
+      // ninguna lista: el prompt sólo enumeraba «skyline, grava, antenas» del
+      // catálogo, así que la azotea salía pelada.
+      primaryElements: [
+        ...(config.scenarioCustom?.trim() ? [config.scenarioCustom.trim()] : []),
+        ...(scenario?.elements.length ? scenario.elements : ['fondo despejado', 'suelo visible']),
+      ].slice(0, 6),
+      // De noche no hay sombras largas: no hay sol que las haga. Y el suelo,
+      // sobre todo si está mojado, es lo que devuelve las luces al cuadro.
+      secondaryElements: esDeNoche
+        ? ['reflejos de las luces en el suelo', 'polvo y partículas visibles dentro de los halos de luz']
+        : ['partículas de polvo suspendidas en la luz', 'sombras largas en el suelo'],
       atmosphere: truncate(
         `${scenario?.outdoor ? 'Aire en movimiento muy leve' : 'Aire quieto'}, ${mood[0] ?? 'sereno'}, con la música como único acontecimiento.`,
         290,
       ),
     },
     lighting: {
+      // De noche no hay «luz principal lateral y baja»: no hay sol. La luz sale
+      // de las lámparas que se ven dentro del propio cuadro, y eso cambia por
+      // completo el aspecto de la imagen.
       direction: truncate(
-        scenario?.outdoor
-          ? 'luz principal lateral y baja, entrando desde la izquierda del encuadre'
-          : 'luz principal cenital suave con relleno lateral desde la derecha',
+        esDeNoche
+          ? 'sin luz de sol: iluminan sólo las lámparas y luces que se ven dentro del propio encuadre, cálidas y a la altura de las personas, con contraluz suave en el pelo y en los hombros'
+          : scenario?.outdoor
+            ? 'luz principal lateral y baja, entrando desde la izquierda del encuadre'
+            : 'luz principal cenital suave con relleno lateral desde la derecha',
         190,
       ),
-      intensity: 'contraste medio-alto, altas luces controladas y sombras con detalle',
+      intensity: esDeNoche
+        ? 'contraste alto entre el azul frío de la noche y el ámbar cálido de las luces, con las sombras abiertas y con detalle'
+        : 'contraste medio-alto, altas luces controladas y sombras con detalle',
       atmosphere: truncate(
-        `niebla muy leve que hace visibles los haces de luz; dominante ${palette[0] ?? 'cálida'}`,
+        esDeNoche
+          ? 'cada luz con su halo cálido y su reflejo en el suelo; el fondo lejano convertido en puntos de luz desenfocados'
+          : `niebla muy leve que hace visibles los haces de luz; dominante ${palette[0] ?? 'cálida'}`,
         190,
       ),
     },
@@ -471,7 +630,9 @@ Preparas la capa creativa de un cortometraje musical instrumental, sin voz, sin 
 Reglas que no puedes romper:
 - Respeta estrictamente la configuración elegida por el usuario. No cambies el instrumento, la formación, el tipo de intérprete, el escenario, el estilo visual ni la duración.
 - No introduzcas cantantes, voces, letras, texto en pantalla ni carteles.
-- La continuidad es lo más importante: describe al personaje, el instrumento y el escenario con detalles concretos y repetibles, de modo que todas las tomas parezcan la misma película. Evita adjetivos vagos ("bonito", "épico") y prefiere hechos visuales ("cejas rectas", "barniz mate con una marca junto al puente").
+- La continuidad es lo más importante: describe al personaje, el instrumento y el escenario con detalles concretos y repetibles, de modo que todas las tomas parezcan la misma película. Prefiere hechos visuales ("cejas rectas", "barniz mate con una marca junto al puente") a adjetivos vacíos ("épico", "impresionante").
+- LOS INTÉRPRETES TIENEN QUE SER GUAPOS. Es un cortometraje musical, no un documental: descríbelos como personas atractivas y con encanto, de rasgos armónicos y expresión serena, y hazlo con hechos visuales concretos ("ojos grandes de mirada dulce, pestañas largas, piel luminosa"), no con la palabra "guapo". No los describas nunca como corrientes, cansados ni desaliñados, y nada de descripciones sexualizadas: son músicos en escena, elegantes y vestidos.
+- Si hay varios intérpretes, cada uno tiene SU rostro y SU peinado, claramente distintos entre sí. El vestuario, en cambio, es común a todo el grupo: van conjuntados, y se distinguen por la cara y el pelo, no por llevar colores distintos.
 - Escribe una entrada por cada toma de la lista que se te da, en el mismo orden y con el mismo índice, adaptando la descripción al tipo de plano y al momento del corto indicados.
 
 - LA MITAD DEL CORTO SE MONTA CON MATERIAL REPETIDO, y las tomas marcadas como REPETIBLE son las que van a volver dos o tres veces en momentos distintos de la pieza. Esas tomas tienes que escribirlas para que aguanten volver:

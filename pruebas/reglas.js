@@ -490,6 +490,72 @@ async function principal() {
     cierto(!/REPARTO/.test(arte.buildScenePrompt(solo.biblia, solo.config)), 'un solista no necesita reparto');
   });
 
+  comprobar('los intérpretes tienen que salir guapos', () => {
+    // Petición literal del usuario: «los personajes que genere la herramienta
+    // siempre tienen que ser hermosos». Nada en el prompt lo pedía: una cara
+    // correcta y del montón puntuaba como éxito perfecto.
+    const { config, biblia } = bibliaDe({});
+    const p = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín');
+    cierto(/GUAPA/.test(p), 'no se pide que la persona sea guapa');
+    cierto(/CALIDAD \(mismo rango que el estilo\)/.test(p), 'no se fija el listón de calidad');
+    cierto(/rostro anodino/.test(p), 'no se prohíbe la cara del montón');
+    cierto(/sexualizad/.test(p), 'no se pone el límite de que no sea sexualizado');
+    // Y el listón va arriba, con el estilo, no perdido al final.
+    cierto(p.indexOf('CALIDAD') < p.indexOf('Persona:'), 'el listón va después de la descripción');
+    // También en el negativo, que es donde el modelo mira lo que debe evitar.
+    cierto(/rostro anodino/.test(biblia.negativePrompt), 'el negativo no excluye lo anodino');
+  });
+
+  comprobar('un dúo va conjuntado, no de colores distintos', () => {
+    // La referencia que mandó el usuario son dos chicas vestidas igual que se
+    // distinguen por la cara y el peinado. La regla anterior pedía «otro color
+    // de ropa» y deshacía el grupo.
+    const { config, biblia } = bibliaDe({ formationId: 'duo', instrumentIds: ['violin', 'cello'] });
+    const p = arte.buildCharacterPrompt(biblia, config, 2, 2, 'Violonchelo');
+    cierto(!/otro color de ropa/i.test(p), 'sigue pidiendo otro color de ropa');
+    cierto(/OTRO ROSTRO y OTRO PEINADO/.test(p), 'no distingue por cara y peinado');
+    cierto(/VESTUARIO, en cambio, es el mismo/.test(p), 'no pide vestuario común');
+    cierto(!/los otros 1 intérpretes/.test(p), 'el plural está mal escrito');
+    // El conjunto es común de verdad, no sólo de palabra.
+    const base = (v) => v.split(', con ')[0];
+    igual(base(biblia.cast[0].wardrobe), base(biblia.cast[1].wardrobe), 'no visten el mismo conjunto');
+    cierto(biblia.cast[0].wardrobe !== biblia.cast[1].wardrobe, 'no se distinguen ni por el detalle');
+  });
+
+  comprobar('el retrato de uno no describe el instrumento del otro', () => {
+    const { config, biblia } = bibliaDe({ formationId: 'duo', instrumentIds: ['violin', 'cello'] });
+    const p = arte.buildCharacterPrompt(biblia, config, 2, 2, 'Violonchelo');
+    const bloque = p.split('\n\n').filter((b) => b.indexOf('Instrumento:\n') === 0).join('');
+    cierto(bloque.length > 0, 'no hay bloque de instrumento');
+    cierto(!/Violín/.test(bloque), 'al retrato del chelo se le cuela el violín');
+  });
+
+  comprobar('si el usuario escribe «de noche», es de noche', () => {
+    // Escribió «azotea de noche» y el planificador sorteaba la hora del día de
+    // su lista: el prompt acababa con dos horas contradictorias.
+    const { biblia } = bibliaDe({
+      scenarioId: 'rooftop',
+      scenarioCustom: 'azotea de noche, decorada con luces decorativas',
+    });
+    cierto(/noche/.test(biblia.lighting.timeOfDay), 'la hora del día no es de noche');
+    cierto(!/sol/.test(biblia.lighting.direction) || /sin luz de sol/.test(biblia.lighting.direction),
+      'de noche sigue habiendo sol iluminando');
+    cierto(!biblia.environment.secondaryElements.some((e) => /sombras largas/.test(e)),
+      'de noche no puede haber sombras largas de sol');
+    // Y lo que escribió encabeza los elementos, por delante del catálogo.
+    igual(biblia.environment.primaryElements[0], 'azotea de noche, decorada con luces decorativas',
+      'su texto no va el primero de los elementos');
+  });
+
+  comprobar('el estilo anime dice cómo se dibuja una CARA, no sólo el fondo', () => {
+    // Por esto el escenario salía en anime y las personas realistas: el estilo
+    // sólo hablaba de «fondos pintados con detalle».
+    const { config, biblia } = bibliaDe({ visualStyleId: 'anime_cinematic' });
+    const cabecera = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín').split('\n\n')[0];
+    cierto(/PERSONAS dibujadas en anime/.test(cabecera), 'el estilo no habla de cómo se dibuja a la gente');
+    cierto(/ojos grandes/.test(cabecera), 'el estilo no describe el rostro de anime');
+  });
+
   comprobar('a cada referencia se le dice PARA QUÉ es', () => {
     // El fallo que hacía que los dos intérpretes fueran la misma chica: todas
     // las referencias llevaban «copia esta identidad», incluida la del OTRO

@@ -80,6 +80,18 @@ const BASE_NEGATIVE = [
   'collage',
   'doble exposición no intencionada',
   'baja resolución',
+  // Lo de arriba son DEFECTOS. Lo de abajo es MEDIOCRIDAD, que hasta ahora no
+  // contaba como fallo: una cara correcta, sana y del montón puntuaba como
+  // éxito perfecto. Para este producto no lo es.
+  'rostro anodino',
+  'cara de foto de carné',
+  'persona corriente o del montón',
+  'aspecto desaliñado',
+  'gesto cansado o de mal humor',
+  'ojos apagados y sin brillo',
+  'dibujo tosco o de aficionado',
+  'proporciones torpes',
+  'acabado sucio o descuidado',
 ];
 
 function buildVisualBible(config, brief) {
@@ -130,7 +142,10 @@ function buildVisualBible(config, brief) {
     },
     environment: {
       location,
-      primaryElements: dedupe([...(scenario?.elements ?? []), ...brief.environment.primaryElements]),
+      // El brief va PRIMERO porque es donde entra, encabezándolo, lo que
+      // escribió el usuario. Al revés, su «decorada con luces decorativas»
+      // quedaba el último de la lista, detrás de «skyline, grava, antenas».
+      primaryElements: dedupe([...brief.environment.primaryElements, ...(scenario?.elements ?? [])]),
       secondaryElements: brief.environment.secondaryElements,
       atmosphere: brief.environment.atmosphere,
     },
@@ -215,6 +230,16 @@ const CONTINUITY_HEADER =
 // PRIMERO, en mayúsculas, declarado innegociable y con la lista de lo que
 // queda prohibido. Un modelo de imagen obedece mucho mejor una prohibición
 // concreta («nada de fotografía») que una descripción positiva.
+//
+// Y la segunda mitad del mismo problema: la prohibición sólo hablaba del MEDIO
+// —«no me hagas una foto»— y nunca del NIVEL. El modelo obedecía y devolvía un
+// dibujo cualquiera, con la cara que le saliera por defecto. Por eso ahora
+// también está prohibido lo mediocre, en la misma línea y con el mismo tono.
+const PROHIBIDO_MEDIOCRE =
+  'rostro anodino o de foto de carné, personas corrientes o desaliñadas, ' +
+  'gesto cansado o de mal humor, dibujo tosco o de aficionado, ' +
+  'proporciones torpes, ojos apagados y sin brillo, acabado sucio o descuidado';
+
 const PROHIBIDO_POR_ESTILO = {
   // Los estilos dibujados comparten enemigo: que se cuele la fotografía.
   dibujado: 'fotografía, fotorrealismo, render 3D, CGI, imagen de acción real, ' +
@@ -223,6 +248,48 @@ const PROHIBIDO_POR_ESTILO = {
   real: 'anime, manga, dibujo animado, ilustración, cel-shading, línea de tinta, ' +
     'aspecto de cómic o de caricatura',
 };
+
+/**
+ * EL LISTÓN. Va en la cabecera, junto al estilo y con el mismo rango.
+ *
+ * Decir de qué medio es la imagen no dice de qué calidad es. Sin esta línea el
+ * modelo entiende «esto es un dibujo» y entrega el dibujo del montón.
+ */
+const LISTON_POR_FAMILIA = {
+  dibujado:
+    'ILUSTRACIÓN DE GAMA ALTA, del nivel de una portada o de una lámina promocional: ' +
+    'línea limpia y fina, sombreado suave con degradados pintados, piel luminosa y sin ' +
+    'textura fotográfica, ojos dibujados con detalle —iris con matices y brillos, pestañas ' +
+    'marcadas—, resplandor suave en cada fuente de luz, fondo con desenfoque y máximo nivel ' +
+    'de detalle en el primer término',
+  real:
+    'IMAGEN DE GAMA ALTA, del nivel de una portada: enfoque nítido en el rostro y en las manos, ' +
+    'piel bien iluminada, ojos con brillo y detalle, desenfoque limpio en el fondo y máximo ' +
+    'nivel de detalle en el primer término',
+};
+
+/**
+ * LA BELLEZA, que no depende del estilo.
+ *
+ * El usuario lo pidió con todas las letras: «los personajes que genere la
+ * herramienta siempre tienen que ser hermosos». No era un requisito de un
+ * proyecto suyo, era del producto, así que vive aquí y entra en todos los
+ * prompts donde aparezca una persona.
+ *
+ * Está escrito sin una sola palabra de anime a propósito: la belleza es
+ * transversal y el estilo de dibujo ya lo pone la cabecera, así que estas
+ * mismas líneas tienen que servir igual en óleo, en acuarela o en realista.
+ */
+const EXIGENCIA_DE_BELLEZA = [
+  'La persona tiene que ser GUAPA y con encanto: rasgos armónicos y bien proporcionados, ' +
+    'expresión serena y agradable, piel luminosa y cuidada',
+  'Ojos expresivos y con vida, de mirada limpia; pestañas y cejas bien dibujadas',
+  'Postura elegante y natural, propia de quien sabe estar en escena',
+  'Vestuario impecable y bien puesto: nada arrugado, sucio ni descolocado',
+  'Nada de aspecto corriente, cansado ni desaliñado: esta imagen tiene que ser bonita de ver',
+  'Sigue siendo una persona real y creíble: guapa, no artificial ni de muñeco',
+  'Es una intérprete de música en escena, vestida y elegante: nada de poses ni de encuadres sexualizados',
+];
 
 /** Qué familia es cada estilo, para saber contra qué hay que protegerlo. */
 const FAMILIA_DE_ESTILO = {
@@ -252,17 +319,21 @@ const FAMILIA_DE_ESTILO = {
 function cabeceraDeEstilo(bible, config) {
   const familia = FAMILIA_DE_ESTILO[config.visualStyleId] || '';
   const prohibido = PROHIBIDO_POR_ESTILO[familia] || '';
+  const liston = LISTON_POR_FAMILIA[familia] || LISTON_POR_FAMILIA.dibujado;
   const partes = [
     'ESTILO VISUAL (INNEGOCIABLE, se aplica a TODA la imagen y a cada persona ' +
       'que aparezca en ella): ' + bible.aesthetic.treatment + '. ' +
       bible.aesthetic.photography + '. ' + bible.aesthetic.finish + '.',
+    'CALIDAD (mismo rango que el estilo): ' + liston + '.',
   ];
   if (config.visualStyleCustom && String(config.visualStyleCustom).trim()) {
     partes.push('Indicación del usuario sobre el estilo: ' + String(config.visualStyleCustom).trim() + '.');
   }
-  if (prohibido) {
-    partes.push('TERMINANTEMENTE PROHIBIDO: ' + prohibido + '.');
-  }
+  partes.push(
+    'TERMINANTEMENTE PROHIBIDO: ' +
+      (prohibido ? prohibido + ', ' : '') +
+      PROHIBIDO_MEDIOCRE + '.',
+  );
   return partes.join(' ');
 }
 
@@ -329,6 +400,22 @@ function bloqueReparto(bible) {
   );
 }
 
+/**
+ * De un texto que describe VARIOS instrumentos, deja sólo el del intérprete.
+ *
+ * La biblia guarda la apariencia y la posición de todos los instrumentos del
+ * proyecto en una sola cadena, con el formato «Violín: … ; Violonchelo: …».
+ * Para un retrato individual hay que quedarse con su trozo. Si no se reconoce
+ * el formato se devuelve el texto entero: peor, pero nunca vacío.
+ */
+function soloSuInstrumento(texto, nombre) {
+  const entero = String(texto || '');
+  if (!nombre) return entero;
+  const trozos = entero.split(/(?:\. |; )/);
+  const suyos = trozos.filter((t) => t.trim().toLowerCase().startsWith(nombre.toLowerCase() + ':'));
+  return suyos.length ? suyos.join('. ') : entero;
+}
+
 function buildCharacterPrompt(bible, config, indice, total, instrumento) {
   const n = indice || 1;
   const cuantos = total || 1;
@@ -357,8 +444,11 @@ function buildCharacterPrompt(bible, config, indice, total, instrumento) {
     ]),
     block('Instrumento', [
       `Instrumento: ${suyo}`,
-      `Apariencia: ${bible.instrument.appearance}`,
-      `Posición: ${bible.instrument.positioning}`,
+      // En un retrato individual sólo cabe SU instrumento. Antes se volcaba la
+      // descripción de todos los del proyecto, así que al retrato del chelo se
+      // le colaba la ficha del violín y a veces salía el instrumento cambiado.
+      `Apariencia: ${soloSuInstrumento(bible.instrument.appearance, suyo)}`,
+      `Posición: ${soloSuInstrumento(bible.instrument.positioning, suyo)}`,
       `Escala: ${bible.instrument.scale}`,
     ]),
     block('Acabado', [bible.aesthetic.finish]),
@@ -366,12 +456,23 @@ function buildCharacterPrompt(bible, config, indice, total, instrumento) {
       'UNA SOLA PERSONA: no debe aparecer nadie más en el encuadre',
       'UN SOLO INSTRUMENTO: el suyo, y ninguno más',
       // Sin esto salen clones: el modelo recibe la misma descripción para los
-      // dos intérpretes y devuelve dos veces la misma cara.
+      // dos intérpretes y devuelve dos veces la misma cara. Pero la diferencia
+      // va en la CARA y el PELO, no en la ropa: la versión anterior pedía «otro
+      // color de ropa» y eso deshacía el grupo. Un dúo va conjuntado.
       enGrupo
-        ? 'Esta persona tiene que ser CLARAMENTE DISTINTA de los otros ' +
-          (cuantos - 1) + ' intérpretes del grupo: otro rostro, otro peinado y ' +
-          'otro color de ropa, dentro de la misma gama y del mismo estilo'
+        ? 'Esta persona tiene que ser CLARAMENTE DISTINTA ' +
+          (cuantos === 2
+            ? 'del otro intérprete del grupo'
+            : 'de los otros ' + (cuantos - 1) + ' intérpretes del grupo') +
+          ': OTRO ROSTRO y OTRO PEINADO, que se reconozcan a simple vista como ' +
+          'personas diferentes'
         : null,
+      enGrupo
+        ? 'El VESTUARIO, en cambio, es el mismo para todo el grupo: van ' +
+          'conjuntados, como un dúo o un ensamble que sale a tocar junto. Sólo ' +
+          'cambia el pequeño detalle que lleva esta persona'
+        : null,
+      ...EXIGENCIA_DE_BELLEZA,
       'Manos completas y correctas, cinco dedos por mano',
       'El instrumento debe estar completo y bien construido',
       'Sin texto ni marcas de agua',
@@ -438,10 +539,14 @@ function buildScenePrompt(bible, config) {
     block('Requisitos', [
       'El personaje debe ser exactamente el de la referencia de personaje aprobada',
       'El escenario debe ser exactamente el de la referencia de escenario aprobada',
+      ...EXIGENCIA_DE_BELLEZA,
       'Esta imagen será la referencia oficial de la escena para todas las tomas',
     ]),
   ]);
 }
+
+/** Planos donde no aparece ninguna cara, asi que no hay belleza que exigir. */
+const SIN_PERSONAS = ['instrument_detail', 'detail'];
 
 /** Imagen fija de cada toma, compuesta con la biblia más la intención de la toma. */
 function buildShotImagePrompt(bible, shot, config) {
@@ -457,6 +562,9 @@ function buildShotImagePrompt(bible, shot, config) {
       `Movimiento previsto en el vídeo: ${CAMERA_MOVE_LABELS[shot.cameraMove]}`,
     ]),
     bloqueReparto(bible),
+    // Un plano detalle del instrumento o del entorno no lleva a nadie dentro:
+    // pedirle belleza de rostro ahi solo confunde al modelo.
+    SIN_PERSONAS.indexOf(shot.shotType) === -1 ? block('La persona', EXIGENCIA_DE_BELLEZA) : null,
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);
