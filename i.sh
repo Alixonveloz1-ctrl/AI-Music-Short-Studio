@@ -16,9 +16,15 @@
 #  Este proyecto NO despliega ningun contenedor: el MP4 final lo
 #  monta Cloud Build directamente (ver api/_lib/montaje.js). Asi
 #  que aqui no se construye ni se sube nada. Este script solo
-#  DEJA LA CUENTA LISTA: enciende APIs, prepara el bucket, crea
-#  la cuenta de servicio con sus permisos y te entrega las tres
-#  variables que hay que pegar en Vercel.
+#  DEJA LA CUENTA LISTA: enciende las APIs que falten, se apoya
+#  en el bucket y la cuenta de servicio QUE YA TENGAS, les anade
+#  los permisos que falten y te entrega las variables.
+#
+#  NO CREA NADA QUE YA EXISTA. Esta herramienta convive con otros
+#  proyectos en la misma cuenta de Google, y llenar IAM de cuentas
+#  de servicio y buckets parecidos es la forma mas rapida de no
+#  saber luego cual usa cada cosa. Solo propone crear algo cuando
+#  de verdad no hay nada que reutilizar, y siempre preguntando.
 #
 #  Es IDEMPOTENTE: volver a ejecutarlo no duplica ni rompe nada.
 # =============================================================
@@ -107,10 +113,14 @@ titulo "AI MUSIC SHORT STUDIO — INSTALADOR"
 cat <<'FIN'
 
   Deja tu cuenta de Google Cloud lista para la
-  herramienta. NO despliega ningun servidor:
-  el montaje del MP4 lo hace Cloud Build solo.
+  herramienta. NO despliega ningun servidor: el
+  montaje del MP4 lo hace Cloud Build solo.
 
-  Al final te da TRES datos para pegar en Vercel.
+  Reutiliza el bucket y la cuenta de servicio que
+  ya tengas. Solo propone crear algo si no hay
+  nada, y preguntando antes.
+
+  Al final te dice que poner en Vercel.
   Tarda entre 1 y 3 minutos.
 
 FIN
@@ -172,8 +182,9 @@ echo "  Cuenta:   $CUENTA"
 echo "  Proyecto: $PROYECTO"
 echo "  Region:   $REGION"
 echo ""
-echo "  Voy a modificar ESE proyecto: encender APIs,"
-echo "  crear una cuenta de servicio y darle permisos."
+echo "  Voy a tocar ESE proyecto: encender las APIs"
+echo "  que falten y anadir permisos. Lo que ya"
+echo "  tengas se reutiliza; no se duplica nada."
 echo ""
 
 if ! confirmar "  Es el proyecto correcto?"; then
@@ -323,20 +334,107 @@ fi
 # =============================================================
 # PASO 4 — LA CUENTA DE SERVICIO
 #
-# Es la identidad con la que Vercel habla con Google. Se llama
-# siempre igual, asi que si ya existe se reutiliza y no se
-# duplica al volver a ejecutar el instalador.
+# Es la identidad con la que Vercel habla con Google.
+#
+# NO SE CREA UNA NUEVA SI YA HAY ALGUNA. Este proyecto convive
+# con otros en la misma cuenta, y llenar IAM de cuentas de
+# servicio parecidas es la forma mas rapida de no saber luego
+# cual usa cada cosa. Se listan las que hay y se reutiliza.
 # =============================================================
 titulo "PASO 4 de 8 — CUENTA DE SERVICIO"
 
-SA_EMAIL="${SA_ID}@${PROYECTO}.iam.gserviceaccount.com"
+SA_EMAIL="${SA_EMAIL:-}"
+
+if [ -z "$SA_EMAIL" ]; then
+  # Fuera las que gestiona Google sola (Compute, App Engine, los
+  # agentes de servicio): no son de nadie y no sirven aqui.
+  CUENTAS="$(gcloud iam service-accounts list --project="$PROYECTO" \
+    --format='value(email)' 2>/dev/null \
+    | grep -v '^$' \
+    | grep -v -- '-compute@' \
+    | grep -v '@appspot' \
+    | grep -v '^service-')"
+
+  CUANTAS=0
+  [ -n "$CUENTAS" ] && CUANTAS="$(echo "$CUENTAS" | wc -l | tr -d ' ')"
+
+  if [ "$CUANTAS" = "0" ]; then
+    echo ""
+    echo "  Este proyecto no tiene ninguna cuenta de"
+    echo "  servicio propia todavia."
+    SA_EMAIL="${SA_ID}@${PROYECTO}.iam.gserviceaccount.com"
+    echo "  Propongo crear:  $SA_ID"
+    echo ""
+    if ! confirmar "  La creo?"; then
+      morir "Sin cuenta de servicio no hay nada que hacer." \
+        "Vuelve a lanzarlo y acepta, o pasa una que ya
+       tengas:  SA_EMAIL=la-tuya@... bash i.sh"
+    fi
+
+  elif [ "$CUANTAS" = "1" ]; then
+    SA_EMAIL="$CUENTAS"
+    echo ""
+    echo "  Vas a usar la cuenta que ya tienes:"
+    echo "    $SA_EMAIL"
+    echo ""
+    if ! confirmar "  Correcto?"; then
+      pregunta "  Escribe el correo de la que quieras usar: "
+      SA_EMAIL="$RESP"
+    fi
+
+  else
+    echo ""
+    echo "  Elige la cuenta de servicio a usar."
+    echo "  Si esta herramienta va a compartir cuenta"
+    echo "  con otro proyecto tuyo, elige la MISMA:"
+    echo "  asi el JSON que ya tienes en Vercel sirve"
+    echo "  igual y no hay que tocar esa variable."
+    echo ""
+    i=0
+    while IFS= read -r c; do
+      i=$((i + 1))
+      echo "    $i) $c"
+    done <<< "$CUENTAS"
+    echo "    0) crear una nueva ($SA_ID)"
+    echo ""
+    pregunta "  Escribe el numero: "
+    if [ "$RESP" = "0" ]; then
+      SA_EMAIL="${SA_ID}@${PROYECTO}.iam.gserviceaccount.com"
+    else
+      SA_EMAIL="$(echo "$CUENTAS" | sed -n "${RESP}p" 2>/dev/null)"
+    fi
+  fi
+fi
+
+[ -z "$SA_EMAIL" ] && morir \
+  "Me he quedado sin cuenta de servicio." \
+  "Vuelve a lanzarlo, o pasala ya hecha:
+       SA_EMAIL=la-tuya@proyecto.iam.gserviceaccount.com bash i.sh"
+
+# Que tenga forma de correo de cuenta de servicio ANTES de seguir.
+# Sin esto, una respuesta suelta a la pregunta de arriba —una "n", un
+# numero, un dedazo— se tomaba como nombre y el script acababa
+# intentando CREAR una cuenta de servicio llamada asi. Crear basura en
+# el IAM de una cuenta compartida con otros proyectos es justo lo que
+# este instalador no puede hacer.
+case "$SA_EMAIL" in
+  *@*.iam.gserviceaccount.com) ;;
+  *) morir "\"$SA_EMAIL\" no es un correo de cuenta de servicio." \
+       "Tiene que acabar en .iam.gserviceaccount.com,
+       por ejemplo:
+       algo@$PROYECTO.iam.gserviceaccount.com
+       Vuelve a lanzarlo y elige de la lista." ;;
+esac
 
 if gcloud iam service-accounts describe "$SA_EMAIL" \
      --project="$PROYECTO" >/dev/null 2>&1; then
-  ok "ya existe: $SA_EMAIL"
+  ok "uso la que ya existe: $SA_EMAIL"
+  SA_YA_EXISTIA="si"
 else
+  SA_YA_EXISTIA="no"
+  SA_CORTO="${SA_EMAIL%%@*}"
   paso "Creando $SA_EMAIL ..."
-  if ! gcloud iam service-accounts create "$SA_ID" \
+  if ! gcloud iam service-accounts create "$SA_CORTO" \
         --project="$PROYECTO" \
         --display-name="$SA_NOMBRE" 2>/tmp/ams_err; then
     morir "No se pudo crear la cuenta de servicio.
@@ -389,7 +487,7 @@ dar_rol() {
        en console.cloud.google.com/iam."
 }
 
-paso "Dando permisos a $SA_ID ..."
+paso "Dando permisos a ${SA_EMAIL%%@*} ..."
 dar_rol roles/aiplatform.user          "llamar a Imagen, Veo y Lyria"
 dar_rol roles/storage.admin            "leer y escribir en el bucket"
 dar_rol roles/cloudbuild.builds.editor "lanzar el montaje del MP4"
