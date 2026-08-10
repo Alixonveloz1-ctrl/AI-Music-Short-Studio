@@ -414,6 +414,16 @@ Reglas que no puedes romper:
 - No introduzcas cantantes, voces, letras, texto en pantalla ni carteles.
 - La continuidad es lo más importante: describe al personaje, el instrumento y el escenario con detalles concretos y repetibles, de modo que todas las tomas parezcan la misma película. Evita adjetivos vagos ("bonito", "épico") y prefiere hechos visuales ("cejas rectas", "barniz mate con una marca junto al puente").
 - Escribe una entrada por cada toma de la lista que se te da, en el mismo orden y con el mismo índice, adaptando la descripción al tipo de plano y al momento del corto indicados.
+
+- LA MITAD DEL CORTO SE MONTA CON MATERIAL REPETIDO, y las tomas marcadas como REPETIBLE son las que van a volver dos o tres veces en momentos distintos de la pieza. Esas tomas tienes que escribirlas para que aguanten volver:
+  · Describe una acción CONTINUA y sin principio ni final marcados: "el arco recorre la cuerda en un movimiento sostenido", no "levanta el arco y empieza a tocar".
+  · Nada que ocurra una sola vez: ni gestos únicos, ni miradas a cámara, ni un cambio de postura, ni entrar o salir de plano, ni empezar o terminar de tocar.
+  · Nada que ate la toma a un instante concreto de la música o de la luz: ni "justo en el clímax", ni "cuando el sol termina de ponerse".
+  · El estado del personaje y del escenario al terminar la toma tiene que ser el MISMO que al empezar, para que la siguiente vez que aparezca encaje igual de bien.
+  Una toma repetible bien escrita es un fragmento de tiempo que podría estar ocurriendo en cualquier momento del corto.
+
+- Las tomas marcadas como ÚNICA son las que llevan el momento irrepetible —la cara en el clímax, la mirada sostenida— y solo se ven una vez. Ahí sí puedes escribir un gesto concreto y un instante que no se repite: es donde va la emoción de la pieza.
+
 - Escribe todo en español.`;
 
 /**
@@ -431,10 +441,15 @@ function buildUserPrompt(input) {
   const performerType = PERFORMER_TYPES_BY_ID.get(config.performerTypeId);
 
   const shotLines = shots
-    .map(
-      (shot) =>
-        `${shot.index}. ${shot.label} — ${shotTypeLabel(shot.shotType)}, ${cameraMoveLabel(shot.cameraMove)}, ${shot.durationSec} s, bloque "${shot.beat}"`,
-    )
+    .map((shot) => {
+      const veces = Number(shot.apariciones) || 1;
+      // La marca va al final y en mayúsculas para que no se pierda entre el
+      // resto de la línea: es la que decide cómo hay que escribir la toma.
+      const marca = shot.reusable
+        ? `REPETIBLE — se ve ${veces} ${veces === 1 ? 'vez' : 'veces'} en el corto`
+        : 'ÚNICA — se ve una sola vez';
+      return `${shot.index}. ${shot.label} — ${shotTypeLabel(shot.shotType)}, ${cameraMoveLabel(shot.cameraMove)}, ${shot.durationSec} s, bloque "${shot.beat}" · ${marca}`;
+    })
     .join('\n');
 
   const instrumentLines = instruments

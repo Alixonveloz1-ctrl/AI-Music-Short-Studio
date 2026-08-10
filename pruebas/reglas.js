@@ -57,6 +57,7 @@ const progreso = require(path.join(RAIZ, 'api/_lib/progreso.js'));
 const productor = require(path.join(RAIZ, 'api/_lib/productor.js'));
 const montaje = require(path.join(RAIZ, 'api/_lib/montaje.js'));
 const audio = require(path.join(RAIZ, 'api/_lib/audio.js'));
+const planificador = require(path.join(RAIZ, 'api/_lib/planificador.js'));
 const { construirPlan } = require(path.join(RAIZ, 'api/_lib/plan.js'));
 
 const CONFIG = {
@@ -286,11 +287,105 @@ async function principal() {
     }
   });
 
-  comprobar('se reutiliza material en vez de generarlo todo (PRD §15, §25, §33)', () => {
+  // Apariciones en pantalla: dos clips seguidos de la misma toma son UNA.
+  // Contar entradas de la linea de tiempo daria una cifra inflada, porque una
+  // toma larga se parte en varios clips y no por eso se ve mas veces.
+  function aparicionesEnPantalla(estructura) {
+    const orden = [];
+    let anterior = null;
+    for (const t of estructura.timeline) {
+      if (t.shotId === anterior) continue;
+      anterior = t.shotId;
+      orden.push(t.shotId);
+    }
+    return orden;
+  }
+
+  comprobar('la MITAD del corto se monta con material ya generado (PRD §15, §25, §33)', () => {
+    // No es una optimizacion que se aplique al final: generar video es lo caro
+    // de esta herramienta, y un plano que vuelve se genera UNA vez. La regla
+    // vale igual para 1, 2 y 3 minutos.
+    for (const segundos of [60, 120, 180]) {
+      const orden = aparicionesEnPantalla(productor.planStructure(segundos));
+      const distintos = new Set(orden).size;
+      const repetido = Math.round((1 - distintos / orden.length) * 100);
+      cierto(
+        repetido >= 45 && repetido <= 55,
+        segundos + ' s: se repite el ' + repetido + ' % y tiene que ser la mitad',
+      );
+    }
+  });
+
+  comprobar('ningun plano aparece dos veces seguidas', () => {
+    // Que vuelva material no canta; que vuelva el MISMO plano pegado a si
+    // mismo, si.
+    for (const segundos of [60, 120, 180]) {
+      const orden = aparicionesEnPantalla(productor.planStructure(segundos));
+      let seguidos = 0;
+      for (let i = 1; i < orden.length; i += 1) if (orden[i] === orden[i - 1]) seguidos += 1;
+      igual(seguidos, 0, segundos + ' s: planos repetidos uno detras de otro');
+    }
+  });
+
+  comprobar('solo se marca repetible un plano que aguante volver', () => {
+    // Un plano que termina donde empezo se puede repetir sin que se note. Uno
+    // que se acerca, no: al volver, el espectador ve un salto hacia atras. Y un
+    // primer plano del rostro lleva un momento unico que delata la repeticion.
+    const CON_DIRECCION = ['slow_push_in', 'slow_pull_out', 'crane_up', 'tilt_up', 'tilt_down'];
+    const CON_MOMENTO = ['face', 'close_up', 'over_shoulder', 'low_angle'];
+    for (const segundos of [60, 120, 180]) {
+      for (const toma of productor.planStructure(segundos).shots) {
+        if (!toma.reusable) continue;
+        cierto(
+          CON_DIRECCION.indexOf(toma.cameraMove) === -1,
+          segundos + ' s: ' + toma.id + ' es repetible con camara ' + toma.cameraMove,
+        );
+        cierto(
+          CON_MOMENTO.indexOf(toma.shotType) === -1,
+          segundos + ' s: ' + toma.id + ' es repetible siendo ' + toma.shotType,
+        );
+      }
+    }
+  });
+
+  comprobar('una toma repetida dura al menos lo que su hueco mas largo', () => {
+    // Si no, al colocarla en el hueco grande faltaria metraje y el montaje
+    // congelaria el ultimo fotograma sin que nadie lo hubiera decidido.
     for (const segundos of [60, 120, 180]) {
       const e = productor.planStructure(segundos);
-      cierto(e.timeline.length > e.shots.length, segundos + ' s: no reutiliza nada');
+      for (const toma of e.shots) {
+        const suyos = e.timeline.filter((t) => t.shotId === toma.id);
+        if (!suyos.length) continue;
+        const hueco = Math.max.apply(null, suyos.map((t) => t.durationSec));
+        const tiene = toma.clips.reduce((n, c) => n + c.durationSec, 0);
+        cierto(tiene >= hueco, segundos + ' s: ' + toma.id + ' dura ' + tiene + ' s en un hueco de ' + hueco + ' s');
+      }
     }
+  });
+
+  comprobar('el Director sabe que tomas van a volver', () => {
+    // Sin la marca en la lista, el modelo escribe todas las tomas igual y las
+    // repetibles salen con un gesto unico que delata la repeticion.
+    const e = productor.planStructure(60);
+    const apariciones = new Map();
+    for (const id of aparicionesEnPantalla(e)) {
+      apariciones.set(id, (apariciones.get(id) || 0) + 1);
+    }
+    const prompt = planificador.buildUserPrompt({
+      config: CONFIG,
+      runtimeSec: 60,
+      shots: e.shots.map((t) => ({
+        index: t.index, label: t.label, beat: t.beat, shotType: t.shotType,
+        cameraMove: t.cameraMove, durationSec: t.durationSec,
+        reusable: t.reusable, apariciones: apariciones.get(t.id) || 1,
+      })),
+    });
+    cierto(prompt.indexOf('REPETIBLE') !== -1, 'la lista no marca las tomas repetibles');
+    cierto(prompt.indexOf('ÚNICA') !== -1, 'la lista no marca las tomas únicas');
+    cierto(
+      planificador.SYSTEM_PROMPT.indexOf('aguanten volver') !== -1,
+      'el Director no recibe la instruccion de escribir tomas que aguanten volver',
+    );
   });
 
   // ── El montaje ──

@@ -31,6 +31,18 @@ async function construirPlan(config) {
   const avisos = [];
   const estructura = planStructure(config.durationSec);
 
+  // Cuántas veces sale cada plano en pantalla. El Director lo necesita: una
+  // toma que va a volver tres veces no se escribe igual que una que solo se ve
+  // una vez, y de eso depende que la mitad del corto se pueda montar con
+  // material repetido sin que cante.
+  const apariciones = new Map();
+  let anterior = null;
+  for (const entradaTl of estructura.timeline) {
+    if (entradaTl.shotId === anterior) continue; // dos clips de la misma toma
+    anterior = entradaTl.shotId;
+    apariciones.set(entradaTl.shotId, (apariciones.get(entradaTl.shotId) || 0) + 1);
+  }
+
   const entrada = {
     config,
     runtimeSec: config.durationSec,
@@ -41,6 +53,8 @@ async function construirPlan(config) {
       shotType: s.shotType,
       cameraMove: s.cameraMove,
       durationSec: s.durationSec,
+      reusable: s.reusable,
+      apariciones: apariciones.get(s.id) || 1,
     })),
   };
 

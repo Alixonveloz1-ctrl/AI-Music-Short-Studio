@@ -69,15 +69,41 @@ const CAMERA_BY_SHOT = {
 };
 
 /**
- * Tipos de plano cuyo material no lleva un momento de interpretación único, así
- * que el Montador puede volver a usarlo más tarde sin que el espectador note la
- * repetición.
+ * LA MITAD DEL CORTO SE REUTILIZA. Esa es la regla, y no es una optimización
+ * que se aplica al final: condiciona cómo se planifica desde el principio.
+ *
+ * Generar vídeo es lo caro de esta herramienta. Un plano general de la
+ * intérprete que aparece tres veces se genera UNA y se coloca tres. Para que
+ * eso se pueda hacer sin que el corto parezca un bucle, el Director tiene que
+ * diseñar los planos pensando ya en que van a volver.
  */
-const REUSABLE_SHOT_TYPES = new Set([
-  'establishing_wide',
-  'wide',
-  'detail',
-  'instrument_detail',
+const PROPORCION_REPETIDA = 0.5;
+
+/**
+ * Un plano solo aguanta repetirse si TERMINA DONDE EMPEZÓ.
+ *
+ * Un `slow_push_in` acaba más cerca de lo que empezó: al repetirlo, el
+ * espectador ve un salto hacia atrás. Un `static` o una deriva lateral lenta
+ * dejan la cámara en un sitio equivalente, así que el mismo material vuelve sin
+ * que se note. Esta es la parte del diseño que hace posible la regla de arriba.
+ */
+const MOVIMIENTOS_QUE_AGUANTAN_VOLVER = new Set([
+  'static',
+  'lateral_track_left',
+  'lateral_track_right',
+  'handheld_drift',
+]);
+
+/**
+ * Tipos de plano que llevan un momento de interpretación único: la cara en el
+ * clímax, la mirada sostenida. Repetir uno de esos no es ahorrar, es delatar el
+ * truco. Nunca se reutilizan aunque su movimiento lo permitiera.
+ */
+const TIPOS_IRREPETIBLES = new Set([
+  'face',
+  'close_up',
+  'over_shoulder',
+  'low_angle',
 ]);
 
 const CLIP_SUFFIXES = 'ABCDEFGH';
@@ -174,10 +200,21 @@ function planStructure(runtimeSec) {
   const grammarCursor = { opening: 0, development: 0, climax: 0, closing: 0 };
   const reuseCounts = new Map();
   let lastShotType = null;
+  let ultimaTomaId = null;
+
+  // La mitad del corto se rellena con material ya generado, y se sabe cuáles
+  // ANTES de escribir ningún plano.
+  const huecosRepetidos = planificarRepeticiones(beatSlots.length);
+  // Cuántos planos distintos hacen falta. El Director los diseña sabiendo que
+  // casi todos van a volver, así que casi todos tienen que aguantar volver.
+  const tomasNecesarias = beatSlots.length - huecosRepetidos.size;
 
   beatSlots.forEach((slot, slotIndex) => {
-    const reuseCandidate = pickReuseCandidate(shots, reuseCounts, slotIndex, beatSlots.length);
+    const reuseCandidate = huecosRepetidos.has(slotIndex)
+      ? pickReuseCandidate(shots, reuseCounts, slotIndex, beatSlots.length, ultimaTomaId)
+      : null;
     if (reuseCandidate) {
+      ultimaTomaId = reuseCandidate.id;
       reuseCounts.set(reuseCandidate.id, (reuseCounts.get(reuseCandidate.id) ?? 0) + 1);
       // La toma reutilizada tiene que ser al menos tan larga como el hueco más
       // largo en el que aparece, o al reproducirla faltaría metraje.
@@ -191,6 +228,8 @@ function planStructure(runtimeSec) {
       return;
     }
 
+    // Si tocaba repetir y no había material aún, este hueco estrena plano; el
+    // plan se cumple igualmente porque más adelante sobran candidatos.
     const grammar = SHOT_GRAMMAR[slot.beat];
     let shotType = grammar[grammarCursor[slot.beat] % grammar.length];
     // Dos planos iguales seguidos parecen un error de montaje: se salta uno.
@@ -203,8 +242,24 @@ function planStructure(runtimeSec) {
 
     const index = shots.length + 1;
     const id = `shot_${String(index).padStart(2, '0')}`;
+
+    // ─── Aquí es donde el Director hace que el ahorro sea posible ───
+    //
+    // Un plano que va a volver tiene que estar RODADO para volver. Mientras
+    // falte material repetible para cumplir la mitad, se elige el movimiento
+    // que deja la cámara donde empezó; solo cuando ya hay de sobra se permite
+    // un movimiento con dirección, que da empaque pero solo sirve una vez.
+    const puedeRepetirse = !TIPOS_IRREPETIBLES.has(shotType);
+    const repetiblesHastaAhora = shots.filter((t) => t.reusable).length;
+    const faltaMaterial = repetiblesHastaAhora < tomasNecesarias * PROPORCION_REPETIDA * 2;
+
     const moves = CAMERA_BY_SHOT[shotType];
-    const cameraMove = moves[index % moves.length];
+    let cameraMove = moves[index % moves.length];
+    if (puedeRepetirse && faltaMaterial) {
+      const seguros = moves.filter((m) => MOVIMIENTOS_QUE_AGUANTAN_VOLVER.has(m));
+      if (seguros.length) cameraMove = seguros[index % seguros.length];
+    }
+
     const shot = {
       id,
       index,
@@ -213,10 +268,12 @@ function planStructure(runtimeSec) {
       shotType,
       cameraMove,
       durationSec: slot.durationSec,
-      reusable: REUSABLE_SHOT_TYPES.has(shotType),
+      // Repetible = ni el tipo de plano ni el movimiento delatan la repetición.
+      reusable: puedeRepetirse && MOVIMIENTOS_QUE_AGUANTAN_VOLVER.has(cameraMove),
       clips: [],
     };
     shots.push(shot);
+    ultimaTomaId = shot.id;
     slotAssignments.push({ shot, durationSec: slot.durationSec, reused: false, beat: slot.beat });
   });
 
@@ -273,15 +330,46 @@ function planStructure(runtimeSec) {
   };
 }
 
-function pickReuseCandidate(shots, reuseCounts, slotIndex, totalSlots) {
-  // Nunca reutilizar mientras la película todavía está presentando su mundo.
-  if (slotIndex < 3) return null;
-  const isFinalSlot = slotIndex === totalSlots - 1;
-  const isRecallBeat = slotIndex % 5 === 4;
-  if (!isRecallBeat && !isFinalSlot) return null;
+/**
+ * Qué huecos de la línea de tiempo se van a rellenar con material ya generado.
+ *
+ * Se decide ANTES de repartir las tomas, no sobre la marcha: así el Director
+ * sabe cuántos planos distintos tiene que escribir y puede diseñarlos para que
+ * vuelvan. La cuenta sale igual en 1, 2 y 3 minutos — siempre la mitad.
+ *
+ * Los dos primeros huecos nunca se repiten: todavía se está presentando el
+ * mundo y no hay nada que recordar. Del resto se eligen posiciones repartidas,
+ * para que las repeticiones no se amontonen al final.
+ *
+ * Dos repeticiones seguidas SÍ se permiten, siempre que sean de planos
+ * distintos: lo que canta no es que vuelva material, es que vuelva el MISMO
+ * material dos veces seguidas. De eso se encarga `pickReuseCandidate`.
+ */
+function planificarRepeticiones(totalSlots) {
+  const huecos = new Set();
+  const primero = 2;
+  const objetivo = Math.floor(totalSlots * PROPORCION_REPETIDA);
+  const disponibles = totalSlots - primero;
+  if (objetivo <= 0 || disponibles <= 0) return huecos;
 
-  const candidates = shots.filter((shot) => shot.reusable);
-  if (candidates.length < 2) return null;
+  for (let k = 0; k < objetivo; k += 1) {
+    const pos = primero + Math.round(((k + 0.5) * disponibles) / objetivo);
+    huecos.add(Math.min(totalSlots - 1, Math.max(primero, pos)));
+  }
+  // El redondeo puede hacer que dos posiciones caigan en el mismo hueco. Se
+  // rellena con los que queden libres para que la mitad se cumpla de verdad.
+  for (let i = primero; i < totalSlots && huecos.size < objetivo; i += 1) {
+    huecos.add(i);
+  }
+  return huecos;
+}
+
+function pickReuseCandidate(shots, reuseCounts, slotIndex, totalSlots, ultimaTomaId) {
+  const candidates = shots.filter((shot) => shot.reusable && shot.id !== ultimaTomaId);
+  // Con un solo plano disponible, repetirlo sería ponerlo dos veces seguidas.
+  if (!candidates.length) return null;
+
+  const isFinalSlot = slotIndex === totalSlots - 1;
 
   // El hueco de cierre rima a propósito con la imagen de apertura.
   if (isFinalSlot) {
