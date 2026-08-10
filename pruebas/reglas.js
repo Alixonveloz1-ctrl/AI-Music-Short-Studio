@@ -501,7 +501,15 @@ async function principal() {
     cierto(/proporciones perfectas/.test(p), 'no se pide una figura de proporciones perfectas');
     cierto(/CALIDAD \(mismo rango que el estilo\)/.test(p), 'no se fija el listón de calidad');
     cierto(/rostro anodino/.test(p), 'no se prohíbe la cara del montón');
-    cierto(/ADULTA/.test(p) && /sexualizad/.test(p), 'faltan los límites de adulta y no sexualizada');
+    // El usuario pidió quitar las prohibiciones: le bloqueaban cosas normales
+    // —una minifalda, un plano sensual— y una orden en negativo confunde al
+    // generador. La edad se queda, pero como un dato de la ficha, no como aviso.
+    cierto(!/sexualizad/i.test(p), 'sigue habiendo una prohibición que bloquea al generador');
+    cierto(/Edad aparente: entre 18 y 24 años/.test(p), 'la edad ya no aparece en la ficha');
+    // Y la belleza cubre todo, no sólo el rostro.
+    for (const parte of ['cuerpo', 'cabello', 'manos', 'piel', 'ropa']) {
+      cierto(new RegExp(parte).test(p), 'la belleza no llega a: ' + parte);
+    }
     cierto(p.indexOf('CALIDAD') < p.indexOf('Persona:'), 'el listón va después de la descripción');
     cierto(/rostro anodino/.test(ella.biblia.negativePrompt), 'el negativo no excluye lo anodino');
 

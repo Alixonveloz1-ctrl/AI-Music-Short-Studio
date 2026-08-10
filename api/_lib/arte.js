@@ -294,28 +294,31 @@ const LISTON_POR_FAMILIA = {
  */
 const BELLEZA_POR_BANCO = {
   femenino:
-    'ELLA TIENE QUE SER HERMOSA, no simplemente correcta: belleza notable y memorable, ' +
-    'rostro delicado y de rasgos armónicos, figura esbelta y de proporciones perfectas, ' +
-    'porte elegante. Si al mirar la imagen no se piensa «qué guapa es», está mal hecha',
+    'ELLA TIENE QUE SER HERMOSA, no simplemente correcta: una belleza notable y memorable, ' +
+    'de la cabeza a los pies. Rostro delicado y de rasgos armónicos, cuerpo esbelto y de ' +
+    'proporciones perfectas, melena bonita, manos finas y porte elegante. Si al mirar la ' +
+    'imagen no se piensa «qué guapa es», está mal hecha',
   masculino:
-    'ÉL TIENE QUE SER MUY ATRACTIVO, no simplemente correcto: facciones armónicas y bien ' +
-    'definidas, complexión atlética y de proporciones perfectas, porte elegante. Si al ' +
-    'mirar la imagen no se piensa «qué guapo es», está mal hecha',
+    'ÉL TIENE QUE SER MUY ATRACTIVO, no simplemente correcto: guapo de verdad, de la cabeza ' +
+    'a los pies. Facciones armónicas y bien definidas, cuerpo atlético y de proporciones ' +
+    'perfectas, buen pelo, manos cuidadas y porte elegante. Si al mirar la imagen no se ' +
+    'piensa «qué guapo es», está mal hecha',
 };
 
 const BELLEZA_COMUN = [
-  'Piel luminosa y cuidada, expresión serena y agradable',
+  // Petición literal: «la belleza va en todo, desde la cara, cuerpo, cabello,
+  // todo». Antes sólo se hablaba del rostro y el resto salía descuidado.
+  'La belleza está en TODO, no sólo en la cara: el rostro, el cuerpo, el cabello, las manos, ' +
+    'la piel, la ropa y la manera de moverse. Cada una de esas cosas tiene que estar bonita',
+  'Piel luminosa, tersa y cuidada; expresión serena y agradable',
+  'Cabello con brillo, volumen y buena caída, peinado con intención',
   'Ojos expresivos y con vida, de mirada limpia; pestañas y cejas bien dibujadas',
-  'Postura elegante y natural, propia de quien sabe estar en escena',
-  'Vestuario impecable y bien puesto: nada arrugado, sucio ni descolocado',
+  'Manos bonitas y bien dibujadas, de dedos largos y bien colocados sobre el instrumento',
+  'Silueta favorecedora y postura elegante, propia de quien sabe estar en escena',
+  'Vestuario impecable, bien puesto y que favorezca la figura: nada arrugado, sucio ni descolocado',
   'Nada de aspecto corriente, cansado ni desaliñado: esta imagen tiene que ser bonita de ver',
   'Sigue siendo una persona creíble: hermosa, no artificial ni de muñeco',
-  // El límite. No recorta nada de lo anterior: dice que la belleza se consigue
-  // con el rostro, la figura y el porte, no con el encuadre.
-  'Es una persona ADULTA y es una intérprete de música en escena: vestida, elegante y ' +
-    'tocando. Nada de poses, encuadres ni ropa sexualizados',
 ];
-
 /**
  * La exigencia de belleza que le toca a un intérprete concreto.
  *
@@ -437,7 +440,9 @@ function bloqueReparto(bible) {
     reparto.map(
       (m, i) =>
         `Intérprete ${i + 1}${m.instrument ? ' (' + m.instrument + ')' : ''}: ` +
-        `${m.face}. Cabello: ${m.hair}. Vestuario: ${m.wardrobe}. ${m.build}`,
+        `${m.face}. Cabello: ${m.hair}. ${m.build}. ` +
+        `${m.apparentAge ? 'Edad aparente: ' + m.apparentAge + '. ' : ''}` +
+        `Vestuario: ${m.wardrobe}`,
     ),
   );
 }
