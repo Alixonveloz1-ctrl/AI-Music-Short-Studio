@@ -690,6 +690,7 @@ var api = {
     return d;
   },
   proyecto: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id)); },
+  borrar: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id), { metodo:'DELETE' }); },
   generar: function(id, activo){ return pedir('generar', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
   estadoGeneracion: function(id, activo, gen){
     return pedir('generar?id=' + encodeURIComponent(id) + '&activo=' + encodeURIComponent(activo) + '&gen=' + encodeURIComponent(gen));
@@ -1294,6 +1295,11 @@ function vistaProyectos(){
           '<p class="tenue mini" style="margin-top:4px;color:var(--tenue2)">Actualizado ' + esc(fmtFecha(r.updatedAt)) + '</p>' +
         '</div>' + htmlAnillo(pct) +
       '</div>' +
+      // El borrar va DENTRO de la tarjeta pero con su propia acción: la tarjeta
+      // entera abre el proyecto, así que sin `data-accion` propio este botón
+      // heredaría el clic de la tarjeta y abriría en vez de borrar.
+      '<button class="btn fantasma pequeno" style="margin-top:10px" ' +
+        'data-accion="borrar-proyecto" data-id="' + esc(r.id) + '">Borrar este corto</button>' +
     '</div>';
   }).join('');
 }
@@ -1880,7 +1886,12 @@ function panelPlan(p){
     ]) +
     // Que no se pueda cambiar es una decisión, no un olvido: hay que decirlo
     // donde el usuario iría a buscar el botón que no existe.
-    '<p class="tenue mini" style="margin-top:8px">Los modelos se eligen al crear el corto y no se pueden cambiar: producir unas tomas con un modelo y otras con otro rompería la continuidad visual entre ellas.</p>' +
+    '<p class="tenue mini" style="margin-top:8px">Los modelos y el formato se eligen al crear el corto y no se pueden cambiar: producir unas tomas con un modelo y otras con otro rompería la continuidad visual entre ellas.</p>' +
+    // Si el corto salió mal, aquí es donde se está mirando cuando se decide
+    // tirarlo. Va al final del bloque de configuración y no junto a los
+    // botones de producir, para que no se toque por error.
+    '<button class="btn fantasma ancho" style="margin-top:14px" ' +
+      'data-accion="borrar-proyecto" data-id="' + esc(p.id) + '">Borrar este corto y todo su material</button>' +
     (cfg.creativeDirection
       ? '<h4 style="margin-top:12px">Dirección creativa</h4><p class="mini" style="margin-top:6px;color:#cfd0ee">' + esc(cfg.creativeDirection) + '</p>'
       : '') +
@@ -2306,6 +2317,30 @@ async function accionMontar(){
   });
 }
 
+/**
+ * Borra un proyecto entero, con todo su material.
+ *
+ * Se pregunta antes y hay que escribir nada: basta con confirmar. No hay
+ * papelera porque no hace falta — lo que se borra se puede volver a generar —
+ * pero sí se avisa de que no tiene vuelta atrás, porque el material sí costó
+ * dinero.
+ */
+async function accionBorrar(id){
+  if (!id) return;
+  var ficha = (estado.resumenes || []).find(function(x){ return x.id === id; });
+  var nombre = (ficha && ficha.title) || (estado.proyecto && estado.proyecto.id === id && estado.proyecto.delivery && estado.proyecto.delivery.title) || 'este corto';
+  if (!confirm('¿Borrar «' + nombre + '» y todo su material?\n\nSe van las imágenes, los clips, la música y el montaje. No se puede deshacer.')) return;
+
+  await ejecutar(async function(){
+    await api.borrar(id);
+    if (estado.proyecto && estado.proyecto.id === id) estado.proyecto = null;
+    estado.resumenes = null;
+    avisar('Corto borrado.', 'ok');
+    irA('#/proyectos');
+    await cargarResumenes();
+  });
+}
+
 async function accionEntregar(){
   var p = estado.proyecto;
   if (!p) return;
@@ -2399,6 +2434,7 @@ document.addEventListener('click', function(ev){
   if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'montar') { accionMontar(); return; }
   if (accion === 'entregar') { accionEntregar(); return; }
+  if (accion === 'borrar-proyecto') { accionBorrar(el.getAttribute('data-id')); return; }
   if (accion === 'filtro-bib') { estado.filtroBib = el.getAttribute('data-f'); pintar(); return; }
 
   // ── Formulario de creación: se actualiza por trozos para no perder el foco ──

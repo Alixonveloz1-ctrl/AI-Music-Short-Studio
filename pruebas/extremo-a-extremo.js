@@ -246,6 +246,28 @@ async function principal() {
     cierto(ficha.finalCutStatus === 'exported', 'estado en la lista: ' + ficha.finalCutStatus);
   });
 
+  await paso('borrar un corto se lleva TODO su material del bucket', async () => {
+    // Un corto de prueba que salió mal ocupa lo mismo que uno bueno. Si no se
+    // puede quitar, la lista se convierte en un cementerio y el bucket paga.
+    const antes = [...objetos.keys()].filter((k) => k.indexOf(id) !== -1).length;
+    cierto(antes > 0, 'este corto no tiene material que borrar');
+
+    const r = await pedir(proyectoEp, { metodo: 'DELETE', query: { id } });
+    cierto(r.codigo === 200, 'código ' + r.codigo + ' ' + JSON.stringify(r.cuerpo).slice(0, 150));
+    cierto(r.cuerpo.borrado === true, 'no dice que lo borró');
+
+    const quedan = [...objetos.keys()].filter((k) => k.indexOf(id) !== -1);
+    cierto(quedan.length === 0, 'quedaron ' + quedan.length + ' archivos: ' + quedan.slice(0, 3).join(', '));
+
+    // Y ya no se puede abrir.
+    const luego = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
+    cierto(luego.codigo === 404, 'sigue abriéndose con código ' + luego.codigo);
+
+    // Borrar algo que no existe avisa, no revienta.
+    const otra = await pedir(proyectoEp, { metodo: 'DELETE', query: { id: 'prj_que_no_existe' } });
+    cierto(otra.codigo === 404, 'borrar lo inexistente dio ' + otra.codigo);
+  });
+
   console.log('');
   console.log('  objetos escritos en el bucket: ' + objetos.size);
   console.log('  llamadas a Google: ' + llamadas.length);

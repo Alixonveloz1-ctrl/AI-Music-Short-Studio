@@ -17,17 +17,36 @@
 // producto —el usuario aprueba— deja de poder cumplirse.
 // ════════════════════════════════════════════════════════════════
 const { empezar, fallo, ErrorPeticion } = require('./_lib/http.js');
-const { leerProyecto } = require('./_lib/almacen.js');
+const { leerProyecto, borrarProyecto } = require('./_lib/almacen.js');
 const { computeProductionStatus } = require('./_lib/progreso.js');
 const { cfg } = require('./_lib/gcp.js');
 const { paraEnviar } = require('./_lib/respuesta.js');
 
 module.exports = async function handler(req, res) {
-  if (empezar(req, res, ['GET'])) return;
+  if (empezar(req, res, ['GET', 'DELETE'])) return;
 
   try {
     const id = parametro(req, 'id');
     if (!id) throw new ErrorPeticion(400, 'Falta el parámetro "id"');
+
+    // ─── Borrar el proyecto entero ───
+    //
+    // Se lleva TODO lo suyo del bucket: el documento, las imágenes, los clips,
+    // las pistas y el montaje. Un proyecto de prueba que salió mal ocupa igual
+    // que uno bueno, y dejarlo ahí sin poder quitarlo convierte la lista en un
+    // cementerio.
+    //
+    // No hay papelera y no hace falta: lo que se borra es material que se puede
+    // volver a generar, y la confirmación la pide la interfaz antes de llamar.
+    if (req.method === 'DELETE') {
+      const existe = await leerProyecto(id);
+      if (!existe) {
+        throw new ErrorPeticion(404, `No existe ningún proyecto con el identificador "${id}"`);
+      }
+      const resultado = await borrarProyecto(id);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ borrado: true, id, archivos: resultado.borrados });
+    }
 
     const leido = await leerProyecto(id);
     if (!leido) {
