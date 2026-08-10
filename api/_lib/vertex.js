@@ -14,8 +14,14 @@
 // El modelo que se configure es el que se usa. Si falla, se devuelve el
 // error de Google tal cual: nunca se sustituye por otro a espaldas del
 // usuario, porque entonces el corto sale distinto y nadie sabe por qué.
+//
+// EL MODELO LO ELIGE EL PROYECTO. Imagen y vídeo llegan aquí como un id
+// que viene guardado en el corto (ver api/_lib/modelos.js), no de una
+// constante: el usuario decide si quiere un corto barato o uno bueno.
+// Lo que este módulo no hace nunca es elegir por él.
 // ════════════════════════════════════════════════════════════════
 const { cfg, vertexUrl } = require('./gcp');
+const modelos = require('./modelos');
 const { OUTPUT_ASPECT_RATIO } = require('./constantes');
 
 class ProveedorError extends Error {
@@ -74,21 +80,45 @@ function traducir(status, msg) {
 // ─── Imagen ───
 
 /**
- * Genera una imagen. Devuelve los bytes en base64 — quien llama decide dónde
- * guardarlos, porque la ruta depende del proyecto y del activo.
+ * Genera una imagen con el modelo que el proyecto eligió. Devuelve los bytes en
+ * base64 — quien llama decide dónde guardarlos, porque la ruta depende del
+ * proyecto y del activo.
  *
- * Las referencias aprobadas viajan solo si el modelo configurado sabe usarlas.
- * El resto de modelos reciben únicamente el prompt, que de todas formas ya
- * lleva dentro el contrato de continuidad completo.
+ * `modeloId` es el del proyecto; si no llega o no vale, se usa el por defecto.
+ * Aquí NO se valida: la validación con mensaje va en api/proyectos.js, cuando
+ * el usuario todavía puede corregir. A media producción, quedarse sin imagen
+ * por un id raro sería peor que generar con el de siempre.
+ *
+ * Hay dos protocolos, no uno: la familia Imagen se pide por `:predict` con
+ * `instances`, y los modelos de imagen de Gemini por `:generateContent` con
+ * `contents`. No se parecen en nada, así que van por caminos separados.
  */
 async function generarImagen(opciones) {
-  const { token, projectId, prompt, negativePrompt, seed, referencias } = opciones;
-  const modelo = cfg.imageModel;
+  const modelo = modelos.modeloImagen(opciones.modeloId);
+  const region = modelos.regionImagen(modelo.id);
+
+  // Las referencias aprobadas viajan sólo si EL MODELO ELEGIDO sabe usarlas.
+  // Mandárselas a uno que no las entiende es un rechazo; no mandárselas a uno
+  // que sí, tira la continuidad que el usuario aprobó toma a toma. El resto de
+  // modelos reciben únicamente el prompt, que de todas formas ya lleva dentro
+  // el contrato de continuidad completo.
+  const referencias = modelos.admiteReferencias(modelo.id)
+    ? (opciones.referencias || []).slice(0, 4)
+    : [];
+
+  const argumentos = Object.assign({}, opciones, { modelo, region, referencias });
+  return modelos.esGemini(modelo.id)
+    ? imagenConGemini(argumentos)
+    : imagenConImagen(argumentos);
+}
+
+/** El camino de siempre: familia Imagen, `:predict`. */
+async function imagenConImagen(opciones) {
+  const { token, projectId, prompt, negativePrompt, seed, modelo, region, referencias } = opciones;
   const instancia = { prompt: String(prompt).slice(0, 4000) };
 
-  const admiteReferencias = /capability|customization/i.test(modelo);
-  if (admiteReferencias && referencias && referencias.length) {
-    instancia.referenceImages = referencias.slice(0, 4).map((ref, i) => ({
+  if (referencias.length) {
+    instancia.referenceImages = referencias.map((ref, i) => ({
       referenceType: 'REFERENCE_TYPE_SUBJECT',
       referenceId: i + 1,
       referenceImage: { bytesBase64Encoded: ref.base64 },
@@ -107,7 +137,7 @@ async function generarImagen(opciones) {
   if (negativePrompt) parametros.negativePrompt = String(negativePrompt).slice(0, 1000);
 
   const d = await llamar(
-    vertexUrl(projectId, cfg.imageLocation, modelo, 'predict'),
+    vertexUrl(projectId, region, modelo.id, 'predict'),
     token, projectId,
     { instances: [instancia], parameters: parametros },
   );
@@ -123,7 +153,86 @@ async function generarImagen(opciones) {
   const base64 = p.bytesBase64Encoded || p.imageBytes;
   if (!base64) throw new ProveedorError('Imagen respondió sin datos de imagen.');
 
-  return { base64, mimeType: p.mimeType || 'image/png', modelo };
+  return { base64, mimeType: p.mimeType || 'image/png', modelo: modelo.id };
+}
+
+/**
+ * El camino de los «Nano Banana»: modelos de imagen de Gemini,
+ * `:generateContent`.
+ *
+ * Hay dos diferencias que importan y que no son de forma:
+ *
+ *  - Las referencias van como partes de la conversación, cada una seguida de
+ *    una línea que dice QUÉ hay que copiar de ella. Sin esa línea, el modelo
+ *    tiende a reproducir el encuadre de la referencia en vez de la identidad
+ *    del personaje, que es justo lo contrario de lo que hace falta.
+ *  - No existe `negativePrompt`: lo que no se quiere se dice en el mismo texto.
+ */
+async function imagenConGemini(opciones) {
+  const { token, projectId, prompt, negativePrompt, modelo, region, referencias } = opciones;
+
+  const partes = [];
+  for (const ref of referencias) {
+    partes.push({
+      inlineData: {
+        mimeType: ref.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png',
+        data: ref.base64,
+      },
+    });
+    partes.push({
+      text: '↑ REFERENCIA YA APROBADA. Copia de ella la identidad: la misma cara, ' +
+        'el mismo pelo, la misma ropa, el mismo instrumento y el mismo lugar. ' +
+        'NO copies su encuadre ni su pose: esta imagen nueva es otro plano.',
+    });
+  }
+
+  let texto = String(prompt).slice(0, 4000);
+  if (negativePrompt) texto += '\n\nEVITA en la imagen: ' + String(negativePrompt).slice(0, 1000);
+  partes.push({ text: texto });
+
+  // El seed no viaja: `generationConfig` no lo admite en todos estos modelos y
+  // un campo de más es un 400. Da igual para lo que se usa — regenerar tiene
+  // que dar algo distinto, y estos modelos ya son distintos en cada llamada.
+  const d = await llamar(
+    vertexUrl(projectId, region, modelo.id, 'generateContent'),
+    token, projectId,
+    {
+      contents: [{ role: 'user', parts: partes }],
+      generationConfig: {
+        responseModalities: ['IMAGE', 'TEXT'],
+        imageConfig: { aspectRatio: OUTPUT_ASPECT_RATIO },
+      },
+    },
+  );
+
+  const candidato = (d.candidates || [])[0];
+  const trozos = (candidato && candidato.content && candidato.content.parts) || [];
+  const imagen = trozos.find(
+    (t) => t.inlineData && String(t.inlineData.mimeType || '').indexOf('image/') === 0,
+  );
+
+  if (!imagen) {
+    // Sin imagen, el motivo está en `finishReason`, y casi siempre es el filtro
+    // de contenido. Se dice cuál para que se pueda reescribir la toma: «no se
+    // pudo generar» a secas no deja al usuario hacer nada.
+    const motivo = (candidato && candidato.finishReason) ||
+      (d.promptFeedback && d.promptFeedback.blockReason) || 'desconocido';
+    if (/SAFETY|BLOCK|PROHIBITED|RECITATION/i.test(motivo)) {
+      throw new ProveedorError(
+        'los filtros de contenido bloquearon esta imagen (' + motivo +
+        '). Cambia la descripción de la toma y vuelve a generar.',
+      );
+    }
+    throw new ProveedorError(modelo.etiqueta + ' respondió sin imagen (' + motivo + ').');
+  }
+
+  return {
+    // Google devuelve el base64 en bloques con saltos de línea; Buffer los
+    // tolera, pero se limpian para que lo que se guarda sea siempre lo mismo.
+    base64: String(imagen.inlineData.data).replace(/\s+/g, ''),
+    mimeType: imagen.inlineData.mimeType || 'image/png',
+    modelo: modelo.id,
+  };
 }
 
 // ─── Vídeo (Veo) ───
@@ -180,7 +289,12 @@ async function iniciarVideo(opciones) {
     durationSec, bucket, prefijo,
   } = opciones;
 
-  const modelo = cfg.veoModel;
+  // El nivel de Veo lo eligió el usuario al crear el corto y está guardado en
+  // el proyecto: entre el más barato y el mejor hay casi siete veces la
+  // factura, así que esa decisión es suya y no del código.
+  const elegido = modelos.modeloVideo(opciones.modeloId);
+  const modelo = elegido.id;
+  const region = modelos.regionVideo(modelo);
   const tipo = (t) => (t === 'image/jpeg' || t === 'image/png' ? t : 'image/png');
 
   const parametros = {
@@ -202,7 +316,7 @@ async function iniciarVideo(opciones) {
     base.image = { bytesBase64Encoded: imagenBase64, mimeType: tipo(imagenMime) };
   }
 
-  const url = vertexUrl(projectId, cfg.veoLocation, modelo, 'predictLongRunning');
+  const url = vertexUrl(projectId, region, modelo, 'predictLongRunning');
   const pedir = async (conFinal) => {
     const instancia = conFinal
       ? Object.assign({}, base, {
@@ -248,9 +362,16 @@ async function iniciarVideo(opciones) {
 async function consultarVideo(opciones) {
   const { token, projectId, operationName, modelo } = opciones;
   // La operación pertenece al modelo que la lanzó, así que hay que preguntarle
-  // A ESE. Con el modelo fijo en el código, elegir otro en la interfaz rompía
-  // la consulta sin que se entendiera por qué.
-  const url = vertexUrl(projectId, cfg.veoLocation, modelo || cfg.veoModel, 'fetchPredictOperation');
+  // A ESE, y en SU región. Con el modelo fijo en el código, elegir otro en la
+  // interfaz rompía la consulta sin que se entendiera por qué; ahora que además
+  // se puede cambiar de modelo entre un corto y el siguiente, el id se guarda
+  // con el trabajo y se usa tal cual: preguntar por la operación en otro sitio
+  // devuelve «no existe» y daría por perdido un clip que se está generando y
+  // que ya está pagado.
+  const deLaOperacion = modelo || modelos.porDefectoVideo();
+  const url = vertexUrl(
+    projectId, modelos.regionVideo(deLaOperacion), deLaOperacion, 'fetchPredictOperation',
+  );
   const d = await llamar(url, token, projectId, { operationName });
 
   if (!d.done) return { listo: false };

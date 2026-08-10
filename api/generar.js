@@ -40,6 +40,7 @@ const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
 const { canGenerate } = require('./_lib/progreso.js');
 const vertex = require('./_lib/vertex.js');
+const modelos = require('./_lib/modelos.js');
 const audio = require('./_lib/audio.js');
 
 // ─── Plazos ───
@@ -191,24 +192,55 @@ function argumentosDe(proyecto, activo) {
     prompt: spec.prompt,
     negativePrompt: spec.negativePrompt,
     referenceAssetIds,
-    provider: proveedorDe(activo),
+    provider: proveedorDe(proyecto, activo),
     // Semilla nueva en cada intento: regenerar tiene que dar algo distinto, o el
     // botón «Regenerar» no serviría de nada. Se guarda para poder repetirlo.
     seed: crypto.randomInt(1, 2147483646),
   };
 }
 
-function proveedorDe(activo) {
+/**
+ * Quién generó esto, y con qué. Se guarda EN LA GENERACIÓN porque el modelo ya
+ * no es una constante del despliegue: es una elección del corto, y dentro de un
+ * mes hay que poder mirar una toma y saber con qué se hizo.
+ */
+function proveedorDe(proyecto, activo) {
   switch (activo.kind) {
     case 'clip':
-      return { name: 'Veo', model: cfg.veoModel };
+      return { name: 'Veo', model: modeloVideoDe(proyecto).id };
     case 'music':
       return { name: 'Lyria', model: cfg.musicModel };
     case 'ambient':
       return { name: 'Síntesis local', model: 'audio.js' };
-    default:
-      return { name: 'Imagen', model: cfg.imageModel };
+    default: {
+      // El nombre del proveedor sigue a la familia del modelo: poner «Imagen»
+      // encima de una toma hecha con un Nano Banana engañaría a quien luego
+      // intente reproducirla.
+      const m = modeloImagenDe(proyecto);
+      return { name: modelos.esGemini(m.id) ? 'Gemini' : 'Imagen', model: m.id };
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// El modelo del proyecto
+// ---------------------------------------------------------------------------
+//
+// TODAS las generaciones de un mismo corto usan el mismo modelo. Se eligió al
+// crearlo y vive en su configuración; cambiarlo a mitad de producción daría
+// tomas que no encajan entre ellas, y la continuidad visual es lo que esta
+// herramienta más cuida.
+//
+// Un proyecto creado antes de que esto se pudiera elegir no trae los campos:
+// `modeloImagen`/`modeloVideo` devuelven entonces el por defecto, que es a
+// propósito el mismo modelo con el que ese corto se venía generando.
+
+function modeloImagenDe(proyecto) {
+  return modelos.modeloImagen((proyecto.config || {}).imageModelId);
+}
+
+function modeloVideoDe(proyecto) {
+  return modelos.modeloVideo((proyecto.config || {}).videoModelId);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,13 +249,21 @@ function proveedorDe(activo) {
 
 async function hacerImagen(proyecto, activo, gen, inicio) {
   const { token, projectId } = await auth();
-  const referencias = await bajarReferencias(token, proyecto, gen.referenceAssetIds);
+  const modelo = modeloImagenDe(proyecto);
+
+  // Las referencias sólo se bajan si el modelo elegido va a usarlas: son hasta
+  // cuatro imágenes del bucket, y traerlas para tirarlas gasta segundos de los
+  // sesenta que tiene la función.
+  const referencias = modelos.admiteReferencias(modelo.id)
+    ? await bajarReferencias(token, proyecto, gen.referenceAssetIds)
+    : [];
 
   let r;
   try {
     r = await vertex.generarImagen({
       token,
       projectId,
+      modeloId: modelo.id,
       prompt: gen.prompt,
       negativePrompt: gen.negativePrompt,
       seed: gen.seed,
@@ -334,6 +374,7 @@ async function arrancarClip(proyecto, activo, gen) {
     r = await vertex.iniciarVideo({
       token,
       projectId,
+      modeloId: modeloVideoDe(proyecto).id,
       prompt: gen.prompt,
       negativePrompt: gen.negativePrompt,
       imagenBase64: imagenBytes.toString('base64'),

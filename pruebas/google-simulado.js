@@ -169,6 +169,22 @@ function instalarGoogleSimulado() {
       if (u.indexOf('lyria') !== -1) {
         return ok({ predictions: [{ bytesBase64Encoded: WAV_VACIO, mimeType: 'audio/wav' }] });
       }
+      // Los modelos de imagen de Gemini («Nano Banana») no hablan `:predict`
+      // sino `:generateContent`, y contestan con otra forma entera. Si el
+      // simulacro les respondiera con `predictions`, elegir uno de esos
+      // modelos parecería roto aquí y funcionaría en Google — que es la peor
+      // clase de prueba que se puede tener.
+      if (u.indexOf(':generateContent') !== -1) {
+        return ok({
+          candidates: [{
+            finishReason: 'STOP',
+            content: {
+              role: 'model',
+              parts: [{ inlineData: { mimeType: 'image/png', data: PNG_FALSO } }],
+            },
+          }],
+        });
+      }
       return ok({ predictions: [{ bytesBase64Encoded: PNG_FALSO, mimeType: 'image/png' }] });
     }
 

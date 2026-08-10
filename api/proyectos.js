@@ -25,6 +25,7 @@ const {
   SCENARIOS_BY_ID,
   VISUAL_STYLES_BY_ID,
 } = require('./_lib/catalogo.js');
+const modelos = require('./_lib/modelos.js');
 
 module.exports = async function handler(req, res) {
   if (empezar(req, res, ['GET', 'POST'])) return;
@@ -263,6 +264,31 @@ function validarConfiguracion(bruto) {
     );
   }
 
+  // --- Modelos de imagen y de vídeo ---
+  //
+  // Se validan aquí y se guardan en el proyecto, no se leen en cada generación:
+  // así TODAS las tomas de un mismo corto salen del mismo modelo. Si el modelo
+  // pudiera cambiar a mitad —porque el usuario tocó el desplegable, o porque
+  // cambió una variable del despliegue—, la toma 12 no encajaría con las once
+  // anteriores, y la continuidad visual es justo lo que esta herramienta cuida.
+  //
+  // Si no llegan, se guarda el por defecto: SIEMPRE queda escrito cuál se usó.
+  const imageModelId = texto(bruto.imageModelId) || modelos.porDefectoImagen();
+  if (!modelos.esImagenConocido(imageModelId)) {
+    throw malaPeticion(
+      'Modelo de imagen desconocido: "' + imageModelId + '". Elige uno de la lista ' +
+        '(' + modelos.MODELOS_IMAGEN.map((m) => m.etiqueta).join(', ') + ').',
+    );
+  }
+
+  const videoModelId = texto(bruto.videoModelId) || modelos.porDefectoVideo();
+  if (!modelos.esVideoConocido(videoModelId)) {
+    throw malaPeticion(
+      'Modelo de vídeo desconocido: "' + videoModelId + '". Elige uno de la lista ' +
+        '(' + modelos.MODELOS_VIDEO.map((m) => m.etiqueta).join(', ') + ').',
+    );
+  }
+
   const config = {
     instrumentIds: Array.from(vistos),
     formationId,
@@ -272,6 +298,8 @@ function validarConfiguracion(bruto) {
     visualStyleId,
     creativeDirection,
     durationSec,
+    imageModelId,
+    videoModelId,
   };
   // Los campos opcionales sólo se guardan si traen algo: un `scenarioCustom: ''`
   // en el proyecto se leería después como «hay escenario personalizado».
