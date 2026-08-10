@@ -304,6 +304,43 @@ async function principal() {
     }
   });
 
+  await paso('el paquete .zip existe, se abre y trae el vídeo y el texto', async () => {
+    const zips = [...objetos.keys()].filter((k) => k.endsWith('.zip'));
+    cierto(zips.length === 1, 'debería haber un paquete y hay ' + zips.length);
+    const bytes = objetos.get(zips[0]);
+
+    // Se abre con `unzip` de verdad, no mirando bytes: un ZIP que sólo pasa mis
+    // propias comprobaciones no sirve de nada si el móvil del usuario no lo abre.
+    const fs = require('fs');
+    const os = require('os');
+    const path2 = require('path');
+    const { execFileSync } = require('child_process');
+    const carpeta = fs.mkdtempSync(path2.join(os.tmpdir(), 'zip-'));
+    const archivo = path2.join(carpeta, 'paquete.zip');
+    fs.writeFileSync(archivo, bytes);
+    try {
+      execFileSync('unzip', ['-t', archivo], { stdio: 'pipe' });
+    } catch (e) {
+      throw new Error('unzip dice que el paquete está dañado: ' + String(e.stdout || e.message).slice(0, 200));
+    }
+    const listado = execFileSync('unzip', ['-Z1', archivo], { encoding: 'utf8' }).trim().split('\n');
+    cierto(listado.some((n) => n.endsWith('.mp4')), 'el paquete no lleva el MP4: ' + listado.join(', '));
+    cierto(listado.some((n) => n.endsWith('.txt')), 'el paquete no lleva la hoja de texto');
+
+    // Y la hoja trae de verdad lo que hay que copiar y pegar.
+    const nombreTxt = listado.find((n) => n.endsWith('.txt'));
+    const hoja = execFileSync('unzip', ['-p', archivo, nombreTxt], { encoding: 'utf8' });
+    for (const parte of ['TÍTULO', 'DESCRIPCIÓN', 'HASHTAGS', 'TODO JUNTO']) {
+      cierto(hoja.indexOf(parte) !== -1, 'a la hoja le falta el bloque de ' + parte);
+    }
+    // El MP4 de dentro es el mismo que se exportó, byte por byte.
+    const nombreMp4 = listado.find((n) => n.endsWith('.mp4'));
+    const dentro = execFileSync('unzip', ['-p', archivo, nombreMp4], { maxBuffer: 1 << 28 });
+    const exportado = objetos.get([...objetos.keys()].find((k) => k.endsWith('corto_final.mp4')));
+    cierto(dentro.equals(exportado), 'el MP4 del paquete no es el que se exportó');
+    fs.rmSync(carpeta, { recursive: true, force: true });
+  });
+
   await paso('el proyecto aparece terminado en el listado', async () => {
     const r = await pedir(proyectos, { metodo: 'GET' });
     const ficha = r.cuerpo.proyectos.find((x) => x.id === id);

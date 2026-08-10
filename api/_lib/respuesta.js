@@ -39,6 +39,8 @@ function recogerArchivos(proyecto) {
   if (corte) {
     anadir(corte.preview);
     anadir(corte.export);
+    // El paquete .zip con el MP4 y la hoja de texto.
+    anadir(corte.paquete);
   }
   return archivos;
 }
@@ -70,6 +72,7 @@ function firmarMedios(proyecto) {
   // una pestaña en vez de descargarlo, y la cabecera va FIRMADA: añadirla a la
   // URL después de firmar hace que Google rechace la petición entera.
   const exportado = proyecto.finalCut && proyecto.finalCut.export;
+  const paquete = proyecto.finalCut && proyecto.finalCut.paquete;
   const titulo = (proyecto.delivery && proyecto.delivery.title) || '';
 
   for (const archivo of archivos) {
@@ -81,6 +84,9 @@ function firmarMedios(proyecto) {
       }
       const opciones = { expiresSeconds: VIGENCIA_SEG };
       if (archivo === exportado && titulo) opciones.descargarComo = titulo + '.mp4';
+      // El paquete se baja con el nombre que se le puso al armarlo, que ya
+      // viene del título limpio de acentos y espacios.
+      if (archivo === paquete && archivo.nombre) opciones.descargarComo = archivo.nombre;
       archivo.url = signedUrl(sa, bucket, archivo.path, opciones);
     } catch (e) {
       // Un archivo suelto con una ruta rara no puede dejar el proyecto entero

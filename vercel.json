@@ -8,7 +8,7 @@
     "api/rechazar.js": { "maxDuration": 30 },
     "api/desbloquear.js": { "maxDuration": 30 },
     "api/montar.js": { "maxDuration": 60 },
-    "api/entrega.js": { "maxDuration": 30 },
+    "api/entrega.js": { "maxDuration": 60 },
     "api/catalogo.js": { "maxDuration": 15 },
     "api/salud.js": { "maxDuration": 30 }
   },

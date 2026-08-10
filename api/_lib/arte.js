@@ -668,7 +668,7 @@ function buildShotImagePrompt(bible, shot, config) {
 }
 
 /** Prompt de vídeo de cada clip, anclado en la imagen aprobada de su toma. */
-function buildClipPrompt(bible, shot, clip, totalClips) {
+function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
   const phase =
     totalClips === 1
       ? 'toma completa'
@@ -690,11 +690,30 @@ function buildClipPrompt(bible, shot, clip, totalClips) {
       'El primer fotograma debe coincidir con la imagen de referencia aprobada',
       ...bible.continuityRules,
     ]),
+    // EL FINAL DEL CORTO. Lo vio el usuario en su primer montaje: «la música
+    // termina de una forma suave, perfecta, pero los personajes siguen moviendo
+    // los instrumentos como si estuvieran tocando, pero ya está en silencio».
+    //
+    // Y es que ningún clip sabía que era el último. Todos pedían lo mismo —
+    // movimiento sostenido de interpretación— así que la película se quedaba
+    // sin final: la música se resolvía y la imagen seguía como si tal cosa.
+    esElUltimoDelCorto
+      ? block('CÓMO TERMINA EL CORTO (este es el último plano)', [
+          'La interpretación TERMINA dentro de este clip: no sigue tocando hasta el corte',
+          'Primero la última nota, con el gesto que la cierra —el arco que se levanta ' +
+            'despacio de la cuerda, las manos que se separan del instrumento—',
+          'Después BAJA EL INSTRUMENTO y se queda quieto, en silencio, sosteniendo la mirada',
+          'El último segundo es casi inmóvil: sólo la respiración y la luz',
+          'Nada de empezar un gesto nuevo al final: aquí se cierra, no se abre',
+        ])
+      : null,
     block('Requisitos', [
       'Sin cortes internos ni cambios de plano',
       'Sin deformaciones en manos, rostro ni instrumento',
       'Sin texto en pantalla',
-      'Movimiento contenido: mejor poco movimiento correcto que mucho movimiento roto',
+      esElUltimoDelCorto
+        ? 'El movimiento se va apagando hasta quedar quieto'
+        : 'Movimiento contenido: mejor poco movimiento correcto que mucho movimiento roto',
     ]),
   ]);
 }

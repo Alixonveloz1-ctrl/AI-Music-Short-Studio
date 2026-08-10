@@ -28,7 +28,8 @@ const almacen = require('./_lib/almacen.js');
 const { modificarProyecto } = almacen;
 const { makeEventAndPush } = require('./_lib/dominio.js');
 const { computeProductionStatus } = require('./_lib/progreso.js');
-const { cfg, auth, gcsCopy, gcsUpload } = require('./_lib/gcp.js');
+const { cfg, auth, gcsCopy, gcsUpload, gcsDescargar } = require('./_lib/gcp.js');
+const zip = require('./_lib/zip.js');
 const { paraEnviar } = require('./_lib/respuesta.js');
 
 // Longitudes con las que el material se sigue pudiendo publicar en cualquier
@@ -139,6 +140,40 @@ module.exports = async function handler(req, res) {
         );
       } catch (e) {
         console.error('[entrega] no se pudo escribir la hoja de metadatos:', e && e.message);
+      }
+
+      // ─── EL PAQUETE PARA DESCARGAR ───
+      //
+      // El MP4 y una hoja de texto con el título, la descripción y los
+      // hashtags, en un solo archivo. Lo pidió el usuario y la razón es de
+      // móvil: bajar el vídeo por un lado y copiar el texto de una pantalla por
+      // otro es justo la fricción que sobra cuando vas a publicar.
+      //
+      // Va después de exportar y en su propio try: si el paquete falla, el
+      // corto ya está entregado y el MP4 se puede bajar suelto. Perder la
+      // entrega entera por no poder empaquetar sería absurdo.
+      try {
+        const { token } = await auth();
+        const mp4 = await gcsDescargar(token, cfg.bucket, exportado.path);
+        const base = zip.nombreSeguro(proyecto.delivery.title, 'corto');
+        const paquete = zip.crearZip([
+          { nombre: base + '.mp4', bytes: mp4 },
+          { nombre: base + '.txt', bytes: zip.hojaDeTexto(proyecto.delivery) },
+        ]);
+        const rutaZip = almacen.rutaFinal(id, almacen.ARCHIVO_PAQUETE);
+        await gcsUpload(token, cfg.bucket, rutaZip, paquete, 'application/zip');
+        await modificarProyecto(id, (p) => {
+          p.finalCut = Object.assign({}, p.finalCut, {
+            paquete: {
+              path: rutaZip,
+              bytes: paquete.length,
+              mimeType: 'application/zip',
+              nombre: base + '.zip',
+            },
+          });
+        });
+      } catch (e) {
+        console.error('[entrega] no se pudo armar el paquete .zip:', e && e.message);
       }
     }
 

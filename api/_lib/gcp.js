@@ -345,6 +345,27 @@ async function gcsUpload(token, bucket, objectPath, body, contentType, opciones)
 }
 
 /** Devuelve el texto del objeto y su número de generación, o null si no existe. */
+/**
+ * Baja un objeto del bucket tal cual, en bytes.
+ *
+ * Vivía duplicado en api/generar.js. Lo necesitan dos sitios —unir los trozos
+ * de música y armar el paquete de descarga— y dos copias de la misma función
+ * son dos sitios donde arreglar el mismo fallo.
+ */
+async function gcsDescargar(token, bucket, objeto) {
+  const url =
+    'https://storage.googleapis.com/storage/v1/b/' + encodeURIComponent(bucket) +
+    '/o/' + encodeURIComponent(objeto) + '?alt=media';
+  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) {
+    const detalle = (await r.text().catch(() => '')).slice(0, 200);
+    const e = new Error('No se pudo leer del bucket el archivo "' + objeto + '": ' + r.status + ' ' + detalle);
+    e.status = r.status === 404 ? 404 : 502;
+    throw e;
+  }
+  return Buffer.from(await r.arrayBuffer());
+}
+
 async function gcsReadText(token, bucket, objectPath) {
   const base =
     'https://storage.googleapis.com/storage/v1/b/' + bucket + '/o/' + encodeURIComponent(objectPath);
@@ -457,6 +478,7 @@ module.exports = {
   CORS_BUCKET,
   gcsUpload,
   gcsReadText,
+  gcsDescargar,
   gcsCopy,
   gcsDelete,
   gcsList,

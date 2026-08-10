@@ -535,6 +535,14 @@ function buildAssets(config, plan) {
     );
   }
 
+  // Cuál es el último clip de toda la película, para que su prompt pida el
+  // final. Se busca en la línea de tiempo y no en la lista de tomas, porque con
+  // material repetido el último plano que se VE no es el último que se generó.
+  const ultimoDeLaPelicula = (() => {
+    const linea = (plan.timeline || []);
+    return linea.length ? linea[linea.length - 1].clipId : null;
+  })();
+
   for (const shot of plan.shots) {
     shot.clips.forEach((clip) => {
       assets.push(
@@ -548,7 +556,7 @@ function buildAssets(config, plan) {
           clipId: clip.id,
           spec: {
             objective: `${shot.purpose} (${clip.motionNote})`,
-            prompt: buildClipPrompt(bible, shot, clip, shot.clips.length),
+            prompt: buildClipPrompt(bible, shot, clip, shot.clips.length, clip.id === ultimoDeLaPelicula),
             negativePrompt: `${bible.negativePrompt}, ${NEGATIVE_VIDEO_EXTRA}`,
             referenceAssetIds: [`${shot.id}_image`],
             continuityNotes: [

@@ -35,7 +35,17 @@ const {
 
 // Fundidos, en segundos. Los mismos que usaba el montaje local.
 const FUNDIDO_ENTRADA = 1.2;
-const FUNDIDO_SALIDA = 1.6;
+// EL CIERRE DE LA PELÍCULA.
+//
+// Eran 1,6 segundos y se quedaba corto. El usuario lo describió exacto: «la
+// música termina de una forma suave, perfecta, pero los personajes siguen
+// moviendo los instrumentos como si estuvieran tocando, y ya está en silencio».
+// Lyria resuelve la pieza a lo largo de los últimos cinco o seis segundos, y la
+// imagen seguía a pleno brillo hasta el penúltimo suspiro.
+//
+// Ahora el negro entra con la música, no después. Tres segundos y medio: lo
+// bastante para que la imagen se apague al mismo ritmo que la última nota.
+const FUNDIDO_SALIDA = 3.5;
 // Un fundido a negro entre bloques narrativos es más corto que el de apertura:
 // separa dos ideas, no abre la película.
 const FUNDIDO_BLOQUE = 0.4;
@@ -50,6 +60,29 @@ const FUNDIDO_BLOQUE = 0.4;
 // Medio segundo y no más: por encima de un segundo deja de leerse como un
 // corte y se convierte en un recurso de estilo, que es otra cosa.
 const DISOLVENCIA = 0.5;
+
+/**
+ * El cruce de un corte normal.
+ *
+ * POR QUÉ NINGÚN CORTE VA YA A HUESO. El usuario montó el corto y lo primero
+ * que notó fue esto: «donde se unen las imágenes, algunos no les puso ningún
+ * efecto, se nota el salto, se nota muy brusco». Y tiene razón: dos planos
+ * generados por separado no comparten ni el grano ni la luz exacta, así que un
+ * corte a hueso entre ellos no se lee como montaje, se lee como un fallo.
+ *
+ * No es medio segundo, que es lo que tarda un plano en «volver» y hay que
+ * disimular. Son dos décimas: lo justo para que el ojo no dé un respingo, sin
+ * comerse el ritmo del montaje. Un corte sigue pareciendo un corte.
+ */
+const CORTE_SUAVE = 0.2;
+
+/** Cuánto se solapan dos trozos según cómo entre el segundo. */
+function cruceDe(transicion) {
+  if (transicion === 'dissolve') return DISOLVENCIA;
+  if (transicion === 'dip_to_black') return 0;   // el negro ya separa los planos
+  if (transicion === 'fade_in') return 0;        // es el primero, no hay junta
+  return CORTE_SUAVE;
+}
 
 // Hasta dónde se puede estirar o encoger un clip para que encaje en su hueco.
 //
@@ -106,11 +139,10 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, form
   // su hueco, porque esa media se comparte con el corte de al lado. Sin este
   // ajuste, cada encadenado le robaría medio segundo a la película y un corto
   // de tres minutos acabaría durando varios segundos menos de lo planificado.
-  const llevaEncadenado = entradas.map(
-    (entrada, i) => i > 0 && entrada.transitionIn === 'dissolve',
-  );
+  // Cuánto se solapa cada trozo con el anterior. El primero nunca se solapa.
+  const cruces = entradas.map((entrada, i) => (i === 0 ? 0 : cruceDe(entrada.transitionIn)));
   const largos = entradas.map(
-    (entrada, i) => entrada.durationSec + (llevaEncadenado[i] ? DISOLVENCIA : 0),
+    (entrada, i) => entrada.durationSec + cruces[i],
   );
 
   // La duración REAL de cada clip solo se sabe en el momento del montaje: Veo
@@ -209,15 +241,17 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, form
 
   for (let i = 1; i < entradas.length; i += 1) {
     const salida = '[x' + i + ']';
-    if (llevaEncadenado[i]) {
+    const cruce = cruces[i];
+    if (cruce > 0) {
       // El desplazamiento se mide sobre la película montada hasta aquí: el
-      // trozo nuevo empieza medio segundo ANTES de que termine la anterior.
-      const desplazamiento = Math.max(0, largoAcumulado - DISOLVENCIA);
+      // trozo nuevo empieza justo ese cruce ANTES de que termine la anterior.
+      const desplazamiento = Math.max(0, largoAcumulado - cruce);
       filtros.push(
-        acumulado + '[v' + i + ']xfade=transition=fade:duration=' + DISOLVENCIA +
+        acumulado + '[v' + i + ']xfade=transition=fade:duration=' + n3(cruce) +
           ':offset=' + n3(desplazamiento) + ',settb=AVTB' + salida,
       );
     } else {
+      // Sólo el paso a negro va pegado: ahí la separación la hace el negro.
       filtros.push(acumulado + '[v' + i + ']concat=n=2:v=1:a=0,settb=AVTB' + salida);
     }
     // En los dos casos la película crece exactamente lo que dura el hueco: en

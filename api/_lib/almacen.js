@@ -63,6 +63,8 @@ const CARPETA_FINAL = 'final';
 const ARCHIVO_PREVISUALIZACION = 'previsualizacion.mp4';
 const ARCHIVO_EXPORTACION = 'corto_final.mp4';
 const ARCHIVO_METADATOS = 'corto_final.json';
+// El paquete que se descarga: el MP4 y la hoja de texto en un solo archivo.
+const ARCHIVO_PAQUETE = 'corto_final.zip';
 
 // El identificador va DENTRO de una ruta de objeto. Sin validarlo, un id con
 // "../" o con una barra escribiría fuera de su carpeta o encima de otro
@@ -602,6 +604,7 @@ module.exports = {
   CARPETA_FINAL,
   ARCHIVO_PREVISUALIZACION,
   ARCHIVO_EXPORTACION,
+  ARCHIVO_PAQUETE,
   ARCHIVO_METADATOS,
   comprobarId,
   raizProyectos,

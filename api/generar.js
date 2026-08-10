@@ -35,7 +35,7 @@
 const crypto = require('crypto');
 
 const { empezar, cuerpo, requerido, fallo, ErrorPeticion } = require('./_lib/http.js');
-const { cfg, auth, gcsDelete, gcsCopy } = require('./_lib/gcp.js');
+const { cfg, auth, gcsDelete, gcsCopy, gcsDescargar } = require('./_lib/gcp.js');
 const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
 const { canGenerate } = require('./_lib/progreso.js');
@@ -1046,20 +1046,7 @@ function progresoPorDefecto(gen) {
 // ---------------------------------------------------------------------------
 
 /** Baja un objeto del bucket como Buffer. */
-async function bajarObjeto(token, bucket, objeto) {
-  const url =
-    'https://storage.googleapis.com/storage/v1/b/' + encodeURIComponent(bucket) +
-    '/o/' + encodeURIComponent(objeto) + '?alt=media';
-  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) {
-    const detalle = (await r.text().catch(() => '')).slice(0, 200);
-    throw new ErrorPeticion(
-      r.status === 404 ? 404 : 502,
-      `No se pudo leer del bucket el archivo "${objeto}": ${r.status} ${detalle}`,
-    );
-  }
-  return Buffer.from(await r.arrayBuffer());
-}
+const bajarObjeto = gcsDescargar;
 
 /**
  * Copia un objeto DENTRO de Google, sin traérselo.

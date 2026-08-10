@@ -2168,7 +2168,15 @@ function panelMontaje(p, sit){
   if (corte['export'] && corte['export'].url) {
     html += '<div class="tarjeta"><h3>MP4 final</h3>' +
       '<div class="nota buena">El corto está exportado y listo para publicar.</div>' +
-      '<a class="btn pri ancho grande" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>' +
+      // El paquete va PRIMERO y en grande: es lo que hace falta para publicar
+      // —el vídeo y el texto en una sola descarga— y bajar el MP4 suelto es la
+      // opción de después, no la principal.
+      (corte.paquete && corte.paquete.url
+        ? '<a class="btn pri ancho grande" href="' + esc(corte.paquete.url) + '" download>Descargar el paquete (.zip)</a>' +
+          '<p class="tenue mini centro" style="margin-top:8px">El MP4 y un archivo de texto con el título, ' +
+            'la descripción y los hashtags, listos para copiar y pegar. ' + esc(fmtBytes(corte.paquete.bytes)) + '</p>' +
+          '<a class="btn ancho" style="margin-top:10px" href="' + esc(corte['export'].url) + '" download>Sólo el MP4</a>'
+        : '<a class="btn pri ancho grande" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>') +
       '<p class="tenue mini centro" style="margin-top:8px">' + esc(fmtBytes(corte['export'].bytes)) + ' · ' +
         Math.round(corte['export'].durationSec || 0) + ' s' +
         (corte.exportedAt ? ' · exportado ' + esc(fmtFecha(corte.exportedAt)) : '') + '</p>' +
@@ -2234,7 +2242,10 @@ function vistaBiblioteca(){
   if (corte['export'] && corte['export'].url && (estado.filtroBib === 'todo' || estado.filtroBib === 'video')) {
     html += '<div class="tarjeta"><h3>Corto terminado</h3>' +
       '<div class="medio"><video src="' + esc(corte['export'].url) + '" controls playsinline preload="metadata"></video></div>' +
-      '<a class="btn pri ancho" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a></div>';
+      (corte.paquete && corte.paquete.url
+        ? '<a class="btn pri ancho" href="' + esc(corte.paquete.url) + '" download>Descargar el paquete (.zip)</a>' +
+          '<a class="btn ancho" style="margin-top:8px" href="' + esc(corte['export'].url) + '" download>Sólo el MP4</a>'
+        : '<a class="btn pri ancho" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>') + '</div>';
   }
 
   if (!aprobados.length) {

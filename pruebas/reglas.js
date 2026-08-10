@@ -75,6 +75,7 @@ const arte = require(path.join(RAIZ, 'api/_lib/arte.js'));
 const vertex = require(path.join(RAIZ, 'api/_lib/vertex.js'));
 const catalogo = require(path.join(RAIZ, 'api/_lib/catalogo.js'));
 const rasgos = require(path.join(RAIZ, 'api/_lib/rasgos.js'));
+const zip = require(path.join(RAIZ, 'api/_lib/zip.js'));
 const { construirPlan } = require(path.join(RAIZ, 'api/_lib/plan.js'));
 
 const CONFIG = {
@@ -1143,6 +1144,116 @@ async function principal() {
     cierto(s.indexOf('offset=5.500') !== -1, 'el encadenado no arranca donde debe');
   });
 
+  comprobar('el corto tiene un final: el último plano deja de tocar', () => {
+    // Lo que vio el usuario en su primer montaje: «la música termina de una
+    // forma suave, perfecta, pero los personajes siguen moviendo los
+    // instrumentos como si estuvieran tocando, y ya está en silencio».
+    //
+    // Ningún clip sabía que era el último: todos pedían lo mismo, movimiento
+    // sostenido de interpretación. La película se quedaba sin final.
+    const p = nuevo();
+    const clips = p.assets.filter((a) => a.kind === 'clip');
+    const conFinal = clips.filter((a) => /CÓMO TERMINA EL CORTO/.test(a.spec.prompt));
+    igual(conFinal.length, 1, 'tiene que pedir el final exactamente un clip');
+
+    // Y es el último que se VE, que con material repetido no es el último que
+    // se generó.
+    const ultimo = plan.timeline[plan.timeline.length - 1].clipId;
+    igual(conFinal[0].id, ultimo, 'el final se le pide a un clip que no cierra la película');
+    cierto(/BAJA EL INSTRUMENTO/.test(conFinal[0].spec.prompt), 'no pide bajar el instrumento');
+    cierto(/se queda quieto/.test(conFinal[0].spec.prompt), 'no pide que se quede quieto');
+    // Los demás siguen pidiendo movimiento sostenido: si todos cerraran, el
+    // corto entero sería un desfile de finales.
+    for (const c of clips) {
+      if (c.id === ultimo) continue;
+      cierto(/Movimiento contenido/.test(c.spec.prompt), 'a un clip normal le falta el movimiento: ' + c.id);
+    }
+  });
+
+  comprobar('la imagen se apaga con la música, no después', () => {
+    // El fundido final era de 1,6 s y Lyria resuelve la pieza a lo largo de los
+    // últimos cinco o seis. La imagen seguía a pleno brillo con la música ya
+    // casi apagada.
+    const s = montaje.construirScript(
+      [
+        { local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' },
+        { local: 'b.mp4', durationSec: 8, transitionIn: 'cut' },
+      ],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    const salidas = (s.match(/fade=t=out:st=([0-9.]+):d=([0-9.]+)/g) || []);
+    cierto(salidas.length, 'no hay ningún fundido de salida');
+    const ultima = salidas[salidas.length - 1];
+    const dur = Number(/d=([0-9.]+)/.exec(ultima)[1]);
+    cierto(dur >= 3, 'el cierre dura sólo ' + dur + ' s: la música tarda más en resolverse');
+  });
+
+  comprobar('el paquete de descarga es un ZIP que se puede abrir', () => {
+    // «Descargar un zip donde venga el MP4 y venga un archivo de texto con el
+    // nombre, la descripción y los hashtags, solamente de copiar y pegar.»
+    const mp4 = Buffer.alloc(5000, 7);
+    const texto = zip.hojaDeTexto({
+      title: 'Susurros de Violín',
+      description: 'Dos intérpretes en una azotea al anochecer.',
+      hashtags: ['#Violin', '#AIMusic'],
+    });
+    const paquete = zip.crearZip([{ nombre: 'corto.mp4', bytes: mp4 }, { nombre: 'corto.txt', bytes: texto }]);
+
+    // Las firmas que hacen que un ZIP sea un ZIP.
+    igual(paquete.readUInt32LE(0), 0x04034b50, 'no empieza por la firma de un ZIP');
+    igual(paquete.readUInt32LE(paquete.length - 22), 0x06054b50, 'no termina con el índice');
+    igual(paquete.readUInt16LE(paquete.length - 22 + 10), 2, 'el índice no dice que hay dos archivos');
+    // El MP4 va dentro entero y sin comprimir: comprimir un vídeo no ahorra
+    // nada y cuesta segundos de función.
+    cierto(paquete.length > mp4.length + texto.length, 'el paquete es más pequeño que su contenido');
+    igual(paquete.readUInt16LE(8), 0, 'el método debería ser «guardar sin comprimir»');
+    // Y la suma de comprobación tiene que cuadrar, o el descompresor avisa de
+    // que el archivo está dañado.
+    igual(paquete.readUInt32LE(14), zip.crc32(mp4), 'la suma de comprobación del MP4 no cuadra');
+    // Los nombres en UTF-8, o los acentos se rompen al abrirlo en Windows.
+    igual(paquete.readUInt16LE(6) & 0x0800, 0x0800, 'no está marcada la bandera de UTF-8');
+
+    // La hoja lleva las tres cosas y además todo junto, que es lo que se pega.
+    const t = texto.toString('utf8');
+    cierto(/Susurros de Violín/.test(t), 'falta el título');
+    cierto(/azotea al anochecer/.test(t), 'falta la descripción');
+    cierto(/#Violin #AIMusic/.test(t), 'faltan los hashtags');
+    cierto(/TODO JUNTO/.test(t), 'falta el bloque de copiar y pegar');
+    // El BOM son TRES bytes en UTF-8: EF BB BF.
+    igual([texto[0], texto[1], texto[2]], [0xef, 0xbb, 0xbf],
+      'sin BOM, el Bloc de notas de Windows rompe los acentos');
+
+    // Y el nombre del archivo sale limpio de acentos y espacios.
+    igual(zip.nombreSeguro('Susurros de Violín'), 'Susurros_de_Violin', 'nombre mal saneado');
+    igual(zip.nombreSeguro('  ///  '), 'corto', 'un título imposible debería caer en el nombre por defecto');
+  });
+
+  comprobar('ninguna junta va a hueso: todos los cortes llevan cruce', () => {
+    // Lo primero que notó el usuario al ver su corto montado: «donde se unen
+    // las imágenes, algunos no les puso ningún efecto, se nota el salto, se
+    // nota muy brusco». Dos planos generados por separado no comparten grano ni
+    // luz exacta, así que un corte a hueso entre ellos parece un fallo.
+    const s = montaje.construirScript(
+      [
+        { local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' },
+        { local: 'b.mp4', durationSec: 8, transitionIn: 'cut' },
+        { local: 'c.mp4', durationSec: 8, transitionIn: 'cut' },
+      ],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    igual((s.match(/concat=n=2/g) || []).length, 0, 'queda una junta pegada a hueso');
+    igual((s.match(/xfade=transition=fade/g) || []).length, 2, 'faltan cruces en los cortes');
+    // Corto suave, no encadenado: dos décimas, no medio segundo. Un corte tiene
+    // que seguir pareciendo un corte.
+    cierto(/duration=0\.200/.test(s), 'el corte suave no dura dos décimas');
+
+    // Y el cruce NO le roba segundos a la película: cada trozo se pide más
+    // largo justo lo que se solapa, así que los dos que cruzan piden 8,2.
+    const largos = (s.match(/trim=duration=([0-9.]+)/g) || [])
+      .map((x) => Number(x.replace('trim=duration=', '')));
+    igual(largos, [8, 8.2, 8.2], 'los trozos no piden el cruce de más');
+  });
+
   comprobar('todos los trozos comparten base de tiempo', () => {
     // `concat` cambia la base de tiempo del resultado y `xfade` se niega a
     // mezclar dos entradas con bases distintas. La primera vez que un
@@ -1151,7 +1262,9 @@ async function principal() {
     const s = montaje.construirScript(
       [
         { local: 'a.mp4', durationSec: 5, transitionIn: 'fade_in' },
-        { local: 'b.mp4', durationSec: 5, transitionIn: 'cut' },
+        // El paso a negro es la única junta que va pegada con `concat`: ahí la
+        // separación entre planos la hace el propio negro.
+        { local: 'b.mp4', durationSec: 5, transitionIn: 'dip_to_black' },
         { local: 'a.mp4', durationSec: 5, transitionIn: 'dissolve' },
       ],
       'm.wav', 'amb.wav', 'salida.mp4',
