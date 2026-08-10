@@ -35,7 +35,7 @@
 const crypto = require('crypto');
 
 const { empezar, cuerpo, requerido, fallo, ErrorPeticion } = require('./_lib/http.js');
-const { cfg, auth, gcsDelete } = require('./_lib/gcp.js');
+const { cfg, auth, gcsDelete, gcsCopy } = require('./_lib/gcp.js');
 const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
 const { canGenerate } = require('./_lib/progreso.js');
@@ -564,10 +564,13 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
       if (g && g.provider) g.provider.formato = r.formato;
     });
   }
-  const ruta = almacen.rutaGeneracion(proyecto.id, activo, gen.index, sufijoFragmento(indice));
-  // `r.mimeType` viene ya normalizado a audio/wav por vertex.js, que es quien
-  // le pone la cabecera al PCM crudo que manda Lyria. Se usa el suyo y no una
-  // constante, para que si algún día cambia el formato, la etiqueta no mienta.
+  // La EXTENSIÓN Y EL TIPO REALES, mirados en los bytes por vertex.js. Guardar
+  // un MP3 con nombre .wav y tipo audio/wav es lo que hacía que ni el navegador
+  // ni ffmpeg supieran qué tenían delante.
+  const ruta = almacen.rutaGeneracion(
+    proyecto.id, activo, gen.index,
+    sufijoFragmento(indice, r.extension || '.wav'),
+  );
   await almacen.subirMedio(ruta, bytes, r.mimeType || 'audio/wav');
 
   // El avance se guarda en el bucket y en el proyecto porque la petición que
@@ -577,6 +580,11 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
     const a = dominio.getAsset(p, activoId);
     const g = generacionDe(a, genId);
     if (!g.trabajo || g.trabajo.tipo !== 'musica') return;
+    // Se apunta si el material se puede editar y con qué tipo se guardó: el
+    // paso de cerrar es otra petición, en otra instancia, y no tiene forma de
+    // saberlo si no queda escrito aquí.
+    g.trabajo.editable = r.editable !== false;
+    g.trabajo.mimeType = r.mimeType || 'audio/wav';
     const hechos = g.trabajo.hechos || (g.trabajo.hechos = []);
     // Dos pestañas abiertas pueden pedir el mismo fragmento a la vez; el
     // archivo se sobreescribe solo, pero la lista no debe duplicarse.
@@ -585,7 +593,16 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
   });
 }
 
-const sufijoFragmento = (indice) => '_f' + String(indice).padStart(2, '0') + '.wav';
+// La extensión viene del formato REAL del audio, no de una constante: un MP3
+// guardado como .wav no lo sabe abrir ni el navegador ni ffmpeg.
+/** La extensión de una ruta, con el punto. Devuelve '.wav' si no la tiene. */
+function extensionDeRuta(ruta) {
+  const m = /(\.[a-z0-9]{2,5})$/i.exec(String(ruta || ''));
+  return m ? m[1] : '.wav';
+}
+
+const sufijoFragmento = (indice, extension) =>
+  '_f' + String(indice).padStart(2, '0') + (extension || '.wav');
 
 /** El primer hueco de 1..total que todavía no está hecho. */
 function siguienteFragmento(hechos, total) {
@@ -605,6 +622,34 @@ function siguienteFragmento(hechos, total) {
 async function unirYCerrar(proyecto, activo, gen) {
   const t = gen.trabajo;
   const { token } = await auth();
+
+  // Si el audio NO es WAV —Lyria puede devolver MP3, OGG o M4A— no se toca.
+  //
+  // Abrir un MP3 con un lector de WAV para ajustarle la duración y ponerle
+  // fundidos es lo mismo que envolverlo en una cabecera falsa: se leen bytes
+  // comprimidos como si fueran muestras y sale ruido. Y no hace falta: el
+  // montaje mezcla con ffmpeg, que lee cualquiera de esos formatos y ya ajusta
+  // la música al metraje. Los fundidos y la duración exacta son una mejora
+  // agradable, no un requisito, y desde luego no valen romper la pieza.
+  const primero = t.hechos[0];
+  const editable = t.editable !== false && String(primero && primero.ruta).endsWith('.wav');
+
+  if (!editable) {
+    const ruta = almacen.rutaGeneracion(
+      proyecto.id, activo, gen.index, extensionDeRuta(primero && primero.ruta),
+    );
+    await gcsCopy(token, cfg.bucket, primero.ruta, cfg.bucket, ruta);
+    const actualizado = await cerrar(proyecto.id, activo.id, gen.id, {
+      path: ruta,
+      bytes: Number(primero.bytes) || 0,
+      mimeType: t.mimeType || 'audio/mpeg',
+      durationSec: t.durationSec,
+    }, Date.now() - Date.parse(gen.createdAt || new Date().toISOString()));
+    for (const h of t.hechos) {
+      try { await gcsDelete(token, cfg.bucket, h.ruta); } catch (e) { /* da igual */ }
+    }
+    return actualizado;
+  }
 
   const trozos = [];
   for (const h of t.hechos) trozos.push(await bajarObjeto(token, cfg.bucket, h.ruta));

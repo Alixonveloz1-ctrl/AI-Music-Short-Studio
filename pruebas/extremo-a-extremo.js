@@ -16,7 +16,8 @@
 // ─── Entorno y Google Cloud simulado (pruebas/google-simulado.js) ───
 const { instalarGoogleSimulado, entornoDePrueba } = require('./google-simulado.js');
 entornoDePrueba();
-const { objetos, llamadas } = instalarGoogleSimulado();
+const google = instalarGoogleSimulado();
+const { objetos, llamadas } = google;
 
 // ─── req / res de mentira ───
 function pedir(handler, { metodo = 'GET', query = {}, cuerpo = null } = {}) {
@@ -237,6 +238,70 @@ async function principal() {
     const finales = [...objetos.keys()].filter((k) => k.indexOf('/final/') !== -1);
     cierto(finales.some((k) => k.endsWith('corto_final.mp4')), 'no está el MP4: ' + finales.join(', '));
     cierto(finales.some((k) => k.endsWith('corto_final.json')), 'no está la hoja de metadatos');
+  });
+
+  await paso('el audio guardado es un archivo de audio de verdad, no bytes rotos', async () => {
+    // ESTA COMPROBACIÓN FALTABA Y POR ESO LA ESTÁTICA PASÓ TRES VECES. Se
+    // miraba que el archivo existiera, no que se pudiera abrir. Un MP3 envuelto
+    // en una cabecera WAV existe perfectamente y suena a ruido blanco.
+    const musica = [...objetos.keys()].filter((k) => /\/(musica|ambiente)\//.test(k));
+    cierto(musica.length, 'no hay ninguna pista de música en el bucket');
+
+    const firmaDe = (b) => {
+      const h4 = b.toString('latin1', 0, 4);
+      if (h4 === 'RIFF') return '.wav';
+      if (h4 === 'OggS') return '.ogg';
+      if (h4 === 'fLaC') return '.flac';
+      if (b.toString('latin1', 4, 8) === 'ftyp') return '.m4a';
+      if (h4.slice(0, 3) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return '.mp3';
+      return null;
+    };
+
+    for (const clave of musica) {
+      const bytes = objetos.get(clave);
+      cierto(bytes && bytes.length > 100, 'pista vacía o minúscula: ' + clave);
+      const firma = firmaDe(bytes);
+      cierto(firma, 'el archivo ' + clave + ' no tiene firma de audio reconocible; ' +
+        'empieza por ' + bytes.toString('hex', 0, 8));
+      // Y la extensión del nombre tiene que decir la verdad sobre su contenido.
+      cierto(clave.endsWith(firma),
+        'el archivo se llama ' + clave + ' pero por dentro es ' + firma +
+        ' — un MP3 con nombre .wav no lo abre ni el navegador ni ffmpeg');
+
+      // LA COMPROBACIÓN QUE DE VERDAD DELATA LA ESTÁTICA. Que un archivo
+      // empiece por «RIFF» no significa que dentro haya audio: un MP3 con una
+      // cabecera WAV pegada delante también empieza por RIFF, y es exactamente
+      // el fallo que se coló tres veces seguidas. Lo que lo destapa es la
+      // DURACIÓN: una cabecera que miente sobre el formato miente también sobre
+      // cuánto dura, y un archivo que dice durar siete segundos cuando se
+      // pidieron sesenta está roto por dentro.
+      if (firma === '.wav') {
+        const d = require('../api/_lib/audio.js').decodeWav(bytes);
+        const segundos = d.samples.length / d.channels / d.sampleRate;
+        cierto(Math.abs(segundos - 60) < 6,
+          'el WAV ' + clave + ' dura ' + segundos.toFixed(1) + ' s y debería durar 60. ' +
+          'Su cabecera dice ' + d.sampleRate + ' Hz y ' + d.channels + ' canal(es), ' +
+          'así que ese formato no es el real y lo que se oiría es ruido');
+      }
+    }
+
+    // Y LA REGLA DE ORO, la que se saltó tres veces seguidas: cuando Google
+    // manda audio YA EMPAQUETADO —MP3, OGG, M4A—, lo que se guarda tiene que
+    // ser EXACTAMENTE eso, byte por byte. Ni una cabecera de más. Comprobar la
+    // firma no basta: un MP3 con una cabecera WAV pegada delante empieza por
+    // «RIFF» y pasa cualquier comprobación de formato, y suena a estática.
+    const enviado = google.audioEnviado;
+    const empaquetado = enviado && (
+      enviado[0] === 0xff || enviado.toString('latin1', 0, 3) === 'ID3' ||
+      ['RIFF', 'OggS', 'fLaC'].indexOf(enviado.toString('latin1', 0, 4)) !== -1
+    );
+    if (empaquetado) {
+      const pista = musica.map((k) => objetos.get(k)).find((b) => b.length >= enviado.length);
+      cierto(pista, 'la pista guardada es más corta que la que mandó Google: se ha perdido audio');
+      cierto(pista.equals(enviado),
+        'Google mandó ' + enviado.length + ' bytes de ' + google.audioMime + ' y se guardaron ' +
+        pista.length + '. El audio empaquetado NO se toca: reinterpretarlo es lo que suena a ruido');
+    }
   });
 
   await paso('el proyecto aparece terminado en el listado', async () => {

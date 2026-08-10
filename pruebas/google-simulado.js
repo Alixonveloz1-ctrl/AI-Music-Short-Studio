@@ -41,24 +41,26 @@ function instalarGoogleSimulado() {
   // Antes este simulacro contestaba con un WAV bien formado, y por eso la
   // prueba pasaba en verde mientras en producción la pieza no se podía ni
   // abrir: un simulacro más amable que el servicio real no comprueba nada.
-  // 48 kHz ESTÉREO, y el mimeType NO declara los canales: exactamente lo que
-  // manda un modelo de música. Suponer mono ahí es lo que convertía la pieza en
-  // estática, porque las muestras de los dos canales se leían como si fueran
-  // una detrás de otra.
-  const PCM_RATE = 48000;
-  const PCM_CANALES = 2;
-  const PCM_SEGUNDOS = 60;
-  const PCM_MIME = 'audio/L16;codec=pcm;rate=48000';
-  const PCM_CRUDO = (() => {
-    const n = PCM_RATE * PCM_SEGUNDOS;
-    const b = Buffer.alloc(n * PCM_CANALES * 2);
-    for (let i = 0; i < n; i += 1) {
-      const v = Math.round(6000 * Math.sin((2 * Math.PI * 440 * i) / PCM_RATE));
-      b.writeInt16LE(v, i * 4);        // izquierdo
-      b.writeInt16LE(v, i * 4 + 2);    // derecho
-    }
-    return b.toString('base64');
+  // LYRIA DEVUELVE AUDIO COMPRIMIDO, no PCM. El usuario midió 22601 bytes por
+  // segundo en producción: eso son ~180 kbps, un bitrate de MP3. Envolver esos
+  // bytes en una cabecera WAV que dice «muestras de 16 bits» es exactamente lo
+  // que producía la estática.
+  //
+  // Este simulacro devolvió antes un WAV, luego PCM de 24 kHz mono y luego PCM
+  // de 48 kHz estéreo: los tres casos que SÍ funcionaban. Ahora devuelve lo que
+  // devuelve el servicio de verdad.
+  const MP3_FALSO = (() => {
+    // Una trama MP3 mínima: la firma 0xFFFB es lo que identifica el formato.
+    const trama = Buffer.alloc(418);
+    trama[0] = 0xff; trama[1] = 0xfb; trama[2] = 0x90; trama[3] = 0x00;
+    // ~180 kbps durante 60 s, para que el tamaño sea el que se midió de verdad.
+    const trozos = [];
+    for (let i = 0; i < 3240; i += 1) trozos.push(trama);
+    return Buffer.concat(trozos).toString('base64');
   })();
+  const PCM_MIME = 'audio/mpeg';
+  const PCM_CRUDO = MP3_FALSO;
+
   const PNG_FALSO = Buffer.from('imagen de prueba').toString('base64');
 
   global.fetch = async function (url, opciones) {
@@ -313,7 +315,10 @@ function instalarGoogleSimulado() {
 
     throw new Error('El simulacro no conoce esta llamada: ' + u.slice(0, 120));
   };
-  return { objetos, llamadas };
+  // Lo que este simulacro dio por audio, para que la prueba pueda exigir que
+  // llegue al bucket SIN QUE NADIE LO TOQUE, que es la regla que se saltó tres
+  // veces: envolver audio comprimido en una cabecera WAV produce ruido blanco.
+  return { objetos, llamadas, audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
 }
 
 /** Credenciales de mentira, con una clave RSA de verdad para poder firmar. */

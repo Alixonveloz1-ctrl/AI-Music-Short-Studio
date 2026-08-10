@@ -678,6 +678,8 @@ async function generarMusica(opciones) {
   return {
     base64: audio.base64,
     mimeType: audio.mimeType,
+    extension: audio.extension,
+    editable: audio.editable,
     modelo: MODELO_MUSICA_PRO,
     segundos: total,
     formato: audio.formato,
@@ -686,21 +688,25 @@ async function generarMusica(opciones) {
 }
 
 /**
- * Saca el audio de la respuesta y lo deja como un WAV de verdad.
+ * Saca el audio de la respuesta SIN REINTERPRETARLO.
  *
- * EL FALLO QUE ARREGLA. Lyria NO devuelve WAV: devuelve PCM crudo, con el
- * formato declarado en el mimeType («audio/L16;codec=pcm;rate=24000»). Se estaba
- * guardando tal cual con la etiqueta `audio/wav`, y el paso siguiente —el que
- * une los trozos y ajusta la duración— lo abría esperando una cabecera RIFF que
- * no existía y lo rechazaba. Como ese rechazo tampoco se apuntaba en ninguna
- * parte, el latido lo reintentaba en bucle y el usuario veía «Generando…»
- * durante cuatro minutos hasta que saltaba el vigilante.
+ * ESTE ES EL FALLO QUE COSTÓ TRES RONDAS, y estaba resuelto desde hacía tiempo
+ * en el otro estudio del usuario, con el motivo escrito en un comentario:
+ * envolver audio COMPRIMIDO en una cabecera WAV que dice «esto es PCM» es
+ * exactamente lo que produce ruido blanco.
  *
- * Aquí se arregla en el origen: si viene PCM crudo se le pone su cabecera WAV,
- * y si vienen varios trozos se les quita la cabecera a todos menos al primero
- * —dos cabeceras seguidas en medio del audio suenan como un chasquido— y se
- * corrige el tamaño declarado, que si no ffmpeg lee sólo el primer trozo y la
- * pieza sale corta.
+ * Lyria no devuelve siempre lo mismo. A veces manda PCM crudo, a veces manda un
+ * archivo ya empaquetado —MP3, OGG, M4A—. Un MP3 son bytes comprimidos: si se
+ * les pega delante una cabecera que declara «muestras de 16 bits a 48 kHz», el
+ * reproductor los lee como muestras y suena a estática. Da igual lo fina que
+ * sea la deducción del formato: el error no estaba en adivinar mal la
+ * frecuencia, estaba en tocar unos bytes que no había que tocar.
+ *
+ * La regla, por tanto, es la de aquel comentario: EL FORMATO SE MIRA EN LOS
+ * BYTES, no en la etiqueta, y sólo se añade cabecera cuando el audio es PCM de
+ * verdad. Cualquier otra cosa se guarda intacta, con su extensión y su tipo, y
+ * ya la lee ffmpeg en el montaje. Mejor un archivo sin tocar que uno
+ * reinterpretado mal.
  */
 function juntarAudio(d, segundosPedidos) {
   const cand = d && Array.isArray(d.candidates) ? d.candidates[0] : null;
@@ -716,30 +722,22 @@ function juntarAudio(d, segundosPedidos) {
     if (suyo.indexOf('image') === 0) continue;
     if (!mimeType) mimeType = suyo;
     let buf = Buffer.from(dato.data, 'base64');
-    // Del segundo trozo en adelante, fuera la cabecera.
+    // Del segundo trozo en adelante, fuera la cabecera RIFF: dos cabeceras
+    // seguidas en medio del audio suenan como un chasquido.
     if (trozos.length && esRiff(buf)) buf = buf.slice(44);
     trozos.push(buf);
   }
   if (!trozos.length) return null;
 
   const crudo = trozos.length === 1 ? trozos[0] : Buffer.concat(trozos);
-  if (esRiff(crudo)) {
-    // Ya venía con cabecera: se respeta la suya y sólo se corrige el tamaño.
-    return {
-      base64: corregirTamanoWav(crudo).toString('base64'),
-      mimeType: 'audio/wav',
-      formato: 'WAV de Google',
-      original: mimeType || 'audio/wav',
-    };
-  }
-  const puesto = cabeceraWav(crudo, mimeType, segundosPedidos);
+  const listo = prepararAudio(crudo, mimeType, segundosPedidos);
   return {
-    base64: puesto.wav.toString('base64'),
-    mimeType: 'audio/wav',
-    // Se devuelve para poder enseñarlo: si el audio vuelve a sonar mal, saber
-    // qué formato se le puso es la mitad del diagnóstico.
-    formato: puesto.formato.rate + ' Hz · ' + (puesto.formato.canales === 2 ? 'estéreo' : 'mono') +
-      ' (' + puesto.formato.origen + ')',
+    base64: listo.bytes.toString('base64'),
+    mimeType: listo.tipo,
+    extension: listo.extension,
+    // `true` sólo cuando el resultado es un WAV que se puede abrir y editar.
+    editable: listo.editable,
+    formato: listo.descripcion,
     original: mimeType || 'sin declarar',
   };
 }
@@ -749,33 +747,68 @@ function esRiff(buf) {
 }
 
 /**
- * Le pone cabecera WAV a un bloque de PCM crudo.
+ * Qué es realmente este montón de bytes, mirando su firma.
  *
- * EL SEGUNDO FALLO DEL AUDIO, y el que sonaba a estática. Google declara el
- * formato en el mimeType («audio/L16;codec=pcm;rate=24000»), pero lo que casi
- * nunca declara es CUÁNTOS CANALES. Suponer uno es razonable para una voz y
- * está mal para música: Lyria compone en estéreo, y leer estéreo como mono
- * significa tomar las muestras de los dos canales como si fueran una detrás de
- * otra. Eso no suena mal, suena a ruido blanco.
- *
- * Y como además la frecuencia declarada tampoco era la real, el resultado era
- * el primer cuarto de la pieza reproducido a media velocidad y entrelazado.
- * Estática pura.
- *
- * ASÍ QUE NO SE ADIVINA: SE DEDUCE. Se sabe cuántos segundos se le pidieron a
- * Lyria —la línea de tiempo se los pide explícitamente— y se sabe cuántos bytes
- * ha devuelto. De ahí sale cuántos bytes hay por segundo, y ese número señala
- * un único formato de los que se usan en la práctica. Es una medición, no una
- * suposición, y se corrige sola si Google cambia de formato mañana.
- *
- * Lo declarado en el mimeType se respeta sólo si CUADRA con los bytes. Cuando
- * no cuadra, mandan los bytes: una etiqueta puede venir con un valor genérico,
- * pero el tamaño del archivo no miente.
+ * Los cuatro primeros bytes de casi cualquier formato de audio lo identifican
+ * sin lugar a dudas. Se mira eso antes que el mimeType porque la etiqueta puede
+ * venir con un valor genérico y los bytes no mienten.
  */
+function prepararAudio(buf, mimeType, segundosPedidos) {
+  const firma = buf.toString('latin1', 0, 4);
 
-// Los formatos que salen de un generador de audio, con sus bytes por segundo
-// (16 bits = 2 bytes por muestra y canal). Ordenados de más a menos probable
-// en un modelo de música.
+  // Ya viene empaquetado: NO SE TOCA NI UN BYTE.
+  if (firma === 'RIFF') {
+    return {
+      bytes: corregirTamanoWav(buf), tipo: 'audio/wav', extension: '.wav',
+      editable: true, descripcion: 'WAV de Google',
+    };
+  }
+  if (firma === 'OggS') {
+    return { bytes: buf, tipo: 'audio/ogg', extension: '.ogg', editable: false, descripcion: 'OGG' };
+  }
+  if (firma === 'fLaC') {
+    return { bytes: buf, tipo: 'audio/flac', extension: '.flac', editable: false, descripcion: 'FLAC' };
+  }
+  if (buf.toString('latin1', 4, 8) === 'ftyp') {
+    return { bytes: buf, tipo: 'audio/mp4', extension: '.m4a', editable: false, descripcion: 'M4A' };
+  }
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+    return { bytes: buf, tipo: 'audio/webm', extension: '.webm', editable: false, descripcion: 'WebM' };
+  }
+  // MP3: o empieza por la etiqueta ID3, o directamente por una trama.
+  if (firma.slice(0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) {
+    return { bytes: buf, tipo: 'audio/mpeg', extension: '.mp3', editable: false, descripcion: 'MP3' };
+  }
+
+  // Sin firma reconocible. Sólo AQUÍ se envuelve, y sólo si la etiqueta dice
+  // que es PCM: es el único caso en el que añadir una cabecera es correcto.
+  if (/l16|pcm|linear/i.test(mimeType || '')) {
+    const puesto = cabeceraWav(buf, mimeType, segundosPedidos);
+    return {
+      bytes: puesto.wav, tipo: 'audio/wav', extension: '.wav', editable: true,
+      descripcion: 'PCM ' + puesto.formato.rate + ' Hz · ' +
+        (puesto.formato.canales === 2 ? 'estéreo' : 'mono') + ' (' + puesto.formato.origen + ')',
+    };
+  }
+
+  // Ni firma ni etiqueta útil. Se guarda TAL CUAL: un archivo intacto que
+  // quizá ffmpeg sepa leer es mejor que uno que se ha roto al reinterpretarlo.
+  const sub = (/audio\/([a-z0-9.+-]+)/i.exec(mimeType || '') || [])[1] || 'bin';
+  return {
+    bytes: buf,
+    tipo: mimeType || 'application/octet-stream',
+    extension: '.' + sub.replace(/[^a-z0-9]/gi, ''),
+    editable: false,
+    descripcion: 'desconocido (' + (mimeType || 'sin mimeType') + ', empieza por ' +
+      buf.toString('hex', 0, 4) + ')',
+  };
+}
+
+/**
+ * Los formatos de PCM que salen de un generador de audio, con sus bytes por
+ * segundo (16 bits = 2 bytes por muestra y canal). De más a menos probable en
+ * un modelo de música.
+ */
 const FORMATOS_PCM = [
   { rate: 48000, canales: 2 },
   { rate: 44100, canales: 2 },
@@ -787,52 +820,44 @@ const FORMATOS_PCM = [
   { rate: 16000, canales: 1 },
 ];
 
-function bytesPorSegundoDe(f) {
-  return f.rate * f.canales * 2;
-}
-
 /**
- * Qué formato tiene este PCM, mirando lo que declara Google y lo que dicen los
- * bytes. Devuelve siempre algo utilizable.
+ * Qué formato tiene un bloque de PCM crudo.
+ *
+ * Google declara la frecuencia en el mimeType pero casi nunca los canales, y
+ * suponer uno es razonable para una voz y está mal para música. Así que lo que
+ * no venga declarado SE DEDUCE: se sabe cuántos segundos se pidieron y cuántos
+ * bytes han llegado, y de ahí salen los bytes por segundo, que señalan un único
+ * formato de los que existen en la práctica. Es una medición, no una
+ * suposición.
  */
 function formatoDelPcm(pcm, mimeType, segundosPedidos) {
   const rateDeclarado = parseInt((/rate=(\d+)/.exec(mimeType || '') || [])[1], 10) || 0;
   const canalesDeclarados = parseInt((/channels=(\d+)/.exec(mimeType || '') || [])[1], 10) || 0;
 
-  // Con las dos cosas declaradas no hay nada que deducir.
   if (rateDeclarado && canalesDeclarados) {
     return { rate: rateDeclarado, canales: canalesDeclarados, origen: 'declarado' };
   }
 
-  // Sin una duración con la que comparar no hay medición posible. Se usa el
-  // formato más común en música, que es lo que compone este modelo.
   const segundos = Number(segundosPedidos) || 0;
   if (segundos <= 0 || pcm.length < 1000) {
-    return {
-      rate: rateDeclarado || 48000,
-      canales: canalesDeclarados || 2,
-      origen: 'por defecto',
-    };
+    return { rate: rateDeclarado || 48000, canales: canalesDeclarados || 2, origen: 'por defecto' };
   }
 
   const medidos = pcm.length / segundos;
-  // El candidato cuyo caudal de bytes más se parezca al medido. Si el mimeType
-  // declaró la frecuencia, sólo se consideran los que la respetan: se le hace
-  // caso en lo que dice y se deduce sólo lo que calla.
-  const candidatos = rateDeclarado
-    ? FORMATOS_PCM.filter((f) => f.rate === rateDeclarado)
-    : FORMATOS_PCM;
+  // Si el mimeType declaró la frecuencia, se le hace caso en eso y sólo se
+  // deduce lo que calla.
+  const candidatos = rateDeclarado ? FORMATOS_PCM.filter((f) => f.rate === rateDeclarado) : FORMATOS_PCM;
   const lista = candidatos.length ? candidatos : FORMATOS_PCM;
 
   let mejor = lista[0];
   let mejorError = Infinity;
   for (const f of lista) {
-    const error = Math.abs(bytesPorSegundoDe(f) - medidos) / bytesPorSegundoDe(f);
+    const suyos = f.rate * f.canales * 2;
+    const error = Math.abs(suyos - medidos) / suyos;
     if (error < mejorError) { mejorError = error; mejor = f; }
   }
-
   // Si ni el mejor candidato se acerca, la duración real no es la pedida y la
-  // medición no vale. Se vuelve a lo declarado o al formato de música.
+  // medición no vale.
   if (mejorError > 0.25) {
     return {
       rate: rateDeclarado || 48000,
@@ -843,6 +868,7 @@ function formatoDelPcm(pcm, mimeType, segundosPedidos) {
   return { rate: mejor.rate, canales: mejor.canales, origen: 'deducido de los bytes' };
 }
 
+/** Le pone cabecera WAV a un bloque de PCM crudo. Sólo se llama para PCM real. */
 function cabeceraWav(pcm, mimeType, segundosPedidos) {
   const f = formatoDelPcm(pcm, mimeType, segundosPedidos);
   const bits = 16;
@@ -865,7 +891,7 @@ function cabeceraWav(pcm, mimeType, segundosPedidos) {
 }
 
 /**
- * Corrige el tamaño declarado tras pegar varios trozos.
+ * Corrige el tamaño declarado de un WAV tras pegar varios trozos.
  *
  * La cabecera del primero sigue diciendo lo que medía ÉL. Un lector estricto
  * —ffmpeg lo es— se cree ese número y deja de leer ahí, así que la pieza sale
@@ -906,5 +932,6 @@ module.exports = {
   juntarAudio,
   cabeceraWav,
   formatoDelPcm,
+  prepararAudio,
   SIN_VOZ,
 };

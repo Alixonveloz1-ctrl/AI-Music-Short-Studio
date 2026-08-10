@@ -418,6 +418,61 @@ async function principal() {
       'la pieza final no dura lo que se pidió');
   });
 
+  comprobar('el audio comprimido NO se toca: se guarda tal cual', () => {
+    // EL FALLO QUE COSTÓ TRES RONDAS. Lyria no siempre devuelve PCM: devuelve
+    // audio ya empaquetado. El usuario midió 22601 bytes por segundo, que son
+    // ~180 kbps — un bitrate de MP3, no de PCM de ningún formato.
+    //
+    // Envolver bytes comprimidos en una cabecera WAV que declara «muestras de
+    // 16 bits» es exactamente lo que produce ruido blanco. Y no hay deducción
+    // de frecuencia que lo arregle: el error no era adivinar mal el formato,
+    // era tocar unos bytes que no había que tocar.
+    const conFirma = (firma, n) => {
+      const b = Buffer.alloc(n);
+      Buffer.from(firma).copy(b, 0);
+      return b;
+    };
+    const trama = Buffer.alloc(4000);
+    trama[0] = 0xff; trama[1] = 0xfb;
+
+    const casos = [
+      ['MP3 por trama', trama, 'audio/mpeg', '.mp3', 'audio/mpeg'],
+      ['MP3 con ID3', conFirma('ID3', 4000), '', '.mp3', 'audio/mpeg'],
+      ['OGG', conFirma('OggS', 4000), '', '.ogg', 'audio/ogg'],
+      ['FLAC', conFirma('fLaC', 4000), '', '.flac', 'audio/flac'],
+    ];
+    for (const [que, bytes, mime, ext, tipo] of casos) {
+      const r = vertex.prepararAudio(bytes, mime, 60);
+      igual(r.extension, ext, 'extensión mal detectada en ' + que);
+      igual(r.tipo, tipo, 'tipo mal detectado en ' + que);
+      // Lo importante: NI UN BYTE TOCADO.
+      igual(r.bytes.length, bytes.length, 'a ' + que + ' se le añadieron bytes');
+      cierto(r.bytes.equals(bytes), 'a ' + que + ' se le cambiaron los bytes');
+      cierto(!r.editable, que + ' se marcó como editable y no lo es');
+    }
+
+    // Un M4A se reconoce por 'ftyp' en el byte 4, no en el 0.
+    const m4a = Buffer.alloc(4000);
+    Buffer.from('ftyp').copy(m4a, 4);
+    igual(vertex.prepararAudio(m4a, '', 60).extension, '.m4a', 'M4A mal detectado');
+
+    // Y el PCM de verdad SÍ se envuelve, que es el único caso en que toca.
+    const pcm = Buffer.alloc(48000 * 2 * 2 * 60);
+    const r = vertex.prepararAudio(pcm, 'audio/L16;codec=pcm;rate=48000', 60);
+    igual(r.extension, '.wav', 'el PCM crudo debería salir como WAV');
+    igual(r.bytes.length, pcm.length + 44, 'al PCM crudo no se le puso la cabecera');
+    cierto(r.editable, 'un WAV sí se puede editar');
+
+    // Lo mismo por la puerta de arriba, que es por donde entra de verdad.
+    const respuesta = (bytes, mime) => ({ candidates: [{ content: { parts: [
+      { inlineData: { mimeType: mime, data: bytes.toString('base64') } },
+    ] } }] });
+    const salida = vertex.juntarAudio(respuesta(trama, 'audio/mpeg'), 60);
+    igual(salida.mimeType, 'audio/mpeg', 'el MP3 sale etiquetado como otra cosa');
+    igual(salida.extension, '.mp3', 'el MP3 sale con otra extensión');
+    cierto(Buffer.from(salida.base64, 'base64').equals(trama), 'el MP3 salió modificado');
+  });
+
   comprobar('la pieza suena como la compuso Lyria, no a estática', () => {
     // La comprobación de verdad: se mete un tono puro de 440 Hz y se mide qué
     // tono sale al otro lado. Con el formato mal supuesto salía a 110 Hz —dos
