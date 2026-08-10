@@ -123,6 +123,36 @@ const BUILD_OPTIONS = [
   'complexión menuda, manos finas y expresivas',
 ];
 
+// El color de la ropa es lo que más rápido distingue a dos músicos en un plano
+// general, así que a cada uno le toca uno distinto por encima de lo que diga la
+// prenda elegida.
+const COLOR_OPTIONS = [
+  'dominante azul profundo',
+  'dominante burdeos apagado',
+  'dominante verde musgo',
+  'dominante crudo y arena',
+];
+
+/**
+ * Reparte `cuantos` elementos de `lista` SIN repetir mientras alcancen.
+ *
+ * Que dos intérpretes salgan con la misma cara es el fallo más visible del
+ * corto: son dos personas, y el espectador lo nota al instante. Por eso aquí no
+ * se sortea cada uno por su cuenta —eso repite— sino que se baraja la lista y se
+ * reparte. Sólo cuando hay más músicos que opciones se vuelve a empezar.
+ */
+function repartirSinRepetir(rng, lista, cuantos) {
+  const salida = [];
+  let bolsa = [];
+  for (let n = 0; n < cuantos; n += 1) {
+    if (bolsa.length === 0) bolsa = lista.slice();
+    const i = Math.min(bolsa.length - 1, Math.floor(rng() * bolsa.length));
+    salida.push(bolsa[i]);
+    bolsa.splice(i, 1);
+  }
+  return salida;
+}
+
 /** El planificador determinista interno. Devuelve un brief creativo completo. */
 function buildHeuristicBrief(input) {
   const { config, shots, runtimeSec } = input;
@@ -157,8 +187,37 @@ function buildHeuristicBrief(input) {
     390,
   );
 
-  const face = pickFrom(rng, FACE_OPTIONS);
-  const wardrobe = pickFrom(rng, WARDROBE_OPTIONS);
+  // ─── El reparto: una descripción distinta por músico ───
+  //
+  // El brief tenía UNA descripción de personaje y los dos retratos maestros
+  // salían de ella, así que el modelo dibujaba dos veces a la misma chica. Aquí
+  // se reparte un rostro, un peinado, una prenda y un color a cada intérprete.
+  const cuantosMusicos = Math.max(1, Number(formation && formation.performerCount) || 1);
+  const caras = repartirSinRepetir(rng, FACE_OPTIONS, cuantosMusicos);
+  const pelos = repartirSinRepetir(rng, HAIR_OPTIONS, cuantosMusicos);
+  const ropas = repartirSinRepetir(rng, WARDROBE_OPTIONS, cuantosMusicos);
+  const colores = repartirSinRepetir(rng, COLOR_OPTIONS, cuantosMusicos);
+  const cuerpos = repartirSinRepetir(rng, BUILD_OPTIONS, cuantosMusicos);
+  const edad = performerType?.id.startsWith('young') ? 'entre 18 y 24 años' : 'entre 28 y 38 años';
+
+  const cast = [];
+  for (let n = 0; n < cuantosMusicos; n += 1) {
+    const suyo = instruments.length ? instruments[n % instruments.length] : null;
+    cast.push({
+      instrument: suyo ? suyo.name : '',
+      summary: truncate(
+        `${suyo ? 'toca ' + suyo.name + ', ' : ''}con la atención puesta en la interpretación, presencia tranquila y contenida, sin gestos teatrales.`,
+        380,
+      ),
+      face: truncate(caras[n], 290),
+      hair: truncate(pelos[n], 190),
+      wardrobe: truncate(`${ropas[n]}, ${colores[n]}`, 290),
+      build: truncate(cuerpos[n], 190),
+      apparentAge: edad,
+      accessories: suyo ? [`funda del ${suyo.name}`] : [],
+    });
+  }
+
 
   const brief = {
     title: truncate(title, 78),
@@ -174,18 +233,18 @@ function buildHeuristicBrief(input) {
     mood,
     palette: palette.slice(0, 4),
     timeOfDay,
+    // `character` sigue siendo el intérprete principal, para todo lo que habla
+    // de «el intérprete» en singular. `cast` es la lista completa.
     character: {
-      summary: truncate(
-        'con la atención puesta en la interpretación, presencia tranquila y contenida, sin gestos teatrales.',
-        380,
-      ),
-      face: truncate(face, 290),
-      hair: truncate(pickFrom(rng, HAIR_OPTIONS), 190),
-      wardrobe: truncate(wardrobe, 290),
-      build: truncate(pickFrom(rng, BUILD_OPTIONS), 190),
-      apparentAge: performerType?.id.startsWith('young') ? 'entre 18 y 24 años' : 'entre 28 y 38 años',
+      summary: cast[0].summary,
+      face: cast[0].face,
+      hair: cast[0].hair,
+      wardrobe: cast[0].wardrobe,
+      build: cast[0].build,
+      apparentAge: cast[0].apparentAge,
       accessories: lead ? [`funda del ${lead.name}`, 'anillo sencillo en la mano derecha'] : [],
     },
+    cast,
     environment: {
       location: truncate(
         config.scenarioCustom?.trim() ||

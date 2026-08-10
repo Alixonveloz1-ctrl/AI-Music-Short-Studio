@@ -35,6 +35,47 @@ function proporcionDe(formatoId) {
   return formatoId ? formato(formatoId).proporcion : OUTPUT_ASPECT_RATIO;
 }
 
+/**
+ * Qué hay que hacer con cada imagen de referencia.
+ *
+ * ESTO NO ES UN DETALLE DE REDACCIÓN. Antes todas las referencias llevaban el
+ * mismo texto —«copia de ella la identidad: la misma cara, el mismo pelo…»— y
+ * al generar el retrato del SEGUNDO intérprete se le adjuntaba el del primero.
+ * Es decir: se le pedía explícitamente que copiara esa cara, y salían las dos
+ * músicas siendo la misma persona. La instrucción pegada a la imagen gana
+ * siempre a cualquier matiz que vaya en el texto del prompt.
+ *
+ * Una imagen de referencia sin decir PARA QUÉ es una imagen que el modelo
+ * interpreta como quiere.
+ */
+const TEXTO_DE_REFERENCIA = {
+  // La misma persona o el mismo objeto: manténlo igual.
+  identidad:
+    '↑ REFERENCIA YA APROBADA. Copia de ella la identidad: la misma cara, el ' +
+    'mismo pelo, la misma ropa y el mismo instrumento. NO copies su encuadre ' +
+    'ni su pose: esta imagen nueva es otro plano.',
+
+  // OTRO intérprete del mismo grupo: tiene que diferenciarse.
+  otroInterprete:
+    '↑ ESTE ES OTRO INTÉRPRETE DEL GRUPO, NO la persona que hay que dibujar ' +
+    'ahora. La persona de la imagen nueva tiene que ser CLARAMENTE DISTINTA de ' +
+    'esta: otro rostro, otro peinado y otro color de ropa. Lo ÚNICO que se ' +
+    'copia de aquí es el estilo de dibujo, la calidad del trazo y la luz, para ' +
+    'que las dos parezcan de la misma película. NO repitas esta cara.',
+
+  // El lugar donde ocurre todo.
+  lugar:
+    '↑ EL ESCENARIO YA APROBADO. La imagen nueva ocurre EN ESTE MISMO SITIO: ' +
+    'la misma arquitectura, los mismos objetos, la misma hora del día y la ' +
+    'misma luz. Cambia solo el punto de vista.',
+
+  // La escena maestra: dónde está cada cual dentro del lugar.
+  escena:
+    '↑ LA ESCENA YA APROBADA: el intérprete dentro de su escenario. De aquí se ' +
+    'conservan las identidades, el lugar y la luz. La imagen nueva es OTRO ' +
+    'PLANO del mismo momento, con otro encuadre.',
+};
+
 class ProveedorError extends Error {
   constructor(message, status) {
     super(message);
@@ -190,11 +231,7 @@ async function imagenConGemini(opciones) {
         data: ref.base64,
       },
     });
-    partes.push({
-      text: '↑ REFERENCIA YA APROBADA. Copia de ella la identidad: la misma cara, ' +
-        'el mismo pelo, la misma ropa, el mismo instrumento y el mismo lugar. ' +
-        'NO copies su encuadre ni su pose: esta imagen nueva es otro plano.',
-    });
+    partes.push({ text: TEXTO_DE_REFERENCIA[ref.rol] || TEXTO_DE_REFERENCIA.identidad });
   }
 
   let texto = String(prompt).slice(0, 4000);
@@ -464,6 +501,7 @@ function fragmentosNecesarios(segundos) {
 
 module.exports = {
   ProveedorError,
+  TEXTO_DE_REFERENCIA,
   generarImagen,
   iniciarVideo,
   consultarVideo,

@@ -208,7 +208,27 @@ function normalizeCreativeBrief(candidate, fallback, shotCount) {
 
   const tempo = Number(rawMusic.tempoBpm);
 
+  // ─── El reparto ───
+  //
+  // No se le pide al modelo: describir a cuatro personas distintas y no
+  // repetirse es justo donde un modelo falla, y el planificador determinista ya
+  // reparte rostros sin repetición. Así que el reparto viene siempre de ahí, y
+  // lo único que el modelo puede tocar es al intérprete principal.
+  const cast = (fallback.cast ?? []).map((miembro, i) =>
+    i === 0
+      ? {
+          ...miembro,
+          summary: clamp(rawCharacter.summary, 380, miembro.summary),
+          face: clamp(rawCharacter.face, 290, miembro.face),
+          hair: clamp(rawCharacter.hair, 190, miembro.hair),
+          wardrobe: clamp(rawCharacter.wardrobe, 290, miembro.wardrobe),
+          build: clamp(rawCharacter.build, 190, miembro.build),
+        }
+      : miembro,
+  );
+
   return {
+    cast,
     title: clamp(raw.title, 78, fallback.title),
     logline: clamp(raw.logline, 390, fallback.logline),
     emotionalIntent: clamp(raw.emotionalIntent, 290, fallback.emotionalIntent),

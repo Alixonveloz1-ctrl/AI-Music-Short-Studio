@@ -58,6 +58,8 @@ const productor = require(path.join(RAIZ, 'api/_lib/productor.js'));
 const montaje = require(path.join(RAIZ, 'api/_lib/montaje.js'));
 const audio = require(path.join(RAIZ, 'api/_lib/audio.js'));
 const planificador = require(path.join(RAIZ, 'api/_lib/planificador.js'));
+const arte = require(path.join(RAIZ, 'api/_lib/arte.js'));
+const vertex = require(path.join(RAIZ, 'api/_lib/vertex.js'));
 const { construirPlan } = require(path.join(RAIZ, 'api/_lib/plan.js'));
 
 const CONFIG = {
@@ -386,6 +388,119 @@ async function principal() {
       planificador.SYSTEM_PROMPT.indexOf('aguanten volver') !== -1,
       'el Director no recibe la instruccion de escribir tomas que aguanten volver',
     );
+  });
+
+  // ── Los prompts ──
+  console.log('\nLos prompts dicen lo que el usuario pidió');
+
+  function bibliaDe(cambios) {
+    const config = Object.assign({}, CONFIG, cambios || {});
+    const e = productor.planStructure(60);
+    const brief = planificador.buildHeuristicBrief({ config, runtimeSec: 60, shots: e.shots });
+    return { config, biblia: arte.buildVisualBible(config, brief), estructura: e };
+  }
+
+  comprobar('el estilo abre el prompt y prohíbe lo contrario', () => {
+    // Se pidió anime y el personaje salía fotorrealista: el estilo iba como un
+    // punto más a mitad del texto y el modelo lo tomó por sugerencia.
+    const { config, biblia } = bibliaDe({ visualStyleId: 'anime_cinematic' });
+    const p = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín');
+    cierto(p.indexOf('ESTILO VISUAL (INNEGOCIABLE') === 0, 'el estilo no abre el prompt');
+    cierto(/PROHIBIDO/.test(p) && /fotorrealismo/.test(p), 'no prohíbe la fotografía en un estilo dibujado');
+
+    const real = bibliaDe({ visualStyleId: 'realistic' });
+    const pr = arte.buildCharacterPrompt(real.biblia, real.config, 1, 1, 'Violín');
+    cierto(/PROHIBIDO/.test(pr) && /anime/.test(pr.split('PROHIBIDO')[1]), 'no prohíbe el anime en un estilo realista');
+  });
+
+  comprobar('lo que escribe el usuario manda sobre el catálogo', () => {
+    // Pidió «azotea de noche con luces» y salió una azotea de día genérica: su
+    // texto competía de igual a igual con los elementos del catálogo.
+    const { config, biblia } = bibliaDe({
+      scenarioId: 'rooftop',
+      scenarioCustom: 'azotea de noche, decorada con luces decorativas',
+    });
+    const p = arte.buildEnvironmentPrompt(biblia, config);
+    cierto(/INDICACIÓN DEL USUARIO SOBRE EL ESCENARIO/.test(p), 'su indicación no va señalada');
+    cierto(/MANDA sobre todo/.test(p), 'no se dice que su indicación tenga prioridad');
+    // Y va ANTES que los elementos del catálogo, que son los que contradecía.
+    cierto(
+      p.indexOf('INDICACIÓN DEL USUARIO') < p.indexOf('Elementos principales'),
+      'su indicación va después de los elementos del catálogo',
+    );
+  });
+
+  comprobar('el escenario maestro se pide vacío', () => {
+    // Si sale alguien tocando, esa persona se cuela como referencia en las
+    // tomas y acaban saliendo intérpretes duplicados.
+    const { config, biblia } = bibliaDe({});
+    const p = arte.buildEnvironmentPrompt(biblia, config);
+    cierto(/ESCENARIO VACÍO/.test(p), 'no lo pide vacío');
+    cierto(/SIN PERSONAS/.test(p), 'no lo repite en los requisitos');
+  });
+
+  comprobar('cada intérprete tiene SU cara, no la del primero', () => {
+    // El fallo tal como lo vio el usuario: eligió un dúo, violín y chelo, y los
+    // dos retratos maestros le devolvieron a la misma chica. La causa era que
+    // el brief traía UN solo personaje y los dos prompts lo copiaban.
+    const { config, biblia } = bibliaDe({
+      formationId: 'duo',
+      instrumentIds: ['violin', 'cello'],
+    });
+    igual(biblia.cast.length, 2, 'el reparto no tiene dos intérpretes');
+    cierto(biblia.cast[0].face !== biblia.cast[1].face, 'los dos intérpretes tienen el mismo rostro');
+    cierto(biblia.cast[0].hair !== biblia.cast[1].hair, 'los dos intérpretes tienen el mismo pelo');
+    cierto(biblia.cast[0].wardrobe !== biblia.cast[1].wardrobe, 'los dos visten igual');
+
+    const p1 = arte.buildCharacterPrompt(biblia, config, 1, 2, 'Violín');
+    const p2 = arte.buildCharacterPrompt(biblia, config, 2, 2, 'Chelo');
+    cierto(p1.indexOf(biblia.cast[0].face) !== -1, 'el retrato 1 no describe al intérprete 1');
+    cierto(p2.indexOf(biblia.cast[1].face) !== -1, 'el retrato 2 no describe al intérprete 2');
+    cierto(p2.indexOf(biblia.cast[0].face) === -1, 'el retrato 2 sigue describiendo la cara del intérprete 1');
+  });
+
+  comprobar('con varios músicos la continuidad no pide «el mismo rostro»', () => {
+    // Decirle «mismo rostro en todas las tomas» a un dúo es pedirle justo el
+    // error: lo que se repite es cuál rostro le toca a cada uno.
+    const solo = bibliaDe({ formationId: 'solo' }).biblia;
+    cierto(
+      solo.continuityRules.some((r) => /Mismo rostro en todas las tomas/.test(r)),
+      'con un solista debería seguir habiendo un único rostro',
+    );
+    const duo = bibliaDe({ formationId: 'duo', instrumentIds: ['violin', 'cello'] }).biblia;
+    cierto(
+      !duo.continuityRules.some((r) => /Mismo rostro en todas las tomas/.test(r)),
+      'con un dúo sigue pidiendo un rostro único',
+    );
+    cierto(
+      duo.continuityRules.some((r) => /2 personas distintas/.test(r)),
+      'no se dice que son dos personas distintas',
+    );
+  });
+
+  comprobar('donde salen varios se lista quién es quién', () => {
+    const duo = bibliaDe({ formationId: 'duo', instrumentIds: ['violin', 'cello'] });
+    const escena = arte.buildScenePrompt(duo.biblia, duo.config);
+    cierto(/REPARTO/.test(escena), 'la escena maestra no lleva el reparto');
+    cierto(/PERSONAS DISTINTAS/.test(escena), 'no avisa de que son personas distintas');
+    cierto(escena.indexOf(duo.biblia.cast[1].face) !== -1, 'la escena no describe al segundo intérprete');
+
+    // Con un solista la lista sobra y no debe aparecer.
+    const solo = bibliaDe({ formationId: 'solo' });
+    cierto(!/REPARTO/.test(arte.buildScenePrompt(solo.biblia, solo.config)), 'un solista no necesita reparto');
+  });
+
+  comprobar('a cada referencia se le dice PARA QUÉ es', () => {
+    // El fallo que hacía que los dos intérpretes fueran la misma chica: todas
+    // las referencias llevaban «copia esta identidad», incluida la del OTRO
+    // intérprete que se adjunta al generar el segundo retrato.
+    const t = vertex.TEXTO_DE_REFERENCIA;
+    cierto(t && t.otroInterprete, 'no existe un texto para «otro intérprete»');
+    cierto(/DISTINTA/.test(t.otroInterprete), 'no pide que sea distinta');
+    cierto(/NO repitas esta cara/.test(t.otroInterprete), 'no prohíbe repetir la cara');
+    cierto(!/Copia de ella la identidad/.test(t.otroInterprete), 'sigue pidiendo copiar la identidad');
+    cierto(/Copia de ella la identidad/.test(t.identidad), 'la referencia de identidad ya no pide copiarla');
+    cierto(/MISMO SITIO/.test(t.lugar), 'la referencia de lugar no habla del sitio');
   });
 
   // ── El montaje ──

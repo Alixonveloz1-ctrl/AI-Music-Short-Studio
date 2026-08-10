@@ -103,6 +103,11 @@ function buildVisualBible(config, brief) {
     ? `${style?.treatment ?? ''}. Indicaciones del usuario: ${config.visualStyleCustom.trim()}`
     : (style?.treatment ?? 'imagen cinematográfica');
 
+  const reparto =
+    Array.isArray(brief.cast) && brief.cast.length
+      ? brief.cast.map((m) => ({ ...m }))
+      : [{ ...brief.character, instrument: instrumentNames[0] ?? '' }];
+
   return {
     character: {
       summary: `${performerType?.descriptor ?? 'un intérprete'} — ${brief.character.summary}`,
@@ -113,6 +118,9 @@ function buildVisualBible(config, brief) {
       apparentAge: brief.character.apparentAge,
       accessories: brief.character.accessories,
     },
+    // Un intérprete por músico, cada uno con su rostro. `character` es el
+    // primero de la lista, para todo lo que sigue hablando en singular.
+    cast: reparto,
     instrument: {
       names: instrumentNames,
       appearance: brief.instrumentAppearance,
@@ -139,9 +147,22 @@ function buildVisualBible(config, brief) {
       finish: `paleta dominante: ${brief.palette.join(', ')}`,
     },
     continuityRules: dedupe([
-      `Mismo rostro en todas las tomas: ${brief.character.face}`,
-      `Mismo cabello: ${brief.character.hair}`,
-      `Mismo vestuario: ${brief.character.wardrobe}`,
+      // Con un solo músico la regla habla de él. Con varios, decir «mismo
+      // rostro» sería pedir justo lo contrario de lo que hace falta: los
+      // rostros son varios y lo que se repite es cuál le toca a cada uno.
+      ...(reparto.length > 1
+        ? [
+            `Son ${reparto.length} personas distintas y cada una conserva SU rostro en todas las tomas`,
+            ...reparto.map(
+              (m, i) =>
+                `Intérprete ${i + 1}${m.instrument ? ' (' + m.instrument + ')' : ''}: ${m.face}. Cabello: ${m.hair}. Vestuario: ${m.wardrobe}`,
+            ),
+          ]
+        : [
+            `Mismo rostro en todas las tomas: ${brief.character.face}`,
+            `Mismo cabello: ${brief.character.hair}`,
+            `Mismo vestuario: ${brief.character.wardrobe}`,
+          ]),
       `Mismo instrumento: ${instrumentNames.join(' + ')} — ${brief.instrumentAppearance}`,
       `Misma relación física intérprete-instrumento: ${postures.join('; ')}`,
       `Mismo escenario y mismos elementos: ${location}`,
@@ -174,7 +195,10 @@ function block(title, lines) {
 }
 
 function joinBlocks(blocks) {
-  return blocks.filter((b) => b.trim().length > 0).join('\n\n');
+  // Los bloques opcionales devuelven null cuando no aplican —una indicación
+  // que el usuario no escribió, por ejemplo— así que se descartan antes de
+  // tocarlos.
+  return blocks.filter((b) => b && String(b).trim().length > 0).join('\n\n');
 }
 
 const CONTINUITY_HEADER =
@@ -245,6 +269,25 @@ function cabeceraDeEstilo(bible, config) {
 
 /** PERSONAJE MAESTRO — el primer eslabón de la cadena de continuidad (PRD §17). */
 /**
+ * LO QUE ESCRIBIÓ EL USUARIO, con prioridad declarada.
+ *
+ * Su texto ya se mezclaba en la descripción del lugar, pero como una frase más
+ * entre las demás: pidió «azotea de noche con luces decorativas» y el prompt
+ * seguía enumerando «skyline, suelo de grava, antenas» del catálogo y una hora
+ * del día que había puesto el planificador. Tres indicaciones del mismo rango
+ * que se contradicen, y el modelo eligió la que quiso.
+ *
+ * Lo que él escribe no es una sugerencia: es lo único que no salió de una
+ * lista. Va aparte, señalado, y diciendo que gana.
+ */
+function bloqueIndicacion(texto, sobre) {
+  const t = String(texto || '').trim();
+  if (!t) return null;
+  return 'INDICACIÓN DEL USUARIO SOBRE ' + sobre + ' (MANDA sobre todo lo que ' +
+    'venga después: si algo de abajo la contradice, se ignora): ' + t;
+}
+
+/**
  * RETRATO MAESTRO DE UN INTÉRPRETE.
  *
  * Hay UNO POR CADA intérprete de la formación, no uno con todos dentro. Con
@@ -256,25 +299,61 @@ function cabeceraDeEstilo(bible, config) {
  * `indice` va de 1 a `total`, e `instrumento` es el que le toca a ESTE
  * intérprete.
  */
+/**
+ * El intérprete número `n` (contando desde 1) del reparto.
+ *
+ * Si la biblia viene de una versión anterior y no trae reparto, se cae al
+ * personaje único de siempre: peor, pero nunca roto.
+ */
+function interprete(bible, n) {
+  const reparto = Array.isArray(bible.cast) ? bible.cast : [];
+  return reparto[n - 1] || reparto[0] || bible.character;
+}
+
+/**
+ * El reparto entero, uno por línea, para los prompts donde salen varios a la vez.
+ *
+ * Devuelve null cuando sólo hay un intérprete: ahí no hay a quién distinguir y
+ * la lista sólo sería ruido.
+ */
+function bloqueReparto(bible) {
+  const reparto = Array.isArray(bible.cast) ? bible.cast : [];
+  if (reparto.length < 2) return null;
+  return block(
+    'REPARTO — son ' + reparto.length + ' PERSONAS DISTINTAS, no la misma repetida',
+    reparto.map(
+      (m, i) =>
+        `Intérprete ${i + 1}${m.instrument ? ' (' + m.instrument + ')' : ''}: ` +
+        `${m.face}. Cabello: ${m.hair}. Vestuario: ${m.wardrobe}. ${m.build}`,
+    ),
+  );
+}
+
 function buildCharacterPrompt(bible, config, indice, total, instrumento) {
   const n = indice || 1;
   const cuantos = total || 1;
-  const suyo = instrumento || bible.instrument.names.join(' y ');
   const enGrupo = cuantos > 1;
+  // Cada intérprete tiene SU descripción en el reparto. Compartir una sola era
+  // la razón de que salieran dos veces la misma chica.
+  const quien = interprete(bible, n);
+  const suyo = instrumento || quien.instrument || bible.instrument.names.join(' y ');
 
   return joinBlocks([
     cabeceraDeEstilo(bible, config),
+    bloqueIndicacion(config.creativeDirection, 'EL CORTO'),
     'RETRATO MAESTRO DE INTÉRPRETE' + (enGrupo ? ' ' + n + ' DE ' + cuantos : '') +
       '. UNA SOLA PERSONA en el encuadre, de cuerpo entero, sosteniendo su ' + suyo +
       ' en posición de interpretación, sobre fondo neutro y limpio.',
     block('Persona', [
-      bible.character.summary,
-      `Rostro: ${bible.character.face}`,
-      `Cabello: ${bible.character.hair}`,
-      `Complexión: ${bible.character.build}`,
-      `Edad aparente: ${bible.character.apparentAge}`,
-      `Vestuario: ${bible.character.wardrobe}`,
-      bible.character.accessories.length ? `Accesorios: ${bible.character.accessories.join(', ')}` : null,
+      quien.summary,
+      `Rostro: ${quien.face}`,
+      `Cabello: ${quien.hair}`,
+      `Complexión: ${quien.build}`,
+      `Edad aparente: ${quien.apparentAge}`,
+      `Vestuario: ${quien.wardrobe}`,
+      quien.accessories && quien.accessories.length
+        ? `Accesorios: ${quien.accessories.join(', ')}`
+        : null,
     ]),
     block('Instrumento', [
       `Instrumento: ${suyo}`,
@@ -317,6 +396,8 @@ function buildEnvironmentPrompt(bible, config) {
     // al final entre los requisitos.
     'ESCENARIO VACÍO. NO debe aparecer ninguna persona, ni figura humana, ' +
       'ni silueta, ni sombra de nadie, ni instrumentos musicales. Solo el lugar.',
+    bloqueIndicacion(config && config.scenarioCustom, 'EL ESCENARIO'),
+    bloqueIndicacion(config && config.creativeDirection, 'EL CORTO'),
     `PLANO MAESTRO DE ESCENARIO: ${bible.environment.location}.`,
     block('Elementos principales', bible.environment.primaryElements),
     block('Elementos secundarios', bible.environment.secondaryElements),
@@ -341,7 +422,12 @@ function buildScenePrompt(bible, config) {
   const formation = FORMATIONS_BY_ID.get(config.formationId);
   return joinBlocks([
     cabeceraDeEstilo(bible, config),
+    bloqueIndicacion(config.scenarioCustom, 'EL ESCENARIO'),
+    bloqueIndicacion(config.creativeDirection, 'EL CORTO'),
     `PLANO MAESTRO DE ESCENA. ${bible.character.summary} interpretando su ${bible.instrument.names.join(' y ')} dentro de ${bible.environment.location}.`,
+    // Con más de un músico hay que decir quién es quién, o la escena maestra
+    // devuelve dos veces la misma persona y arrastra ese error a todas las tomas.
+    bloqueReparto(bible),
     block('Puesta en escena', [
       formation?.description ?? 'un intérprete en el centro de la escena',
       `Relación con el instrumento: ${bible.instrument.physicalRelation}`,
@@ -361,6 +447,8 @@ function buildScenePrompt(bible, config) {
 function buildShotImagePrompt(bible, shot, config) {
   return joinBlocks([
     cabeceraDeEstilo(bible, config || bible.config || {}),
+    bloqueIndicacion(config && config.scenarioCustom, 'EL ESCENARIO'),
+    bloqueIndicacion(config && config.creativeDirection, 'EL CORTO'),
     `${shot.label.toUpperCase()} — ${SHOT_TYPE_LABELS[shot.shotType]}.`,
     shot.description,
     block('Intención', [shot.purpose, `Momento del corto: ${beatLabel(shot.beat)}`]),
@@ -368,6 +456,7 @@ function buildShotImagePrompt(bible, shot, config) {
       `Tipo de plano: ${SHOT_TYPE_LABELS[shot.shotType]}`,
       `Movimiento previsto en el vídeo: ${CAMERA_MOVE_LABELS[shot.cameraMove]}`,
     ]),
+    bloqueReparto(bible),
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);

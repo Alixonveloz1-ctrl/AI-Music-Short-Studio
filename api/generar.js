@@ -255,7 +255,7 @@ async function hacerImagen(proyecto, activo, gen, inicio) {
   // cuatro imágenes del bucket, y traerlas para tirarlas gasta segundos de los
   // sesenta que tiene la función.
   const referencias = modelos.admiteReferencias(modelo.id)
-    ? await bajarReferencias(token, proyecto, gen.referenceAssetIds)
+    ? await bajarReferencias(token, proyecto, gen.referenceAssetIds, activo)
     : [];
 
   let r;
@@ -292,7 +292,7 @@ async function hacerImagen(proyecto, activo, gen, inicio) {
  * Son LA continuidad: el personaje, el escenario y la escena que el usuario dio
  * por buenos. Se bajan del bucket porque el proyecto solo guarda su ruta.
  */
-async function bajarReferencias(token, proyecto, ids) {
+async function bajarReferencias(token, proyecto, ids, activo) {
   const salida = [];
   for (const rid of (ids || []).slice(0, 4)) {
     const dep = proyecto.assets.find((a) => a.id === rid);
@@ -301,11 +301,33 @@ async function bajarReferencias(token, proyecto, ids) {
     const bytes = await bajarObjeto(token, cfg.bucket, file.path);
     salida.push({
       assetId: rid,
+      rol: papelDeReferencia(activo, dep),
       base64: bytes.toString('base64'),
       mimeType: file.mimeType || 'image/png',
     });
   }
   return salida;
+}
+
+/**
+ * PARA QUÉ se le adjunta esta referencia a esta generación.
+ *
+ * De aquí sale la frase que acompaña a la imagen, y esa frase decide el
+ * resultado. El caso que lo destapó: al generar el retrato del intérprete 2 se
+ * le adjunta el del intérprete 1, y con el texto genérico —«copia esta
+ * identidad»— salían las dos músicas siendo la misma persona. Lo que hace falta
+ * decirle ahí es lo contrario: que se parezca en el ESTILO y se diferencie en
+ * la CARA.
+ */
+function papelDeReferencia(activo, referencia) {
+  const suyo = activo && activo.kind;
+  const otro = referencia && referencia.kind;
+
+  // Un retrato mirando a otro retrato: son personas DISTINTAS del mismo grupo.
+  if (suyo === 'master_character' && otro === 'master_character') return 'otroInterprete';
+  if (otro === 'master_environment') return 'lugar';
+  if (otro === 'master_scene') return 'escena';
+  return 'identidad';
 }
 
 // ---------------------------------------------------------------------------
