@@ -428,8 +428,11 @@ async function principal() {
       'm.wav', 'amb.wav', 'salida.mp4',
     );
     cierto(s.indexOf('xfade=transition=fade:duration=0.5') !== -1, 'no usa encadenado real');
-    // El segundo trozo se recorta a 4,5 s: sus 4 s de hueco más el medio que solapa.
-    cierto(s.indexOf('trim=start=0:duration=4.500') !== -1, 'el trozo encadenado no trae el solape');
+    // El segundo trozo se retima a 4,5 s: sus 4 s de hueco más el medio que
+    // solapa. Ese 4.500 aparece como objetivo de la velocidad y como duración
+    // final del trozo.
+    cierto(s.indexOf('-v L=4.500') !== -1, 'el trozo encadenado no pide el solape al calcular su velocidad');
+    cierto(s.indexOf('trim=duration=4.500') !== -1, 'el trozo encadenado no acaba durando lo que solapa');
     // Y el desplazamiento lo coloca medio segundo antes de que acabe el anterior.
     cierto(s.indexOf('offset=5.500') !== -1, 'el encadenado no arranca donde debe');
   });
@@ -454,16 +457,40 @@ async function principal() {
     cierto(settb >= 3 + concats, 'faltan normalizaciones de base de tiempo');
   });
 
-  comprobar('un clip que viene corto sostiene su último fotograma', () => {
+  comprobar('un clip que no encaja se retima, no se recorta ni se congela', () => {
     // Veo no siempre devuelve los segundos que se le piden, y un plano
     // reutilizado ocupa a veces un hueco más largo que aquel para el que se
-    // generó. Sin esto la película sale más corta que su línea de tiempo.
+    // generó. Recortar tira el final del plano; congelar el último fotograma
+    // canta. Se cambia la velocidad, que conserva el plano entero y solo
+    // altera el ritmo.
     const s = montaje.construirScript(
       [{ local: 'a.mp4', durationSec: 7, transitionIn: 'fade_in' }],
       'm.wav', 'amb.wav', 'salida.mp4',
     );
-    cierto(s.indexOf('tpad=stop_mode=clone:stop_duration=7.000') !== -1, 'no sostiene el fotograma');
+    // La duración real se mide en el momento del montaje, no al escribir el
+    // script: aquí todavía no se sabe cuánto dura el clip.
+    cierto(s.indexOf('duracion() {') !== -1, 'no mide la duración real del clip');
+    cierto(s.indexOf('ffprobe') !== -1, 'no usa ffprobe para medir');
+    cierto(s.indexOf('-v L=7.000') !== -1, 'no calcula la velocidad contra el hueco');
+    cierto(s.indexOf('setpts=PTS*${R0}') !== -1, 'no aplica la velocidad calculada');
+    // Y no hay ningún recorte del principio: el plano entra entero.
+    cierto(s.indexOf('trim=start=0:duration=') === -1, 'sigue recortando el clip por el principio');
+    // El congelado sigue existiendo como red de seguridad para el caso extremo
+    // en que ni al doble de lento se llegue, pero ya no es el plan.
+    cierto(s.indexOf('tpad=stop_mode=clone') !== -1, 'falta la red de seguridad');
     cierto(s.indexOf('trim=duration=7.000') !== -1, 'no fuerza la duración exacta');
+  });
+
+  comprobar('la velocidad no se va a cámara lenta ni a acelerón', () => {
+    // Más allá de la mitad o el doble deja de leerse como otro ritmo.
+    const s = montaje.construirScript(
+      [{ local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' }],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    cierto(s.indexOf('if(r>2)r=2') !== -1, 'no limita la ralentización');
+    cierto(s.indexOf('if(r<0.25)r=0.25') !== -1, 'no limita la aceleración');
+    // Y si la medición fallara y devolviera cero, no se divide por cero.
+    cierto(s.indexOf('if(C<=0)C=L') !== -1, 'una medición vacía rompería el cálculo');
   });
 
   comprobar('un clip repetido se descarga una sola vez', () => {

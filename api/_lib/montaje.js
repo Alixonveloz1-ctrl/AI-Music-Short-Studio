@@ -50,6 +50,19 @@ const FUNDIDO_BLOQUE = 0.4;
 // corte y se convierte en un recurso de estilo, que es otra cosa.
 const DISOLVENCIA = 0.5;
 
+// Hasta dónde se puede estirar o encoger un clip para que encaje en su hueco.
+//
+// Un clip nunca se recorta ni se congela: se RETIMA. Si sobra o falta metraje
+// se cambia la velocidad, que conserva el plano entero y solo altera el ritmo.
+// Recortar tira el final —justo el fotograma que hace invisible el corte con la
+// toma siguiente— y congelar canta muchísimo.
+//
+// Los topes son de oficio: más allá de la mitad o el doble ya no se lee como
+// una toma con otro ritmo, se lee como cámara lenta o como un acelerón. Y no se
+// puede bajar de 0.25 sin que el movimiento se vuelva un borrón.
+const VELOCIDAD_MAX = 2;    // hasta el doble de lento
+const VELOCIDAD_MIN = 0.25; // hasta cuatro veces más rápido
+
 // La música manda y el ambiente acompaña. Con las dos al mismo volumen el
 // ambiente se come el instrumento, que es justo lo que el corto viene a enseñar.
 const GANANCIA_MUSICA = 0.85;
@@ -92,31 +105,57 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
     (entrada, i) => entrada.durationSec + (llevaEncadenado[i] ? DISOLVENCIA : 0),
   );
 
+  // La duración REAL de cada clip solo se sabe en el momento del montaje: Veo
+  // no siempre devuelve los segundos que se le pidieron. Así que se mide con
+  // ffprobe dentro del propio script y la velocidad se calcula ahí.
+  const medidas = [];
+  const yaMedido = new Map();
   entradas.forEach((entrada, i) => {
     inputs.push('-i ' + comilla(entrada.local));
+    let variable = yaMedido.get(entrada.local);
+    if (!variable) {
+      variable = 'C' + yaMedido.size;
+      yaMedido.set(entrada.local, variable);
+      medidas.push(variable + '=$(duracion ' + comilla(entrada.local) + ')');
+    }
+    // R = lo que tiene que durar / lo que dura de verdad. Mayor que 1 lo
+    // ralentiza; menor, lo acelera. Acotado para que no se lea como cámara
+    // lenta ni como un acelerón.
+    // El programa de awk va en comillas SIMPLES y los valores entran con -v.
+    // Escribirlo entre comillas dobles obliga a escapar las del printf, y ese
+    // escapado se pierde con solo mirarlo: el shell se comía las comillas y awk
+    // recibía un programa roto.
+    medidas.push(
+      'R' + i + '=$(awk -v L=' + n3(largos[i]) + ' -v C="$' + variable + '" ' +
+        "'BEGIN{if(C<=0)C=L; r=L/C;" +
+        ' if(r>' + VELOCIDAD_MAX + ')r=' + VELOCIDAD_MAX + ';' +
+        ' if(r<' + VELOCIDAD_MIN + ')r=' + VELOCIDAD_MIN + ';' +
+        ' printf "%.6f", r}\')',
+    );
+  });
 
+  entradas.forEach((entrada, i) => {
     const primera = i === 0;
     const ultima = i === entradas.length - 1;
     const siguiente = entradas[i + 1];
     const largo = largos[i];
 
     const cadena = [
-      // El clip se recorta a lo que dura su hueco. Veo no siempre devuelve
-      // exactamente los segundos que se le pidieron.
-      'trim=start=0:duration=' + n3(largo),
-      'setpts=PTS-STARTPTS',
       // Encajar sin deformar: se reduce hasta caber y se rellena con negro. Un
       // scale a pelo estiraría la imagen si el clip viniera con otra relación.
       'scale=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':force_original_aspect_ratio=decrease',
       'pad=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':(ow-iw)/2:(oh-ih)/2',
       'setsar=1',
+      // Aquí se estira o se encoge el plano hasta su hueco. Conserva los dos
+      // extremos del clip y solo cambia el ritmo.
+      'setpts=PTS*${R' + i + '}',
       'fps=' + OUTPUT_FPS,
-      // Y si el clip viene CORTO —Veo puede devolver menos segundos de los
-      // pedidos, y un plano reutilizado ocupa a veces un hueco más largo que
-      // aquel para el que se generó— se sostiene el último fotograma hasta
-      // completar. Sin esto la película sale más corta que su propia línea de
-      // tiempo y la música deja de cuadrar con la imagen.
+      // Red de seguridad, no el plan: si el clip fuera tan corto que ni al
+      // doble de lento llega, se sostiene el último fotograma lo que falte.
+      // Con clips de Veo de 4 a 8 segundos y huecos de 8 como mucho, esto no
+      // debería entrar nunca.
       'tpad=stop_mode=clone:stop_duration=' + n3(largo),
+      // Y la duración queda clavada, venga el clip como venga.
       'trim=duration=' + n3(largo),
       'setpts=PTS-STARTPTS',
       // Todos los trozos con la MISMA base de tiempo. `concat` cambia la del
@@ -199,7 +238,11 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
   const orden = [
     'ffmpeg -y -hide_banner -loglevel error',
     inputs.join(' '),
-    '-filter_complex ' + comilla(filtros.join(';')),
+    // Comillas DOBLES, no simples: el filtro lleva dentro las variables ${R0},
+    // ${R1}... con la velocidad que se acaba de medir, y entre comillas simples
+    // el shell no las sustituiría. No hay ninguna comilla doble ni ninguna
+    // barra invertida dentro del filtro, así que es seguro.
+    '-filter_complex "' + filtros.join(';') + '"',
     '-map "[vout]" -map "[aout]"',
     '-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -r ' + OUTPUT_FPS,
     '-c:a aac -b:a 192k -ar ' + AUDIO_SAMPLE_RATE,
@@ -218,6 +261,17 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
     '# a crear error.txt — justo el caso en el que mas falta hace.',
     'exec 2>error.txt',
     'set -eu',
+    '',
+    '# Cuanto dura DE VERDAD cada clip. Veo no siempre devuelve los segundos',
+    '# que se le pidieron, y un plano reutilizado ocupa a veces un hueco mas',
+    '# largo que aquel para el que se genero. De aqui sale la velocidad a la',
+    '# que hay que reproducir cada uno para que encaje.',
+    'duracion() {',
+    '  ffprobe -v error -show_entries format=duration \\',
+    '    -of default=noprint_wrappers=1:nokey=1 "$1"',
+    '}',
+    '',
+    medidas.join('\n'),
     '',
     orden,
     '',
