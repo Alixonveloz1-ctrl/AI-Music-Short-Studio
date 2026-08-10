@@ -83,8 +83,28 @@ function instalarGoogleSimulado() {
           if (corte === -1) continue;
           const cabeceras = parte.slice(0, corte);
           const contenido = parte.slice(corte + 4).replace(/\r\n$/, '');
+          // El Content-Type que declara ESTA parte del cuerpo.
+          const tipoDeclarado = (/content-type:\s*([^\r\n]+)/i.exec(cabeceras) || [, ''])[1].trim();
           if (/application\/json/i.test(cabeceras) && nombre === null) {
-            try { nombre = JSON.parse(contenido).name; } catch (e) { /* no era la parte de metadatos */ }
+            try {
+              const meta = JSON.parse(contenido);
+              nombre = meta.name;
+              // Google compara LETRA A LETRA el tipo de la parte con el que
+              // declaran los metadatos, y rechaza la subida entera si difieren.
+              // El simulacro no lo comprobaba, así que un desajuste de
+              // mayúsculas ("UTF-8" contra "utf-8") pasaba aquí y estallaba en
+              // producción impidiendo crear ni un proyecto.
+              if (meta.contentType && meta.contentType !== tipoDeclarado) {
+                return {
+                  ok: false, status: 400, headers: { get: () => null },
+                  json: async () => ({ error: { code: 400, message:
+                    'Content-Type specified in the upload (' + tipoDeclarado +
+                    ') does not match Content-Type specified in metadata (' +
+                    meta.contentType + ')' } }),
+                  text: async () => 'content-type mismatch',
+                };
+              }
+            } catch (e) { /* no era la parte de metadatos */ }
           } else if (nombre !== null) {
             datos = Buffer.from(contenido, 'binary');
           }

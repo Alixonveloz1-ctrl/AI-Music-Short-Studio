@@ -333,9 +333,19 @@ async function crearProyecto(proyecto) {
  */
 async function subirDocumento(token, ruta, texto, metadatos, generacionEsperada) {
   const frontera = 'ams' + crypto.randomBytes(16).toString('hex');
+
+  // UNA sola constante para el tipo, y no dos cadenas escritas a mano.
+  //
+  // Google compara LETRA A LETRA el Content-Type de la parte del cuerpo con el
+  // que declaran los metadatos, y rechaza la subida entera si difieren.
+  // Difieran en lo que difieran: aquí una decía "charset=utf-8" y la otra
+  // "charset=UTF-8", y eso bastaba para un 400 en cada guardado — o sea, no se
+  // podía crear ni un proyecto.
+  const TIPO = 'application/json; charset=utf-8';
+
   const cabecera = {
     name: ruta,
-    contentType: 'application/json; charset=utf-8',
+    contentType: TIPO,
     // Este documento cambia constantemente: si un intermediario lo cachea, el
     // usuario ve el proyecto de hace un minuto y cree que su cambio se perdió.
     cacheControl: 'no-store',
@@ -344,10 +354,10 @@ async function subirDocumento(token, ruta, texto, metadatos, generacionEsperada)
 
   const cuerpo =
     '--' + frontera + '\r\n' +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    'Content-Type: ' + TIPO + '\r\n\r\n' +
     JSON.stringify(cabecera) + '\r\n' +
     '--' + frontera + '\r\n' +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    'Content-Type: ' + TIPO + '\r\n\r\n' +
     texto + '\r\n' +
     '--' + frontera + '--';
 
