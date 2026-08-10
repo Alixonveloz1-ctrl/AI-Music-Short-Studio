@@ -134,10 +134,20 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, form
     // escapado se pierde con solo mirarlo: el shell se comía las comillas y awk
     // recibía un programa roto.
     medidas.push(
+      // r = largo del hueco / duración real del clip.
+      //
+      // Si el clip SOBRA (r < 1) no se toca la velocidad: r se deja en 1 y más
+      // abajo el `trim` se queda con los primeros segundos. Recortar es gratis
+      // y no se nota; ralentizar un plano al 50 % para meterlo en un hueco de
+      // cuatro segundos se ve a la legua. Desde que todos los clips se piden de
+      // ocho segundos, este es el caso normal.
+      //
+      // Si el clip FALTA (r > 1) sí se retima: no hay fotogramas que recortar,
+      // y estirar el movimiento es mejor que congelar el último fotograma.
       'R' + i + '=$(awk -v L=' + n3(largos[i]) + ' -v C="$' + variable + '" ' +
         "'BEGIN{if(C<=0)C=L; r=L/C;" +
+        ' if(r<1)r=1;' +
         ' if(r>' + VELOCIDAD_MAX + ')r=' + VELOCIDAD_MAX + ';' +
-        ' if(r<' + VELOCIDAD_MIN + ')r=' + VELOCIDAD_MIN + ';' +
         ' printf "%.6f", r}\')',
     );
   });
@@ -154,16 +164,18 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, form
       'scale=' + ANCHO + ':' + ALTO + ':force_original_aspect_ratio=decrease',
       'pad=' + ANCHO + ':' + ALTO + ':(ow-iw)/2:(oh-ih)/2',
       'setsar=1',
-      // Aquí se estira o se encoge el plano hasta su hueco. Conserva los dos
-      // extremos del clip y solo cambia el ritmo.
+      // Estira el plano si le faltaban segundos. Cuando le sobran, R vale 1 y
+      // esto no hace nada: del sobrante se encarga el `trim` de abajo.
       'setpts=PTS*${R' + i + '}',
       'fps=' + OUTPUT_FPS,
       // Red de seguridad, no el plan: si el clip fuera tan corto que ni al
       // doble de lento llega, se sostiene el último fotograma lo que falte.
-      // Con clips de Veo de 4 a 8 segundos y huecos de 8 como mucho, esto no
-      // debería entrar nunca.
+      // Con todos los clips pedidos a ocho segundos y huecos de ocho como
+      // mucho, esto no debería entrar nunca.
       'tpad=stop_mode=clone:stop_duration=' + n3(largo),
-      // Y la duración queda clavada, venga el clip como venga.
+      // Y la duración queda clavada, venga el clip como venga. Es también
+      // donde se descarta lo que sobra de un clip de ocho segundos metido en
+      // un hueco más corto.
       'trim=duration=' + n3(largo),
       'setpts=PTS-STARTPTS',
       // Todos los trozos con la MISMA base de tiempo. `concat` cambia la del

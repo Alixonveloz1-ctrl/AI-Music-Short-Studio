@@ -573,6 +573,10 @@ function buildAssets(config, plan) {
       spec: {
         objective: 'Componer la pieza instrumental completa del corto.',
         prompt: plan.music.prompt,
+        // Lyria sólo entiende inglés. El usuario ve el de arriba, en español;
+        // a Google se le manda éste. Se guarda en el activo para que un corto
+        // creado hoy se siga generando igual mañana.
+        promptEn: plan.music.promptEn || '',
         negativePrompt: plan.music.negativePrompt,
         referenceAssetIds: [],
         continuityNotes: [

@@ -162,6 +162,98 @@ async function construirPlan(config) {
  * (§3, §28) y una voz colada arruina el corto entero, así que la prohibición
  * viaja en el prompt Y en el prompt negativo.
  */
+/**
+ * EL PROMPT DE MÚSICA EN INGLÉS.
+ *
+ * Lyria es el ÚNICO servicio de toda la herramienta que no entiende español:
+ * contesta «Unsupported language detected. Please use one of the supported
+ * languages: en» y no compone nada. Y traducir la prosa palabra por palabra
+ * devuelve espanglish —«Instrumentación: Erhu. Carácter: tense»— que es peor
+ * que el original.
+ *
+ * Así que el encargo se escribe DOS VECES desde los mismos datos: en español
+ * para enseñárselo al usuario (PRD §19) y en inglés para mandárselo al modelo.
+ * No es una traducción, es la misma ficha compuesta en dos idiomas, y por eso
+ * sale exacta: los campos son cerrados —instrumentos, formación, carácter,
+ * tonalidad, escala— y de cada uno se sabe su equivalente.
+ *
+ * Lo que NO viaja al inglés: la estructura por secciones y la intención
+ * emocional, que son prosa libre del planificador. La estructura la sustituye
+ * la línea de tiempo [MM:SS] que arma vertex.js, que es más precisa y además es
+ * la única forma de pedirle la duración. Y la paleta de color no le dice nada a
+ * un modelo de música.
+ */
+
+// Do Re Mi → C D E. Sin esto la tonalidad llega como «Sol menor» y se ignora.
+const NOTAS_EN = { do: 'C', re: 'D', mi: 'E', fa: 'F', sol: 'G', la: 'A', si: 'B' };
+
+function tonalidadEn(texto) {
+  const t = String(texto || '').trim().toLowerCase();
+  const m = /^(do|re|mi|fa|sol|la|si)\s*(sostenido|bemol|#|b)?\s*(mayor|menor)?/.exec(t);
+  if (!m) return String(texto || '');
+  const alteracion = m[2] === 'sostenido' || m[2] === '#' ? '#' : (m[2] === 'bemol' || m[2] === 'b' ? 'b' : '');
+  const modo = m[3] === 'mayor' ? ' major' : (m[3] === 'menor' ? ' minor' : '');
+  return NOTAS_EN[m[1]] + alteracion + modo;
+}
+
+// Las cinco primeras son EXACTAMENTE las que sortea el planificador; el resto
+// están por si mañana se amplía la lista o el brief lo escribe Claude. Una
+// prueba comprueba que la tabla cubre todas las del planificador, para que
+// añadir una escala nueva sin traducirla no pase desapercibido.
+const ESCALAS_EN = {
+  'menor natural': 'natural minor', 'menor armónica': 'harmonic minor',
+  'pentatónica menor': 'minor pentatonic', 'modo dórico': 'dorian mode',
+  'modo lidio': 'lydian mode',
+  'menor melódica': 'melodic minor', 'mayor': 'major', 'menor': 'minor',
+  'pentatónica mayor': 'major pentatonic', 'modo frigio': 'phrygian mode',
+  'modo mixolidio': 'mixolydian mode', 'modo eólico': 'aeolian mode',
+  'modo locrio': 'locrian mode', 'dórico': 'dorian', 'frigio': 'phrygian',
+  'lidio': 'lydian', 'mixolidio': 'mixolydian', 'eólico': 'aeolian',
+  'locrio': 'locrian', 'blues': 'blues', 'cromática': 'chromatic',
+};
+
+const CARACTER_EN = {
+  'melancólico': 'melancholic', 'contemplativo': 'contemplative', 'sereno': 'serene',
+  'íntimo': 'intimate', 'cálido': 'warm', 'nostálgico': 'nostalgic',
+  'solemne': 'solemn', 'amplio': 'expansive', 'reverente': 'reverent',
+  'esperanzado': 'hopeful', 'luminoso': 'luminous', 'tenso': 'tense',
+  'misterioso': 'mysterious', 'contenido': 'restrained',
+};
+
+const ACUSTICA_EN = { dry: 'dry, close and intimate', natural: 'natural room reverb', hall: 'large hall reverb' };
+
+/** El nombre inglés de un instrumento: su primer alias ASCII, o su id. */
+function instrumentoEn(instrumento) {
+  const alias = (instrumento.aliases || []).find((a) => /^[\x20-\x7e]+$/.test(a));
+  return alias || String(instrumento.id).replace(/_/g, ' ');
+}
+
+function enLista(texto, tabla) {
+  return String(texto || '')
+    .split(/\s*,\s*/)
+    .map((x) => tabla[x.trim().toLowerCase()] || x.trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+function promptMusicalEn(config, brief, instrumentos, formacion, escenario) {
+  const nombres = instrumentos.map(instrumentoEn);
+  return [
+    'Instrumental music for a short film. ' + config.durationSec + ' seconds long.',
+    'Instruments: ' + (nombres.join(', ') || 'a single solo instrument') +
+      '. Ensemble: ' + String((formacion && formacion.id) || 'solo').replace(/_/g, ' ') + '.',
+    'Mood: ' + (enLista(brief.music.mood, CARACTER_EN) || 'contemplative') + '.',
+    'Key: ' + tonalidadEn(brief.music.key) +
+      '. Scale: ' + (ESCALAS_EN[String(brief.music.scale || '').toLowerCase()] || brief.music.scale) +
+      '. Tempo: around ' + brief.music.tempoBpm + ' BPM.',
+    'Recording space: ' + (ACUSTICA_EN[(escenario && escenario.acoustics)] || 'natural room reverb') + '.',
+    nombres.length > 1
+      ? 'All ' + nombres.length + ' instruments play together throughout; ' +
+        nombres[0] + ' leads the melody.'
+      : 'The solo instrument carries the melody from start to finish.',
+  ].join('\n');
+}
+
 function briefMusical(config, brief, bible) {
   const instrumentos = config.instrumentIds
     .map((id) => INSTRUMENTS_BY_ID.get(id))
@@ -196,6 +288,9 @@ function briefMusical(config, brief, bible) {
     structure: brief.music.structure,
     durationSec: config.durationSec,
     prompt,
+    // El mismo encargo en inglés, que es lo que se le manda a Lyria. El de
+    // arriba, en español, es el que ve el usuario.
+    promptEn: promptMusicalEn(config, brief, instrumentos, formacion, escenario),
     negativePrompt: 'voz, canto, coros, letra, palabras habladas, aplausos, ruido de público',
   };
 }

@@ -178,6 +178,20 @@ function instalarGoogleSimulado() {
 
     // Vertex AI
     if (u.indexOf('aiplatform.googleapis.com') !== -1) {
+      // El host y la ruta tienen que ser reales. Con `region: ''` en el
+      // catálogo y una llamada que no pasaba el valor por defecto, la URL salía
+      // como https://undefined-aiplatform.googleapis.com/.../locations/undefined/
+      // y Google devolvía su 404 en HTML. Aquí eso tiene que ser un error, no
+      // un simulacro complaciente.
+      if (/undefined|null/.test(u)) {
+        return {
+          ok: false, status: 404,
+          text: async () => '<!DOCTYPE html><title>Error 404 (Not Found)!!1</title>',
+          json: async () => ({}),
+        };
+      }
+      let cuerpo = {};
+      try { cuerpo = JSON.parse(String(o.body || '{}')); } catch (e) { /* no-JSON */ }
       if (u.indexOf(':predictLongRunning') !== -1) {
         return ok({ name: 'operaciones/veo-1' });
       }
@@ -186,8 +200,50 @@ function instalarGoogleSimulado() {
         objetos.set(clip, Buffer.from('mp4 de prueba'));
         return ok({ done: true, response: { videos: [{ gcsUri: 'gs://bucket-de-prueba/' + clip }] } });
       }
+      // ─── Lyria ───
+      //
+      // El simulacro EXIGE lo mismo que Google, o la prueba pasa en verde con
+      // la herramienta rota. Eso ya ocurrió: el prompt iba en español y Lyria
+      // contestaba «Unsupported language detected. Please use one of the
+      // supported languages: en», pero aquí devolvíamos audio tan contentos.
       if (u.indexOf('lyria') !== -1) {
-        return ok({ predictions: [{ bytesBase64Encoded: WAV_VACIO, mimeType: 'audio/wav' }] });
+        const texto = (((cuerpo.contents || [])[0] || {}).parts || [])
+          .map((x) => (x && x.text) || '').join(' ');
+
+        // 1. Sólo inglés. Se busca lo que delata al castellano: tildes, eñes y
+        //    signos de apertura. Es tosco, pero es exactamente lo que pasaba.
+        if (/[áéíóúñ¿¡]/i.test(texto)) {
+          return {
+            ok: false, status: 400,
+            text: async () => JSON.stringify({ error: { message:
+              'Audio generation failed with the following error: Unsupported language ' +
+              'detected. Please use one of the supported languages: en.' } }),
+            json: async () => ({ error: { message: 'Unsupported language detected.' } }),
+          };
+        }
+
+        // 2. La duración se pide con marcas [MM:SS] dentro del prompt: no hay
+        //    parámetro. Sin ellas Google devuelve unos treinta segundos y el
+        //    corto se queda mudo a partir de ahí.
+        if (!/\[\d{2}:\d{2}\]/.test(texto)) {
+          return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
+            { text: 'sin línea de tiempo: pieza corta de unos 30 s' },
+            { inlineData: { mimeType: 'audio/wav', data: WAV_VACIO } },
+          ] } }] });
+        }
+
+        // 3. Y `maxOutputTokens` lo rechaza con «invalid argument».
+        if (cuerpo.generationConfig && cuerpo.generationConfig.maxOutputTokens) {
+          return {
+            ok: false, status: 400,
+            text: async () => JSON.stringify({ error: { message: 'Request contains an invalid argument.' } }),
+            json: async () => ({ error: { message: 'Request contains an invalid argument.' } }),
+          };
+        }
+
+        return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
+          { inlineData: { mimeType: 'audio/wav', data: WAV_VACIO } },
+        ] } }] });
       }
       // Los modelos de imagen de Gemini («Nano Banana») no hablan `:predict`
       // sino `:generateContent`, y contestan con otra forma entera. Si el

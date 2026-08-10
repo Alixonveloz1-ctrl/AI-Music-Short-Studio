@@ -12,7 +12,7 @@
 //   imagen    ~10-20 s   cabe entera en el POST
 //   ambiente  instantáneo (síntesis local)  cabe entera en el POST
 //   clip      MINUTOS    no cabe: Veo se LANZA y se PREGUNTA después
-//   música    2-6 fragmentos de Lyria: no caben juntos, se hace uno
+//   música    una sola pieza de Lyria 3 Pro, hasta 184 s de una vez
 //             por petición y se guarda el avance
 //
 // De ahí el modelo de PASOS:
@@ -498,6 +498,11 @@ async function arrancarMusica(proyecto, activo, gen) {
   return hacerFragmento(registrado, activo.id, gen.id, 1);
 }
 
+/** El trabajo apuntado en una generación, si lo tiene. */
+function trabajoDe(gen) {
+  return (gen && gen.trabajo) || null;
+}
+
 /** Genera el fragmento `indice`, lo guarda en el bucket y apunta el avance. */
 async function hacerFragmento(proyecto, activoId, genId, indice) {
   const activo = dominio.getAsset(proyecto, activoId);
@@ -509,11 +514,17 @@ async function hacerFragmento(proyecto, activoId, genId, indice) {
     r = await vertex.generarMusica({
       token,
       projectId,
-      prompt: gen.prompt,
+      // El encargo en inglés, que es el idioma que entiende Lyria. Los cortos
+      // creados antes de esto no lo tienen: para esos, vertex.js traduce lo
+      // que puede del español, que es peor pero genera.
+      prompt: (activo.spec && activo.spec.promptEn) || gen.prompt,
       negativePrompt: gen.negativePrompt,
-      // Una semilla por fragmento: con la misma, Lyria devolvería seis veces el
-      // mismo trozo y la pieza sonaría a bucle.
-      seed: (gen.seed + indice * 7919) % 2147483646,
+      // LA DURACIÓN VA AQUÍ Y ES LO MÁS IMPORTANTE DE ESTA LLAMADA. Lyria no
+      // tiene ningún parámetro de duración: la única forma de pedir tres
+      // minutos es la línea de tiempo que `vertex.js` escribe dentro del
+      // prompt a partir de este número. Sin él, el modelo entrega treinta
+      // segundos y el corto se queda sin música a los treinta segundos.
+      segundos: (trabajoDe(gen) || {}).durationSec,
     });
   } catch (e) {
     throw prefijar(e, `No se pudo componer el fragmento ${indice}`);

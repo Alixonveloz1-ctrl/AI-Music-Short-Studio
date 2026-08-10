@@ -24,16 +24,19 @@ const { MAX_CLIP_SECONDS, MIN_CLIP_SECONDS } = require('./constantes.js');
 /**
  * Reparto del metraje por bloque narrativo.
  *
- * `weight` es la parte del metraje total y `baseSlotSec` la duración típica de
- * una toma dentro del bloque, es decir, el ritmo de montaje de la película.
- * Estos ocho números están ajustados a mano viendo el resultado en pantalla:
- * no se tocan.
+ * `weight` es la parte del corto que se lleva cada bloque. Antes había también
+ * un `baseSlotSec` por bloque —planos de 8 en la apertura, de 6 en el
+ * desarrollo, de 4 en el clímax— para darle ritmo al montaje. Se ha quitado:
+ * todos los huecos duran ahora lo que dura una generación de Veo, ocho
+ * segundos, porque un hueco más corto significa pagar ocho y tirar el resto.
+ * El peso sigue mandando el ritmo, pero repartiendo CUÁNTOS planos se lleva
+ * cada bloque en vez de cuánto dura cada uno.
  */
 const BEAT_PLAN = [
-  { beat: 'opening', weight: 0.18, baseSlotSec: 8 },
-  { beat: 'development', weight: 0.4, baseSlotSec: 6 },
-  { beat: 'climax', weight: 0.27, baseSlotSec: 4 },
-  { beat: 'closing', weight: 0.15, baseSlotSec: 7 },
+  { beat: 'opening', weight: 0.18 },
+  { beat: 'development', weight: 0.4 },
+  { beat: 'climax', weight: 0.27 },
+  { beat: 'closing', weight: 0.15 },
 ];
 
 /** Gramática de planos por bloque (PRD §18 — el vocabulario del director de fotografía). */
@@ -108,44 +111,83 @@ const TIPOS_IRREPETIBLES = new Set([
 
 const CLIP_SUFFIXES = 'ABCDEFGH';
 
-/** Reparte los segundos de un bloque en huecos de segundos enteros lo más iguales posible. */
-function splitIntoSlots(totalSec, baseSlotSec) {
-  const count = Math.max(1, Math.round(totalSec / baseSlotSec));
-  const base = Math.floor(totalSec / count);
-  let remainder = totalSec - base * count;
-  const slots = [];
-  for (let i = 0; i < count; i += 1) {
-    const extra = remainder > 0 ? 1 : 0;
-    remainder -= extra;
-    slots.push(base + extra);
-  }
-  return slots;
+/**
+ * Reparte el metraje del corto en huecos DE OCHO SEGUNDOS.
+ *
+ * POR QUÉ OCHO Y NO LO QUE PIDA EL RITMO. Antes cada bloque tenía su propia
+ * duración de hueco —8 en la apertura, 6 en el desarrollo, 4 en el clímax— y
+ * cada clip se generaba justo del largo de su hueco. Eso venía de cuando cada
+ * plano se usaba una sola vez.
+ *
+ * Desde que la mitad del corto se monta con material repetido, ese reparto
+ * cuesta dinero de verdad: ocho segundos de Veo cuestan lo mismo que cuatro
+ * —se paga por vídeo, no por segundo— así que un hueco de cuatro segundos era
+ * pagar ocho y tirar cuatro. Y recortarlos en el montaje es exactamente el
+ * mismo desperdicio con otro nombre.
+ *
+ * Así que el hueco vale lo que vale una generación: ocho segundos, enteros y
+ * usados. Menos planos y más largos, sí, pero ni un segundo pagado que no se
+ * vea en pantalla.
+ *
+ * EL SOBRANTE. Sesenta y ciento ochenta no son múltiplos de ocho: sobran cuatro
+ * segundos en los dos casos. Ese hueco corto se pone el ÚLTIMO y se obliga a
+ * que lo ocupe un plano REPETIDO — uno que ya se vio entero antes. Así los
+ * cuatro segundos que no caben no son metraje perdido: son la segunda
+ * aparición, más corta, de un clip que ya se aprovechó completo.
+ */
+function repartirHuecos(runtimeSec) {
+  const enteros = Math.floor(runtimeSec / MAX_CLIP_SECONDS);
+  const sobra = runtimeSec - enteros * MAX_CLIP_SECONDS;
+  const huecos = new Array(enteros).fill(MAX_CLIP_SECONDS);
+  if (sobra > 0) huecos.push(sobra);
+  return huecos;
 }
 
-/** Parte una toma en clips que no superen el límite del modelo por generación. */
+/**
+ * Cuántos huecos le tocan a cada bloque, según su peso narrativo.
+ *
+ * Los pesos siguen mandando el RITMO —el desarrollo se lleva más planos que la
+ * apertura— pero ahora reparten huecos en vez de segundos, porque todos los
+ * huecos duran lo mismo.
+ */
+function repartirPorBloque(totalHuecos) {
+  const cuentas = [];
+  let asignados = 0;
+  BEAT_PLAN.forEach((plan, i) => {
+    const ultimo = i === BEAT_PLAN.length - 1;
+    // Al último le queda el resto, para que la suma cuadre exactamente.
+    const cuantos = ultimo
+      ? totalHuecos - asignados
+      : Math.max(1, Math.round(totalHuecos * plan.weight));
+    asignados += cuantos;
+    cuentas.push(Math.max(0, cuantos));
+  });
+  return cuentas;
+}
+
+/**
+ * Parte una toma en clips, y CADA CLIP SE PIDE AL MÁXIMO QUE DA EL MODELO.
+ *
+ * POR QUÉ SIEMPRE OCHO SEGUNDOS. Antes cada clip se pedía de la longitud exacta
+ * de su hueco en el montaje: un plano de clímax de cuatro segundos generaba
+ * cuatro segundos de vídeo. Eso tenía sentido cuando cada toma se usaba una
+ * sola vez, pero desde que la mitad del corto se monta con material repetido
+ * (PRD §15, §25, §33) es tirar dinero: una toma que va a volver dos o tres
+ * veces, en huecos de distinta duración, se queda sin metraje para la segunda.
+ *
+ * Ocho segundos es el tope de Veo, y una generación de ocho cuesta lo mismo que
+ * una de cuatro —se paga por vídeo, no por segundo—, así que pedir menos es
+ * regalar la mitad del material. Lo que sobre lo recorta el montaje, que es
+ * gratis y no se nota.
+ *
+ * Del recorte se encarga `montaje.js`: si el clip es más largo que su hueco, lo
+ * corta; si fuera más corto, lo retima. Con esto lo normal pasa a ser el
+ * recorte, que no toca la velocidad del movimiento.
+ */
 function splitShotIntoClips(shotId, shotIndex, durationSec) {
   const count = Math.max(1, Math.ceil(durationSec / MAX_CLIP_SECONDS));
-  const base = Math.floor(durationSec / count);
-  let remainder = durationSec - base * count;
-  const lengths = [];
-  for (let i = 0; i < count; i += 1) {
-    const extra = remainder > 0 ? 1 : 0;
-    remainder -= extra;
-    lengths.push(base + extra);
-  }
-  // Nunca emitir un clip tan corto que se lea como un fallo: se funde con su vecino.
-  for (let i = lengths.length - 1; i > 0; i -= 1) {
-    const current = lengths[i];
-    if (current < MIN_CLIP_SECONDS) {
-      const previous = lengths[i - 1];
-      if (previous + current <= MAX_CLIP_SECONDS) {
-        lengths[i - 1] = previous + current;
-        lengths.splice(i, 1);
-      }
-    }
-  }
   const padded = String(shotIndex).padStart(2, '0');
-  return lengths.map((seconds, index) => {
+  return Array.from({ length: count }, (unused, index) => {
     // Si alguna vez hubiera más de ocho clips, se numeran en lugar de quedarse
     // sin sufijo: CLIP_SUFFIXES fuera de rango da undefined.
     const suffix = CLIP_SUFFIXES[index] ?? String(index + 1);
@@ -155,7 +197,7 @@ function splitShotIntoClips(shotId, shotIndex, durationSec) {
       index,
       suffix,
       label: `Clip ${padded}${suffix}`,
-      durationSec: seconds,
+      durationSec: MAX_CLIP_SECONDS,
     };
   });
 }
@@ -177,19 +219,16 @@ function shotImageAssetId(shotId) {
  * material que ya existe.
  */
 function planStructure(runtimeSec) {
-  // 1. Repartir los bloques para que las duraciones de los huecos sumen el metraje exacto.
+  // 1. Todos los huecos de ocho segundos —lo que dura una generación de Veo— y
+  //    repartidos entre los bloques según su peso narrativo. El único hueco
+  //    corto, si lo hay, queda el último.
+  const duraciones = repartirHuecos(runtimeSec);
+  const porBloque = repartirPorBloque(duraciones.length);
   const beatSlots = [];
-  let allocated = 0;
-  BEAT_PLAN.forEach((plan, planIndex) => {
-    const isLast = planIndex === BEAT_PLAN.length - 1;
-    // El último bloque se queda con lo que sobra: así el redondeo de los
-    // anteriores nunca deja al corto corto ni largo de un segundo.
-    const beatSec = isLast
-      ? runtimeSec - allocated
-      : Math.max(plan.baseSlotSec, Math.round(runtimeSec * plan.weight));
-    allocated += beatSec;
-    for (const durationSec of splitIntoSlots(beatSec, plan.baseSlotSec)) {
-      beatSlots.push({ beat: plan.beat, durationSec });
+  let cursor = 0;
+  BEAT_PLAN.forEach((plan, i) => {
+    for (let k = 0; k < porBloque[i] && cursor < duraciones.length; k += 1, cursor += 1) {
+      beatSlots.push({ beat: plan.beat, durationSec: duraciones[cursor] });
     }
   });
 
@@ -205,6 +244,11 @@ function planStructure(runtimeSec) {
   // La mitad del corto se rellena con material ya generado, y se sabe cuáles
   // ANTES de escribir ningún plano.
   const huecosRepetidos = planificarRepeticiones(beatSlots.length);
+  // Si hay un hueco más corto que una generación, tiene que ocuparlo un plano
+  // que YA se vio entero: es la única forma de que esos segundos que no caben
+  // no sean metraje pagado y tirado. Siempre es el último.
+  const ultimo = beatSlots.length - 1;
+  if (ultimo >= 0 && beatSlots[ultimo].durationSec < MAX_CLIP_SECONDS) huecosRepetidos.add(ultimo);
   // Cuántos planos distintos hacen falta. El Director los diseña sabiendo que
   // casi todos van a volver, así que casi todos tienen que aguantar volver.
   const tomasNecesarias = beatSlots.length - huecosRepetidos.size;

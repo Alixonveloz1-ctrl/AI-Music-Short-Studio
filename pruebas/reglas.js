@@ -41,6 +41,19 @@ function comprobar(nombre, fn) {
   }
 }
 
+/** Igual que `comprobar`, para las que necesitan await. */
+async function comprobarAsync(nombre, fn) {
+  try {
+    await fn();
+    pasadas++;
+    console.log('  ✓ ' + nombre);
+  } catch (e) {
+    fallos.push({ nombre, error: e.message });
+    console.log('  ✗ ' + nombre);
+    console.log('      ' + e.message);
+  }
+}
+
 function igual(obtenido, esperado, que) {
   const a = JSON.stringify(obtenido);
   const b = JSON.stringify(esperado);
@@ -300,6 +313,56 @@ async function principal() {
     // Pero queda trabajo pendiente, así que la barra debe decir «en espera» en
     // vez de darse por terminada.
     cierto(ui.colaPendientes(p).length > 0, 'la cola se creería terminada con trabajo por hacer');
+  });
+
+  await comprobarAsync('a Lyria no le llega ni una palabra en español', async () => {
+    // El fallo: «Audio generation failed with the following error: Unsupported
+    // language detected. Please use one of the supported languages: en.» El
+    // prompt iba en español, como todo el resto del producto. Lyria es el único
+    // servicio de la herramienta que no lo entiende, así que su encargo se
+    // compone aparte, en inglés, desde los mismos datos.
+    const enEspanol = (t) => /[áéíóúñ¿¡]/i.test(String(t || ''));
+
+    for (const cfg of [
+      { instrumentIds: ['erhu'], formationId: 'solo', scenarioId: 'forest' },
+      { instrumentIds: ['violin', 'cello'], formationId: 'duo', scenarioId: 'rooftop' },
+      { instrumentIds: ['guitar'], formationId: 'quartet', scenarioId: 'beach' },
+      { instrumentIds: ['piano', 'flute'], formationId: 'orchestra', scenarioId: 'theatre' },
+    ]) {
+      const c = Object.assign({}, CONFIG, cfg);
+      const armado = await construirPlan(c);
+      const en = armado.plan.music.promptEn;
+      cierto(en, 'sin encargo en inglés para ' + cfg.instrumentIds.join('+'));
+      cierto(!enEspanol(en),
+        'queda español con ' + cfg.instrumentIds.join('+') + ': ' +
+        (en.match(/[^\s]*[áéíóúñ][^\s]*/gi) || []).join(', '));
+      // Y lleva lo que un modelo de música necesita para componer.
+      for (const campo of ['Instruments:', 'Mood:', 'Key:', 'Scale:', 'Tempo:']) {
+        cierto(en.indexOf(campo) !== -1, 'al encargo le falta ' + campo);
+      }
+      // El nombre del instrumento también en inglés: «Violonchelo» no le dice nada.
+      cierto(!/Violonchelo|Guitarra|Flauta/.test(en), 'un instrumento se quedó en español: ' + en);
+    }
+  });
+
+  comprobar('el encargo de música va en inglés y con su línea de tiempo', () => {
+    const enEspanol = (t) => /[áéíóúñ¿¡]/i.test(String(t || ''));
+    // El plan completo, que es de donde sale el prompt que viaja a Google.
+    cierto(plan.music && plan.music.promptEn, 'el plan no lleva el encargo en inglés');
+    cierto(!enEspanol(plan.music.promptEn),
+      'queda español en el encargo: ' + (plan.music.promptEn.match(/[^\s]*[áéíóúñ][^\s]*/gi) || []).join(', '));
+    // Y el que se le enseña al usuario sigue en español (PRD §19).
+    cierto(enEspanol(plan.music.prompt), 'el prompt que ve el usuario ya no está en español');
+
+    // Lo que de verdad se manda: el cuerpo que arma vertex.js.
+    const linea = vertex.lineaDeTiempo(180);
+    cierto(!enEspanol(linea), 'la línea de tiempo lleva español');
+    cierto(/\[00:00\]/.test(linea) && /\[03:00\]/.test(linea),
+      'la línea de tiempo no cubre los tres minutos: es la única forma de pedir la duración');
+    // Y una sola llamada compone el corto entero, sin coserlo por trozos.
+    for (const d of [60, 120, 180]) {
+      igual(vertex.fragmentosNecesarios(d), 1, 'el corto de ' + d + ' s se está troceando');
+    }
   });
 
   comprobar('ninguna URL de Vertex sale con undefined dentro', () => {
@@ -933,16 +996,73 @@ async function principal() {
     cierto(s.indexOf('trim=duration=7.000') !== -1, 'no fuerza la duración exacta');
   });
 
-  comprobar('la velocidad no se va a cámara lenta ni a acelerón', () => {
-    // Más allá de la mitad o el doble deja de leerse como otro ritmo.
+  comprobar('lo que sobra se recorta; sólo se retima lo que falta', () => {
+    // Desde que todos los clips se piden de ocho segundos, lo normal es que
+    // SOBREN. Y acelerar un plano al doble para meterlo en un hueco de cuatro
+    // segundos se ve a la legua, mientras que recortar no se nota.
     const s = montaje.construirScript(
       [{ local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' }],
       'm.wav', 'amb.wav', 'salida.mp4',
     );
-    cierto(s.indexOf('if(r>2)r=2') !== -1, 'no limita la ralentización');
-    cierto(s.indexOf('if(r<0.25)r=0.25') !== -1, 'no limita la aceleración');
+    cierto(s.indexOf('if(r<1)r=1') !== -1, 'un clip que sobra se está acelerando en vez de recortar');
+    cierto(s.indexOf('if(r>2)r=2') !== -1, 'no limita la ralentización de un clip que falta');
+    cierto(s.indexOf('trim=duration=') !== -1, 'no hay recorte a la duración del hueco');
     // Y si la medición fallara y devolviera cero, no se divide por cero.
     cierto(s.indexOf('if(C<=0)C=L') !== -1, 'una medición vacía rompería el cálculo');
+  });
+
+  comprobar('ni un segundo pagado se queda fuera de la pantalla', () => {
+    // La regla, en palabras del usuario: «hay que aprovechar los ocho segundos
+    // que se generan, y mucho menos recortarlo, porque entonces estaríamos
+    // desperdiciando dinero generando segundos que se van a perder».
+    //
+    // Ocho segundos de Veo cuestan lo mismo que cuatro —se paga por vídeo, no
+    // por segundo— así que un hueco de cuatro es pagar ocho y tirar cuatro.
+    const { MAX_CLIP_SECONDS } = require(path.join(RAIZ, 'api/_lib/constantes.js'));
+    for (const dur of [60, 120, 180]) {
+      const e = productor.planStructure(dur);
+      const clips = e.shots.flatMap((x) => x.clips);
+
+      // Lo más largo que cada clip llega a estar en pantalla.
+      const enPantalla = new Map();
+      for (const t of e.timeline) {
+        enPantalla.set(t.clipId, Math.max(enPantalla.get(t.clipId) || 0, t.durationSec));
+      }
+      for (const c of clips) {
+        igual(enPantalla.get(c.id), c.durationSec,
+          'del clip ' + c.label + ' de ' + dur + ' s se pagan ' + c.durationSec +
+          ' s y sólo se ven ' + (enPantalla.get(c.id) || 0));
+      }
+
+      // Y el único hueco que puede ser más corto es el último, y tiene que
+      // estar ocupado por un plano que ya se vio entero.
+      const cortos = e.timeline.filter((t) => t.durationSec < MAX_CLIP_SECONDS);
+      for (const t of cortos) {
+        cierto(t.reused, 'hueco corto de ' + t.durationSec + ' s con material nuevo en ' + dur + ' s');
+      }
+      cierto(cortos.length <= 1, 'más de un hueco corto en ' + dur + ' s');
+    }
+  });
+
+  comprobar('todos los clips se piden al máximo que da Veo', () => {
+    // Antes cada clip se pedía del largo exacto de su hueco: un clímax de
+    // cuatro segundos generaba cuatro segundos. Con la mitad del corto montada
+    // con material repetido, eso deja sin metraje a la segunda aparición.
+    const { MAX_CLIP_SECONDS } = require(path.join(RAIZ, 'api/_lib/constantes.js'));
+    for (const dur of [60, 120, 180]) {
+      const e = productor.planStructure(dur);
+      const clips = e.shots.flatMap((x) => x.clips);
+      cierto(clips.length > 0, 'sin clips en ' + dur + ' s');
+      for (const c of clips) {
+        igual(c.durationSec, MAX_CLIP_SECONDS, 'clip corto en ' + dur + ' s: ' + c.label);
+      }
+      // Y sigue habiendo material de sobra para el hueco más largo de su toma.
+      for (const shot of e.shots) {
+        const generado = shot.clips.reduce((a, c) => a + c.durationSec, 0);
+        cierto(generado >= shot.durationSec,
+          'la toma ' + shot.id + ' necesita ' + shot.durationSec + ' s y sólo se generan ' + generado);
+      }
+    }
   });
 
   comprobar('un clip repetido se descarga una sola vez', () => {

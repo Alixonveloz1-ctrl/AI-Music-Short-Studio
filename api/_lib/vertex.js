@@ -3,13 +3,17 @@
 //
 //   Imagen  ·  :predict               responde en el momento
 //   Veo     ·  :predictLongRunning    devuelve una operación y se pregunta
-//   Lyria   ·  :predict               responde un fragmento de ~30 s
+//   Lyria   ·  :generateContent       compone la pieza entera (hasta 184 s)
 //
 // TODO ESTO ESTÁ PENSADO PARA 60 SEGUNDOS. Una función de Vercel no
-// puede esperar a Veo, que tarda minutos. Por eso el vídeo se lanza y
-// se pregunta, y la música se genera por fragmentos: cada llamada hace
-// un trozo y guarda el avance, en vez de intentarlo todo de una vez y
-// morir a mitad sin dejar nada.
+// puede esperar a Veo, que tarda minutos: por eso el vídeo se lanza y
+// se pregunta. La música sí cabe en una llamada, y va entera en una:
+// cosida a partir de trozos de treinta segundos no era una pieza, era
+// una lista de fragmentos con cinco costuras.
+//
+// Y LYRIA SOLO ENTIENDE INGLÉS. Es el único sitio de toda la
+// herramienta donde el texto no va en español. El encargo se compone
+// aparte, en inglés, en api/_lib/plan.js.
 //
 // El modelo que se configure es el que se usa. Si falla, se devuelve el
 // error de Google tal cual: nunca se sustituye por otro a espaldas del
@@ -459,44 +463,223 @@ const SIN_VOZ = 'vocals, singing, voice, lyrics, spoken word, rap, choir, chanti
  * instrumental por definición (§3, §28) y una voz colada arruina el corto
  * entero.
  */
-async function generarMusica(opciones) {
-  const { token, projectId, prompt, negativePrompt, seed } = opciones;
-  const modelo = cfg.musicModel;
+/**
+ * LA MÚSICA: UNA SOLA PIEZA, DEL PRIMER SEGUNDO AL ÚLTIMO.
+ *
+ * DOS FALLOS ARREGLADOS AQUÍ.
+ *
+ * El primero, el que se veía: Lyria contestaba «Unsupported language detected.
+ * Please use one of the supported languages: en». El prompt iba en español,
+ * igual que todo el resto del producto, y este modelo solo entiende inglés. Es
+ * el ÚNICO sitio de la herramienta donde el texto tiene que ir en inglés, así
+ * que se traduce aquí dentro y el usuario sigue viendo su prompt en español.
+ *
+ * El segundo, el de fondo: se estaba usando `lyria-002`, que entrega trozos de
+ * treinta segundos, y el corto se cosía a partir de cuatro o seis trozos. Un
+ * corto musical con seis costuras no es una pieza, es una lista de fragmentos.
+ * `lyria-3-pro-preview` compone hasta 184 segundos de una vez, que cubre los
+ * tres minutos del corto más largo.
+ *
+ * CÓMO SE LLAMA, que no es evidente. Lyria NO usa `:predict` ni tiene endpoint
+ * propio: se pide igual que un modelo de imagen de Gemini, con
+ * `:generateContent` y `responseModalities: ['AUDIO','TEXT']`, y SIEMPRE desde
+ * la región «global». No existe `negative_prompt`: todo va dentro del prompt.
+ *
+ * Y LA DURACIÓN NO ES UN PARÁMETRO. No hay campo de API para pedirla —
+ * `maxOutputTokens` lo rechaza con «invalid argument»— así que la única forma
+ * de pedir tres minutos es escribir una línea de tiempo con marcas [MM:SS]
+ * dentro del propio prompt. Sin ella el modelo entrega unos treinta segundos y
+ * se acabó.
+ */
+const MODELO_MUSICA_PRO = 'lyria-3-pro-preview';
+const REGION_MUSICA = 'global';
 
-  const instancia = {
-    prompt: String(prompt).slice(0, 2000),
-    negative_prompt: [SIN_VOZ, negativePrompt].filter(Boolean).join(', '),
-  };
-  // Lyria rechaza seed y sample_count juntos, así que el seed solo viaja cuando
-  // se pide un único fragmento — que es siempre en este flujo.
-  if (Number.isInteger(seed)) instancia.seed = seed;
+/** Lo máximo que compone el modelo de una vez. El corto más largo son 180 s. */
+const SEGUNDOS_MAX_PIEZA = 184;
+
+function mmss(segundos) {
+  const m = Math.floor(segundos / 60);
+  const s = Math.round(segundos % 60);
+  return '[' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + ']';
+}
+
+/**
+ * La línea de tiempo que se le pide al modelo.
+ *
+ * Aquí este producto se aparta a propósito de cómo lo usa un canal narrado. Allí
+ * la música va DEBAJO de una voz, así que se le pide plana: sin crescendo y sin
+ * clímax, porque cualquier pico taparía la narración. Aquí no hay voz y la
+ * música ES la pieza (PRD §3), así que se le pide justo lo contrario: el arco
+ * emocional completo, que es lo que el montaje va a acompañar plano a plano.
+ */
+function lineaDeTiempo(total) {
+  return (
+    'STRUCTURE — the piece lasts the FULL ' + Math.round(total) + ' seconds, from the first ' +
+    'second to the last. Follow this timeline exactly:\n' +
+    mmss(0) + ' Open sparse and quiet: the main instrument almost alone, room to breathe.\n' +
+    mmss(total * 0.25) + ' The arrangement starts to fill out. Add depth underneath, still restrained.\n' +
+    mmss(total * 0.55) + ' Build steadily toward the emotional peak. More body, more movement.\n' +
+    mmss(total * 0.75) + ' The peak of the piece: fullest texture and strongest emotion, but never noisy.\n' +
+    mmss(total * 0.9) + ' Come back down. Strip the arrangement away.\n' +
+    mmss(total) + ' End on the main instrument alone, resolved and calm. Do not fade out abruptly ' +
+    'and do not stop early: the music must still be playing at ' + mmss(total) + '.'
+  );
+}
+
+/**
+ * Traduce a inglés lo justo para Lyria.
+ *
+ * No es un traductor: es un diccionario de los términos musicales que este
+ * producto genera. El prompt de música lo escribe `api/_lib/audio.js` a partir
+ * de la ficha musical del brief —tempo, tonalidad, escala, instrumentos,
+ * atmósfera— así que el vocabulario es cerrado y conocido. Lo que no esté en la
+ * tabla pasa tal cual: un nombre de instrumento en español dentro de un prompt
+ * por lo demás inglés no rompe nada, y es infinitamente mejor que llamar a un
+ * traductor y que la generación dependa de otro servicio más.
+ */
+const AL_INGLES = [
+  [/\bpieza instrumental\b/gi, 'instrumental piece'],
+  [/\binstrumental\b/gi, 'instrumental'],
+  [/\bsin voz\b/gi, 'no vocals'],
+  [/\bsin letra\b/gi, 'no lyrics'],
+  [/\btempo\b/gi, 'tempo'],
+  [/\bcompás\b/gi, 'time signature'],
+  [/\btonalidad\b/gi, 'key'],
+  [/\bescala\b/gi, 'scale'],
+  [/\bmenor natural\b/gi, 'natural minor'],
+  [/\bpentatónica menor\b/gi, 'minor pentatonic'],
+  [/\bpentatónica mayor\b/gi, 'major pentatonic'],
+  [/\bmenor armónica\b/gi, 'harmonic minor'],
+  [/\bmenor\b/gi, 'minor'],
+  [/\bmayor\b/gi, 'major'],
+  [/\bdórico\b/gi, 'dorian'], [/\bfrigio\b/gi, 'phrygian'],
+  [/\blidio\b/gi, 'lydian'], [/\bmixolidio\b/gi, 'mixolydian'],
+  [/\beólico\b/gi, 'aeolian'], [/\blocrio\b/gi, 'locrian'],
+  [/\bmelancólic[oa]\b/gi, 'melancholic'],
+  [/\bcontemplativ[oa]\b/gi, 'contemplative'],
+  [/\bseren[oa]\b/gi, 'serene'], [/\bíntim[oa]\b/gi, 'intimate'],
+  [/\bcálid[oa]\b/gi, 'warm'], [/\bnostálgic[oa]\b/gi, 'nostalgic'],
+  [/\bsolemne\b/gi, 'solemn'], [/\bampli[oa]\b/gi, 'expansive'],
+  [/\breverente\b/gi, 'reverent'], [/\besperanzad[oa]\b/gi, 'hopeful'],
+  [/\bluminos[oa]\b/gi, 'luminous'], [/\btens[oa]\b/gi, 'tense'],
+  [/\bmisterios[oa]\b/gi, 'mysterious'], [/\bcontenid[oa]\b/gi, 'restrained'],
+  [/\bviolonchelo\b/gi, 'cello'], [/\bviolín\b/gi, 'violin'],
+  [/\bpiano\b/gi, 'piano'], [/\bguitarra\b/gi, 'guitar'],
+  [/\bflauta\b/gi, 'flute'], [/\barpa\b/gi, 'harp'],
+  [/\btambor(es)?\b/gi, 'drums'], [/\bpercusión\b/gi, 'percussion'],
+  [/\bcuerdas\b/gi, 'strings'], [/\bviento\b/gi, 'winds'],
+  [/\bmetales\b/gi, 'brass'], [/\bteclados?\b/gi, 'keyboards'],
+  [/\bsolista\b/gi, 'solo'], [/\bdúo\b/gi, 'duo'], [/\btrío\b/gi, 'trio'],
+  [/\bcuarteto\b/gi, 'quartet'], [/\borquesta\b/gi, 'orchestra'],
+  [/\bensamble\b/gi, 'ensemble'], [/\bbanda\b/gi, 'band'],
+  [/\bestructura\b/gi, 'structure'], [/\bsecciones?\b/gi, 'sections'],
+  [/\bcorto(metraje)?\b/gi, 'short film'],
+  [/\bde inspiración\b/gi, 'inspired by'],
+];
+
+function aIngles(texto) {
+  let t = String(texto || '');
+  for (const [de, a] of AL_INGLES) t = t.replace(de, a);
+  return t;
+}
+
+/** La orden de que no cante nadie, en inglés, delante y detrás. */
+const SOLO_INSTRUMENTAL =
+  'INSTRUMENTAL ONLY. No vocals, no singing, no choir, no lyrics, no spoken word, ' +
+  'no human voice of any kind. This is the score of a music short film: the music IS the piece.';
+
+/**
+ * Compone la pieza entera. Un solo intento, un solo archivo.
+ *
+ * `segundos` es la duración del corto. Si llega algo fuera de rango se recorta
+ * al máximo del modelo en vez de fallar: mejor una pieza de 184 s que ninguna.
+ */
+async function generarMusica(opciones) {
+  const { token, projectId, prompt } = opciones;
+  const total = Math.min(SEGUNDOS_MAX_PIEZA, Math.max(20, Number(opciones.segundos) || 60));
+
+  const cuerpo =
+    SOLO_INSTRUMENTAL + '\n\n' +
+    aIngles(prompt).slice(0, 2000) + '\n\n' +
+    // El prompt negativo del proyecto está en español, como todo lo demás, y
+    // aquí no puede entrar ni una palabra que no sea inglesa. Además Lyria no
+    // tiene campo `negative_prompt`: lo que se quiere evitar se dice en prosa,
+    // y en este producto siempre es lo mismo, así que va escrito en inglés de
+    // una vez en lugar de traducirse a trompicones.
+    'AVOID: any voice, singing, humming, choir, spoken word, applause, crowd noise, ' +
+    'sound effects and silence. Only played instruments, from the first second to the last.\n\n' +
+    lineaDeTiempo(total) + '\n\n' +
+    SOLO_INSTRUMENTAL;
 
   const d = await llamar(
-    vertexUrl(projectId, cfg.musicLocation, modelo, 'predict'),
+    vertexUrl(projectId, REGION_MUSICA, MODELO_MUSICA_PRO, 'generateContent'),
     token, projectId,
-    { instances: [instancia], parameters: {} },
+    {
+      contents: [{ role: 'user', parts: [{ text: cuerpo }] }],
+      // El ÚNICO campo válido aquí. Añadir maxOutputTokens hace que Vertex
+      // conteste «Request contains an invalid argument».
+      generationConfig: { responseModalities: ['AUDIO', 'TEXT'] },
+    },
   );
 
-  const preds = Array.isArray(d.predictions) ? d.predictions : [];
-  // Según la versión del modelo el audio viene bajo un nombre u otro; se
-  // aceptan los tres en vez de fijar uno y romperse en la siguiente versión.
-  const p = preds.find((x) => x && (x.bytesBase64Encoded || x.audioContent || x.audio));
-  if (!p) {
-    const pista = preds.length ? Object.keys(preds[0] || {}).join(', ') : 'sin predictions';
-    throw new ProveedorError('Lyria no devolvió audio (' + pista + ').');
+  const audio = juntarAudio(d);
+  if (!audio) {
+    const cand = d && d.candidates && d.candidates[0];
+    const razon = (cand && cand.finishReason) || 'sin finishReason';
+    let texto = '';
+    if (cand && cand.content && Array.isArray(cand.content.parts)) {
+      for (const p of cand.content.parts) if (p && typeof p.text === 'string') texto += p.text;
+    }
+    throw new ProveedorError(
+      'Lyria no devolvió audio (' + razon + ')' + (texto ? ': ' + texto.slice(0, 160) : '') + '.',
+    );
   }
 
   return {
-    base64: p.bytesBase64Encoded || p.audioContent || p.audio,
-    mimeType: p.mimeType || 'audio/wav',
-    modelo,
-    segundos: SEGUNDOS_POR_FRAGMENTO,
+    base64: audio.base64,
+    mimeType: audio.mimeType,
+    modelo: MODELO_MUSICA_PRO,
+    segundos: total,
   };
 }
 
-/** Cuántos fragmentos hacen falta para cubrir la película. */
+/**
+ * Saca el audio de la respuesta.
+ *
+ * El modelo puede partir la pieza en varias `parts` con `inlineData`. Se
+ * concatenan en el orden en que vienen: son trozos del MISMO archivo, no piezas
+ * distintas, así que no hay costura que disimular.
+ */
+function juntarAudio(d) {
+  const cand = d && Array.isArray(d.candidates) ? d.candidates[0] : null;
+  const partes = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts : [];
+  const trozos = [];
+  let mimeType = '';
+  for (const p of partes) {
+    const dato = p && p.inlineData;
+    if (dato && dato.data) {
+      trozos.push(dato.data);
+      if (!mimeType) mimeType = dato.mimeType || '';
+    }
+  }
+  if (!trozos.length) return null;
+  return {
+    base64: trozos.length === 1
+      ? trozos[0]
+      : Buffer.concat(trozos.map((t) => Buffer.from(t, 'base64'))).toString('base64'),
+    mimeType: mimeType || 'audio/wav',
+  };
+}
+
+/**
+ * Cuántas llamadas hacen falta para cubrir la película.
+ *
+ * Ahora siempre UNA: el modelo compone los tres minutos de una vez. Se mantiene
+ * la función porque `api/generar.js` la usa para llevar la cuenta del avance, y
+ * porque si algún día vuelve a hacer falta trocear, el sitio ya existe.
+ */
 function fragmentosNecesarios(segundos) {
-  return Math.max(1, Math.ceil(Number(segundos) / SEGUNDOS_POR_FRAGMENTO));
+  return Number(segundos) > SEGUNDOS_MAX_PIEZA ? Math.ceil(Number(segundos) / SEGUNDOS_MAX_PIEZA) : 1;
 }
 
 module.exports = {
@@ -509,5 +692,9 @@ module.exports = {
   generarMusica,
   fragmentosNecesarios,
   SEGUNDOS_POR_FRAGMENTO,
+  SEGUNDOS_MAX_PIEZA,
+  MODELO_MUSICA_PRO,
+  aIngles,
+  lineaDeTiempo,
   SIN_VOZ,
 };
