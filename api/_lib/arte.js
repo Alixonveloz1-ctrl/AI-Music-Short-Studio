@@ -133,6 +133,9 @@ function buildVisualBible(config, brief) {
     // Un intérprete por músico, cada uno con su rostro. `character` es el
     // primero de la lista, para todo lo que sigue hablando en singular.
     cast: reparto,
+    // Decisión del Director sobre el vestuario del grupo: 'conjuntado' o
+    // 'individual'. No es una regla del producto, es una opción creativa.
+    wardrobeGroup: brief.wardrobeGroup === 'individual' ? 'individual' : 'conjuntado',
     instrument: {
       names: instrumentNames,
       appearance: brief.instrumentAppearance,
@@ -264,33 +267,66 @@ const LISTON_POR_FAMILIA = {
     'de detalle en el primer término',
   real:
     'IMAGEN DE GAMA ALTA, del nivel de una portada: enfoque nítido en el rostro y en las manos, ' +
-    'piel bien iluminada, ojos con brillo y detalle, desenfoque limpio en el fondo y máximo ' +
-    'nivel de detalle en el primer término',
+    'piel bien iluminada y con buen tratamiento, ojos con brillo y detalle, desenfoque limpio ' +
+    'en el fondo y máximo nivel de detalle en el primer término',
+  // Retro, vintage y «otro» no tienen un enemigo claro del que protegerlos,
+  // pero el listón sí les toca: el usuario dijo que la imagen tiene que ser
+  // fiel a SU estilo y además hermosa, sea el estilo que sea.
+  libre:
+    'ACABADO DE GAMA ALTA, del nivel de una portada, dentro del estilo indicado: máximo nivel ' +
+    'de detalle en el primer término, rostro y manos bien resueltos, luz trabajada y ningún ' +
+    'rastro de acabado tosco o descuidado',
 };
-
 /**
  * LA BELLEZA, que no depende del estilo.
  *
- * El usuario lo pidió con todas las letras: «los personajes que genere la
- * herramienta siempre tienen que ser hermosos». No era un requisito de un
- * proyecto suyo, era del producto, así que vive aquí y entra en todos los
- * prompts donde aparezca una persona.
+ * El usuario lo pidió con todas las letras, y luego subió el listón: «guapas no
+ * es suficiente, quiero hermosas». No era el requisito de un proyecto suyo,
+ * era del producto, así que vive aquí y entra en todos los prompts donde
+ * aparezca una persona, en TODOS los estilos: si elige óleo o realismo, la
+ * imagen tiene que ser fiel a ese estilo y además con gente hermosa.
  *
  * Está escrito sin una sola palabra de anime a propósito: la belleza es
- * transversal y el estilo de dibujo ya lo pone la cabecera, así que estas
- * mismas líneas tienen que servir igual en óleo, en acuarela o en realista.
+ * transversal y el estilo de dibujo ya lo pone la cabecera.
+ *
+ * Va por género porque no se pide lo mismo, y porque el usuario elige el tipo
+ * de intérprete en la pantalla de configuración.
  */
-const EXIGENCIA_DE_BELLEZA = [
-  'La persona tiene que ser GUAPA y con encanto: rasgos armónicos y bien proporcionados, ' +
-    'expresión serena y agradable, piel luminosa y cuidada',
+const BELLEZA_POR_BANCO = {
+  femenino:
+    'ELLA TIENE QUE SER HERMOSA, no simplemente correcta: belleza notable y memorable, ' +
+    'rostro delicado y de rasgos armónicos, figura esbelta y de proporciones perfectas, ' +
+    'porte elegante. Si al mirar la imagen no se piensa «qué guapa es», está mal hecha',
+  masculino:
+    'ÉL TIENE QUE SER MUY ATRACTIVO, no simplemente correcto: facciones armónicas y bien ' +
+    'definidas, complexión atlética y de proporciones perfectas, porte elegante. Si al ' +
+    'mirar la imagen no se piensa «qué guapo es», está mal hecha',
+};
+
+const BELLEZA_COMUN = [
+  'Piel luminosa y cuidada, expresión serena y agradable',
   'Ojos expresivos y con vida, de mirada limpia; pestañas y cejas bien dibujadas',
   'Postura elegante y natural, propia de quien sabe estar en escena',
   'Vestuario impecable y bien puesto: nada arrugado, sucio ni descolocado',
   'Nada de aspecto corriente, cansado ni desaliñado: esta imagen tiene que ser bonita de ver',
-  'Sigue siendo una persona real y creíble: guapa, no artificial ni de muñeco',
-  'Es una intérprete de música en escena, vestida y elegante: nada de poses ni de encuadres sexualizados',
+  'Sigue siendo una persona creíble: hermosa, no artificial ni de muñeco',
+  // El límite. No recorta nada de lo anterior: dice que la belleza se consigue
+  // con el rostro, la figura y el porte, no con el encuadre.
+  'Es una persona ADULTA y es una intérprete de música en escena: vestida, elegante y ' +
+    'tocando. Nada de poses, encuadres ni ropa sexualizados',
 ];
 
+/**
+ * La exigencia de belleza que le toca a un intérprete concreto.
+ *
+ * `banco` sale del tipo de intérprete que eligió el usuario. Si no se sabe
+ * —una biblia vieja, un grupo mixto en un plano donde salen todos— se piden
+ * las dos, que es lo correcto cuando en el cuadro hay hombres y mujeres.
+ */
+function exigenciaDeBelleza(banco) {
+  const cual = BELLEZA_POR_BANCO[banco];
+  return [...(cual ? [cual] : Object.values(BELLEZA_POR_BANCO)), ...BELLEZA_COMUN];
+}
 /** Qué familia es cada estilo, para saber contra qué hay que protegerlo. */
 const FAMILIA_DE_ESTILO = {
   anime_2d: 'dibujado',
@@ -303,9 +339,9 @@ const FAMILIA_DE_ESTILO = {
   watercolor: 'dibujado',
   realistic: 'real',
   cinematic_realistic: 'real',
-  retro: '',
-  vintage: '',
-  other: '',
+  retro: 'libre',
+  vintage: 'libre',
+  other: 'libre',
 };
 
 /**
@@ -319,7 +355,7 @@ const FAMILIA_DE_ESTILO = {
 function cabeceraDeEstilo(bible, config) {
   const familia = FAMILIA_DE_ESTILO[config.visualStyleId] || '';
   const prohibido = PROHIBIDO_POR_ESTILO[familia] || '';
-  const liston = LISTON_POR_FAMILIA[familia] || LISTON_POR_FAMILIA.dibujado;
+  const liston = LISTON_POR_FAMILIA[familia] || LISTON_POR_FAMILIA.libre;
   const partes = [
     'ESTILO VISUAL (INNEGOCIABLE, se aplica a TODA la imagen y a cada persona ' +
       'que aparezca en ella): ' + bible.aesthetic.treatment + '. ' +
@@ -387,6 +423,12 @@ function interprete(bible, n) {
  * Devuelve null cuando sólo hay un intérprete: ahí no hay a quién distinguir y
  * la lista sólo sería ruido.
  */
+/** La exigencia de belleza para un plano donde puede salir todo el reparto. */
+function bellezaDelReparto(bible) {
+  const bancos = new Set((bible.cast || []).map((m) => m.banco).filter(Boolean));
+  return exigenciaDeBelleza(bancos.size === 1 ? [...bancos][0] : null);
+}
+
 function bloqueReparto(bible) {
   const reparto = Array.isArray(bible.cast) ? bible.cast : [];
   if (reparto.length < 2) return null;
@@ -467,12 +509,18 @@ function buildCharacterPrompt(bible, config, indice, total, instrumento) {
           ': OTRO ROSTRO y OTRO PEINADO, que se reconozcan a simple vista como ' +
           'personas diferentes'
         : null,
+      // Que vayan conjuntados o no lo decide el Director por proyecto; lo que
+      // no cambia nunca es que sean personas distintas.
       enGrupo
-        ? 'El VESTUARIO, en cambio, es el mismo para todo el grupo: van ' +
-          'conjuntados, como un dúo o un ensamble que sale a tocar junto. Sólo ' +
-          'cambia el pequeño detalle que lleva esta persona'
+        ? bible.wardrobeGroup === 'individual'
+          ? 'El vestuario de esta persona es el suyo, distinto del de los demás, ' +
+            'pero dentro de la misma gama y del mismo mundo: se tienen que ver como ' +
+            'un mismo grupo tocando junto'
+          : 'El VESTUARIO es el mismo para todo el grupo: van conjuntados, como un ' +
+            'dúo o un ensamble que sale a tocar junto. Sólo cambia el pequeño ' +
+            'detalle que lleva esta persona'
         : null,
-      ...EXIGENCIA_DE_BELLEZA,
+      ...exigenciaDeBelleza(quien.banco),
       'Manos completas y correctas, cinco dedos por mano',
       'El instrumento debe estar completo y bien construido',
       'Sin texto ni marcas de agua',
@@ -539,7 +587,7 @@ function buildScenePrompt(bible, config) {
     block('Requisitos', [
       'El personaje debe ser exactamente el de la referencia de personaje aprobada',
       'El escenario debe ser exactamente el de la referencia de escenario aprobada',
-      ...EXIGENCIA_DE_BELLEZA,
+      ...bellezaDelReparto(bible),
       'Esta imagen será la referencia oficial de la escena para todas las tomas',
     ]),
   ]);
@@ -564,7 +612,7 @@ function buildShotImagePrompt(bible, shot, config) {
     bloqueReparto(bible),
     // Un plano detalle del instrumento o del entorno no lleva a nadie dentro:
     // pedirle belleza de rostro ahi solo confunde al modelo.
-    SIN_PERSONAS.indexOf(shot.shotType) === -1 ? block('La persona', EXIGENCIA_DE_BELLEZA) : null,
+    SIN_PERSONAS.indexOf(shot.shotType) === -1 ? block('La persona', bellezaDelReparto(bible)) : null,
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);

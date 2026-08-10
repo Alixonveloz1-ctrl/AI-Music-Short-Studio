@@ -60,6 +60,7 @@ const audio = require(path.join(RAIZ, 'api/_lib/audio.js'));
 const planificador = require(path.join(RAIZ, 'api/_lib/planificador.js'));
 const arte = require(path.join(RAIZ, 'api/_lib/arte.js'));
 const vertex = require(path.join(RAIZ, 'api/_lib/vertex.js'));
+const catalogo = require(path.join(RAIZ, 'api/_lib/catalogo.js'));
 const { construirPlan } = require(path.join(RAIZ, 'api/_lib/plan.js'));
 
 const CONFIG = {
@@ -490,36 +491,65 @@ async function principal() {
     cierto(!/REPARTO/.test(arte.buildScenePrompt(solo.biblia, solo.config)), 'un solista no necesita reparto');
   });
 
-  comprobar('los intérpretes tienen que salir guapos', () => {
-    // Petición literal del usuario: «los personajes que genere la herramienta
-    // siempre tienen que ser hermosos». Nada en el prompt lo pedía: una cara
+  comprobar('los intérpretes tienen que salir HERMOSOS, no correctos', () => {
+    // Petición literal del usuario, y luego subida de listón: «guapas no es
+    // suficiente, quiero hermosas». Nada en el prompt lo pedía: una cara
     // correcta y del montón puntuaba como éxito perfecto.
-    const { config, biblia } = bibliaDe({});
-    const p = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín');
-    cierto(/GUAPA/.test(p), 'no se pide que la persona sea guapa');
+    const ella = bibliaDe({ performerTypeId: 'young_woman' });
+    const p = arte.buildCharacterPrompt(ella.biblia, ella.config, 1, 1, 'Violín');
+    cierto(/HERMOSA/.test(p), 'no se pide que sea hermosa');
+    cierto(/proporciones perfectas/.test(p), 'no se pide una figura de proporciones perfectas');
     cierto(/CALIDAD \(mismo rango que el estilo\)/.test(p), 'no se fija el listón de calidad');
     cierto(/rostro anodino/.test(p), 'no se prohíbe la cara del montón');
-    cierto(/sexualizad/.test(p), 'no se pone el límite de que no sea sexualizado');
-    // Y el listón va arriba, con el estilo, no perdido al final.
+    cierto(/ADULTA/.test(p) && /sexualizad/.test(p), 'faltan los límites de adulta y no sexualizada');
     cierto(p.indexOf('CALIDAD') < p.indexOf('Persona:'), 'el listón va después de la descripción');
-    // También en el negativo, que es donde el modelo mira lo que debe evitar.
-    cierto(/rostro anodino/.test(biblia.negativePrompt), 'el negativo no excluye lo anodino');
+    cierto(/rostro anodino/.test(ella.biblia.negativePrompt), 'el negativo no excluye lo anodino');
+
+    // A un hombre se le pide lo suyo, no el texto de ella.
+    const el = bibliaDe({ performerTypeId: 'adult_man' });
+    const pm = arte.buildCharacterPrompt(el.biblia, el.config, 1, 1, 'Violín');
+    cierto(/MUY ATRACTIVO/.test(pm), 'al intérprete masculino no se le pide ser atractivo');
+    cierto(!/ELLA TIENE QUE SER/.test(pm), 'a un hombre se le está pidiendo el texto de ella');
   });
 
-  comprobar('un dúo va conjuntado, no de colores distintos', () => {
-    // La referencia que mandó el usuario son dos chicas vestidas igual que se
-    // distinguen por la cara y el peinado. La regla anterior pedía «otro color
-    // de ropa» y deshacía el grupo.
-    const { config, biblia } = bibliaDe({ formationId: 'duo', instrumentIds: ['violin', 'cello'] });
-    const p = arte.buildCharacterPrompt(biblia, config, 2, 2, 'Violonchelo');
-    cierto(!/otro color de ropa/i.test(p), 'sigue pidiendo otro color de ropa');
-    cierto(/OTRO ROSTRO y OTRO PEINADO/.test(p), 'no distingue por cara y peinado');
-    cierto(/VESTUARIO, en cambio, es el mismo/.test(p), 'no pide vestuario común');
-    cierto(!/los otros 1 intérpretes/.test(p), 'el plural está mal escrito');
-    // El conjunto es común de verdad, no sólo de palabra.
-    const base = (v) => v.split(', con ')[0];
-    igual(base(biblia.cast[0].wardrobe), base(biblia.cast[1].wardrobe), 'no visten el mismo conjunto');
-    cierto(biblia.cast[0].wardrobe !== biblia.cast[1].wardrobe, 'no se distinguen ni por el detalle');
+  comprobar('el listón de belleza y calidad vale para TODOS los estilos', () => {
+    // «Si yo escojo realismo o cualquier otro género, las imágenes tienen que
+    // ser fieles a su género y ser siempre personajes hermosos.»
+    for (const estilo of catalogo.VISUAL_STYLES) {
+      const { config, biblia } = bibliaDe({ visualStyleId: estilo.id });
+      const p = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín');
+      cierto(/CALIDAD \(mismo rango que el estilo\)/.test(p), 'sin listón de calidad en ' + estilo.id);
+      cierto(/HERMOSA|MUY ATRACTIVO/.test(p), 'sin exigencia de belleza en ' + estilo.id);
+      cierto(/rostro anodino o de foto de carné/.test(p), 'sin prohibición de lo mediocre en ' + estilo.id);
+      // Y sigue siendo fiel a SU estilo: el tratamiento del catálogo va delante.
+      cierto(p.indexOf(estilo.treatment.slice(0, 40)) !== -1, 'no se respeta el estilo ' + estilo.id);
+    }
+  });
+
+  comprobar('el vestuario del grupo lo decide el Director, la cara no', () => {
+    // Aclaración del usuario: que vayan iguales o distintos es decisión
+    // creativa. Lo que NO se negocia es que sean personas diferentes.
+    const vistos = new Set();
+    for (const inst of [['violin', 'cello'], ['piano', 'violin'], ['guitar', 'flute'], ['cello', 'harp']]) {
+      const { config, biblia } = bibliaDe({ formationId: 'duo', instrumentIds: inst });
+      vistos.add(biblia.wardrobeGroup);
+      // Innegociable, salga la decisión que salga:
+      cierto(biblia.cast[0].face !== biblia.cast[1].face, 'dos intérpretes con la misma cara');
+      cierto(biblia.cast[0].hair !== biblia.cast[1].hair, 'dos intérpretes con el mismo pelo');
+      const p = arte.buildCharacterPrompt(biblia, config, 2, 2, 'el suyo');
+      cierto(/OTRO ROSTRO y OTRO PEINADO/.test(p), 'no exige otra cara y otro peinado');
+      cierto(!/otro color de ropa/i.test(p), 'sigue imponiendo otro color de ropa');
+      cierto(!/los otros 1 intérpretes/.test(p), 'el plural está mal escrito');
+      // Y el prompt dice la decisión que se tomó, no una regla fija.
+      const base = (v) => v.split(', con ')[0];
+      const mismos = base(biblia.cast[0].wardrobe) === base(biblia.cast[1].wardrobe);
+      igual(mismos, biblia.wardrobeGroup === 'conjuntado', 'el vestuario no sigue la decisión');
+      cierto(
+        mismos ? /VESTUARIO es el mismo/.test(p) : /distinto del de los demás/.test(p),
+        'el prompt no cuenta la decisión que tomó el Director',
+      );
+    }
+    cierto(vistos.size === 2, 'el Director siempre decide lo mismo: ' + [...vistos].join(', '));
   });
 
   comprobar('el retrato de uno no describe el instrumento del otro', () => {

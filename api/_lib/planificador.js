@@ -191,10 +191,13 @@ const PEINADOS = {
 // El vestuario NO es lo que distingue a un intérprete de otro.
 //
 // Antes sí lo era: a cada músico se le asignaba un color distinto «por encima
-// de lo que diga la prenda». Eso rompía justo lo que hace que un dúo parezca un
-// dúo. En la referencia que dio el usuario las dos chicas van vestidas igual y
-// se distinguen por la cara y el peinado. Así que el conjunto es UNO para todo
-// el grupo, y lo que cambia de una persona a otra es un detalle pequeño.
+// de lo que diga la prenda», y eso deshacía cualquier idea de grupo. Pero
+// tampoco es al revés: que vayan conjuntados o cada uno a lo suyo es una
+// decisión del Director, no una ley. Lo que sí es ley es que sean personas
+// DISTINTAS, y eso se resuelve siempre con la cara y el peinado.
+//
+// Y por encima de las dos cosas manda lo que escriba el usuario en su cuadro de
+// indicaciones: si dice cómo van vestidos, se hace lo que dice.
 const CONJUNTOS = [
   {
     nombre: 'blanco y negro de concierto',
@@ -233,11 +236,18 @@ const DETALLES = [
   'una horquilla brillante sobre la sien',
 ];
 
-const BUILD_OPTIONS = [
-  'complexión esbelta y estilizada, hombros finos, postura erguida y elegante',
-  'complexión atlética y proporcionada, espalda recta, postura relajada',
-  'complexión menuda y grácil, manos finas y expresivas, cuello largo',
-];
+const COMPLEXIONES = {
+  femenino: [
+    'figura esbelta y estilizada, de proporciones armónicas, cintura marcada, hombros finos y porte erguido',
+    'figura atlética y bien proporcionada, espalda recta, piernas largas y postura segura',
+    'figura grácil y equilibrada, cuello largo, manos finas y expresivas, movimiento suave',
+  ],
+  masculino: [
+    'complexión atlética y bien proporcionada, hombros anchos, cintura estrecha y porte erguido',
+    'complexión esbelta y fibrada, espalda recta, brazos definidos y postura serena',
+    'complexión alta y equilibrada, línea limpia, manos grandes y expresivas',
+  ],
+};
 
 /**
  * Qué banco le toca al intérprete número `n` según el tipo elegido.
@@ -324,9 +334,13 @@ function buildHeuristicBrief(input) {
   //    solo para todo el grupo —como en la referencia que dio el usuario, las
   //    dos vestidas igual— y lo que cambia de una persona a otra es un detalle.
   const cuantosMusicos = Math.max(1, Number(formation && formation.performerCount) || 1);
-  const conjunto = pickFrom(rng, CONJUNTOS);
+  // Decisión del Director: o salen conjuntados, o cada uno lleva lo suyo.
+  const vestuarioConjuntado = cuantosMusicos === 1 || rng() < 0.5;
+  const conjuntos = vestuarioConjuntado
+    ? Array.from({ length: cuantosMusicos }, () => pickFrom(rng, CONJUNTOS))
+    : repartirSinRepetir(rng, CONJUNTOS, cuantosMusicos);
+  if (vestuarioConjuntado) conjuntos.fill(conjuntos[0]);
   const detalles = repartirSinRepetir(rng, DETALLES, cuantosMusicos);
-  const cuerpos = repartirSinRepetir(rng, BUILD_OPTIONS, cuantosMusicos);
   const edad = performerType?.id.startsWith('young') ? 'entre 18 y 24 años' : 'entre 28 y 38 años';
 
   // Los rostros y los peinados se reparten por banco, porque en un grupo mixto
@@ -350,11 +364,11 @@ function buildHeuristicBrief(input) {
         `${suyo ? 'toca ' + suyo.name + ', ' : ''}de presencia serena y elegante, con la atención puesta en la interpretación y sin gestos teatrales.`,
         380,
       ),
+      banco,
       face: truncate(tomarDe(ROSTROS, banco), 290),
       hair: truncate(tomarDe(PEINADOS, banco), 190),
-      // El conjunto es el mismo para todos; el detalle es suyo.
-      wardrobe: truncate(`${conjunto[banco]}, con ${detalles[n]}`, 290),
-      build: truncate(cuerpos[n], 190),
+      wardrobe: truncate(`${conjuntos[n][banco]}, con ${detalles[n]}`, 290),
+      build: truncate(tomarDe(COMPLEXIONES, banco), 190),
       apparentAge: edad,
       accessories: suyo ? [`funda del ${suyo.name}`] : [],
     });
@@ -387,6 +401,7 @@ function buildHeuristicBrief(input) {
       accessories: lead ? [`funda del ${lead.name}`, 'anillo sencillo en la mano derecha'] : [],
     },
     cast,
+    wardrobeGroup: vestuarioConjuntado ? 'conjuntado' : 'individual',
     environment: {
       location: truncate(
         config.scenarioCustom?.trim() ||
