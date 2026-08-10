@@ -600,6 +600,7 @@ var estado = {
   montajeJob: null,        // identificador del montaje en curso
   filtroBib: 'todo',
   form: null,              // borrador de la pantalla de configuración
+  cola: null,              // generación en lote en marcha, si la hay
   salud: null
 };
 
@@ -1789,6 +1790,8 @@ function panelProduccion(p, sit){
         : '')) +
   '</div>';
 
+  html += htmlCola(p);
+
   html += '<div class="tarjeta" id="caja-revision">' + htmlRevision(p) + '</div>';
 
   // Lista completa, agrupada por etapa para que en el móvil no sea un muro.
@@ -1805,6 +1808,13 @@ function panelProduccion(p, sit){
         (!abierta ? ' · bloqueada' : (completa ? ' · completa' : '')) + '</summary>' +
       '<div class="cuerpo">' +
         (!abierta ? '<p class="nota">Esta etapa se abre cuando la anterior esté aprobada entera.</p>' : '') +
+        // Generar en lote, que es lo tonto de hacer a mano. Aprobar sigue
+        // siendo de uno en uno: eso es la promesa del producto.
+        (abierta && !completa && !estado.cola
+          ? '<button class="btn ancho" style="margin-bottom:10px" data-accion="cola-etapa" data-etapa="' + esc(etapa) + '">' +
+            'Generar ' + (lista.length - aprobados) + ' de ' + esc(ETIQ_ETAPA[etapa]).toLowerCase() + ' en cola</button>' +
+            '<p class="tenue mini" style="margin:-4px 0 10px">Se lanzan de una en una y en orden. Tú vas aprobando o regenerando cada una según salga.</p>'
+          : '') +
         '<div class="filas">' + lista.map(function(a){
           return htmlFilaActivo(a, estado.activoSel === a.id);
         }).join('') + '</div>' +
@@ -2404,6 +2414,9 @@ async function accionAprobar(activoId, genId){
     estado.activoSel = sit.siguiente ? sit.siguiente.id : null;
     avisar('Aprobado.', 'ok');
   });
+  // Aprobar es lo que abre la puerta a lo siguiente. Si hay cola esperando por
+  // eso exactamente, que arranque ya y no dentro de cinco segundos.
+  if (estado.cola) colaTic();
 }
 
 async function accionRechazar(activoId, genId){
@@ -2540,6 +2553,8 @@ document.addEventListener('click', function(ev){
   }
 
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
+  if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
+  if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
   if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo')); return; }
   if (accion === 'aprobar') { accionAprobar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
@@ -2653,6 +2668,181 @@ window.addEventListener('hashchange', leerRuta);
 // la consulta es lo que hace avanzar el trabajo en un entorno sin servidor.
 // ───────────────────────────────────────────────────────────────────────
 
+// ───────────────────────────────────────────────────────────────────────
+// LA COLA: generar una etapa entera sin ir dando a un botón por elemento
+//
+// Aprobar uno por uno es la regla del producto y no se toca. Lanzar uno por
+// uno no es una regla, es trabajo tonto: diecisiete imágenes son diecisiete
+// idas y venidas a la ficha de cada activo. La cola separa las dos cosas —
+// GENERAR se automatiza, APROBAR sigue siendo tuyo, elemento por elemento.
+//
+// Va en el navegador a propósito. En Vercel no hay proceso que sobreviva a la
+// petición: no existe un sitio donde vivir un trabajador de fondo. El latido
+// ya vuelve cada pocos segundos, así que la cola se cuelga de él.
+//
+// Corre EN SERIE, nunca en paralelo. Dos motivos: el límite de peticiones por
+// minuto de Vertex, y que lanzar diecisiete a la vez desde un móvil es más
+// lento que lanzarlas seguidas.
+//
+// Y respeta las dependencias sin saber nada de ellas: sólo lanza lo que el
+// servidor dice que se puede lanzar. Cuando ya no queda nada porque falta que
+// apruebes algo, la cola NO se muere: se queda esperando, y en cuanto apruebas
+// sigue sola. Eso es lo que hace que «generar todas las imágenes» funcione
+// aunque el escenario dependa del personaje.
+// ───────────────────────────────────────────────────────────────────────
+
+// Descanso entre lanzamientos, por tipo de medio. No es el límite real —ese
+// depende de la cuota de cada cuenta— sino un ritmo prudente de salida. Si
+// Google contesta que no, el freno de abajo lo estira solo.
+var RITMO_MS = { image: 8000, video: 12000, audio: 8000 };
+
+// El freno cuando salta la cuota. Empieza en medio minuto y se dobla hasta
+// tres, que es más que de sobra para cualquier límite por minuto.
+var FRENO_MIN_MS = 30000;
+var FRENO_MAX_MS = 180000;
+
+/** ¿Este error es «Google me está frenando» y no «esto está roto»? */
+function esLimiteDeCuota(e){
+  var m = String((e && e.message) || '');
+  return /429|cuota|quota|limitando|RESOURCE_EXHAUSTED|rate limit|too many/i.test(m);
+}
+
+function colaVacia(etapa){
+  return { proyectoId: estado.proyectoId, etapa: etapa, activa: true, actual: null, hechos: 0, fallos: [],
+           esperaHasta: 0, freno: 0, aviso: '' };
+}
+
+/** Los activos de la cola: los de la etapa, o todos si la etapa es 'todo'. */
+function colaActivos(p){
+  var c = estado.cola;
+  if (!c) return [];
+  return activos(p).filter(function(a){ return c.etapa === 'todo' || a.stage === c.etapa; });
+}
+
+/** Lo que le queda por hacer a la cola: ni aprobado, ni ya en revisión. */
+function colaPendientes(p){
+  return colaActivos(p).filter(function(a){
+    // En revisión NO es pendiente: ya está generado y lo que falta es tu
+    // decisión, que es justo lo que la cola no hace por ti.
+    return a.status !== 'approved' && a.status !== 'review' && !a.locked;
+  });
+}
+
+/** El siguiente que se puede lanzar AHORA, respetando dependencias. */
+function colaSiguiente(p){
+  var libres = colaPendientes(p).filter(function(a){
+    return a.status !== 'generating' && puedeGenerar(p, a).ok;
+  });
+  return libres.length ? libres[0] : null;
+}
+
+function arrancarCola(etapa){
+  estado.cola = colaVacia(etapa);
+  pintar();
+  colaTic();
+}
+
+function pararCola(motivo){
+  if (!estado.cola) return;
+  estado.cola = null;
+  if (motivo) avisar(motivo);
+  pintar();
+}
+
+/**
+ * Un paso de la cola. Lo llama el latido, y también cada aprobación: así,
+ * en cuanto apruebas el personaje, el escenario sale sin que toques nada.
+ */
+async function colaTic(){
+  var c = estado.cola, p = estado.proyecto;
+  if (!c || !c.activa || !p) return;
+  // Cambiar de corto cancela la cola: es de ese proyecto, no del estudio.
+  if (c.proyectoId !== p.id) { estado.cola = null; return; }
+  if (c.actual) return;                       // hay una en marcha: esperar
+  if (Date.now() < c.esperaHasta) return;     // descanso o freno
+
+  // Si algo está generándose (lo lanzó la cola antes de recargar, o lo lanzaste
+  // tú a mano), no se lanza nada encima.
+  if (colaActivos(p).some(function(a){ return a.status === 'generating'; })) return;
+
+  var siguiente = colaSiguiente(p);
+  if (!siguiente) {
+    var quedan = colaPendientes(p);
+    if (!quedan.length) {
+      var etiqueta = c.etapa === 'todo' ? 'el corto' : ETIQ_ETAPA[c.etapa];
+      pararCola('Cola terminada: ya no queda nada por generar en ' + etiqueta + '.');
+      return;
+    }
+    // Queda material, pero está esperando a que apruebes algo. La cola se
+    // queda armada: no se pierde el trabajo de haberla puesto en marcha.
+    c.aviso = 'En espera: ' + quedan.length + (quedan.length === 1 ? ' elemento necesita' : ' elementos necesitan') +
+      ' que apruebes algo antes de poder generarse.';
+    pintar();
+    return;
+  }
+
+  c.actual = siguiente.id;
+  c.aviso = '';
+  pintar();
+  try {
+    await api.generar(p.id, siguiente.id);
+    c.hechos += 1;
+    // Ha ido bien: se afloja el freno poco a poco por si la cuota se abrió.
+    if (c.freno) c.freno = Math.max(0, Math.round(c.freno * 0.6));
+    c.esperaHasta = Date.now() + (c.freno || RITMO_MS[MEDIO_DE_TIPO[siguiente.kind]] || 8000);
+  } catch (e) {
+    if (esLimiteDeCuota(e)) {
+      // No es un fallo del activo: es la cuota. Se espera y se vuelve a
+      // intentar EL MISMO, sin contarlo como error ni saltárselo.
+      c.freno = Math.min(FRENO_MAX_MS, Math.max(FRENO_MIN_MS, c.freno * 2));
+      c.esperaHasta = Date.now() + c.freno;
+      c.aviso = 'Google está limitando las peticiones. Reintento en ' + Math.round(c.freno / 1000) + ' s.';
+    } else {
+      // Un fallo de verdad: se anota, se salta y la cola sigue. Pararla entera
+      // por un activo roto obligaría a relanzar los dieciséis que quedaban.
+      c.fallos.push({ id: siguiente.id, label: siguiente.label, error: String(e && e.message || e) });
+      c.esperaHasta = Date.now() + 2000;
+    }
+  } finally {
+    c.actual = null;
+  }
+
+  try { await cargarProyecto(p.id, true); } catch (e) { /* el latido reintenta */ }
+  pintar();
+  latir(true);
+}
+
+/** La barra de la cola, arriba del todo mientras está en marcha. */
+function htmlCola(p){
+  var c = estado.cola;
+  if (!c) return '';
+  var pendientes = colaPendientes(p).length;
+  var enRevision = colaActivos(p).filter(function(a){ return a.status === 'review'; }).length;
+  var espera = Math.max(0, Math.ceil((c.esperaHasta - Date.now()) / 1000));
+  var etiqueta = c.etapa === 'todo' ? 'todo el corto' : ETIQ_ETAPA[c.etapa];
+
+  var linea = c.actual
+    ? 'Generando: ' + esc((colaActivos(p).find(function(a){ return a.id === c.actual; }) || {}).label || c.actual)
+    : (espera ? 'Siguiente en ' + espera + ' s' : (c.aviso ? '' : 'Buscando qué generar…'));
+
+  return '<div class="tarjeta" style="border-color:var(--acento)">' +
+    '<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+      '<div style="min-width:0"><p class="sube">Cola · ' + esc(etiqueta) + '</p>' +
+        '<h3 style="margin:0">' + c.hechos + ' generadas · ' + pendientes + ' por generar</h3></div>' +
+      '<button class="btn fantasma pequeno" data-accion="cola-parar">Parar</button>' +
+    '</div>' +
+    (linea ? '<p class="tenue mini">' + linea + '</p>' : '') +
+    (c.aviso ? '<div class="nota aviso" style="margin-top:8px">' + esc(c.aviso) + '</div>' : '') +
+    (enRevision ? '<div class="nota" style="margin-top:8px"><b>' + enRevision +
+      (enRevision === 1 ? ' generación espera' : ' generaciones esperan') +
+      ' tu decisión.</b> Puedes ir aprobando mientras la cola sigue trabajando.</div>' : '') +
+    (c.fallos.length ? '<div class="nota mala" style="margin-top:8px"><b>' + c.fallos.length +
+      (c.fallos.length === 1 ? ' ha fallado' : ' han fallado') + ':</b> ' +
+      esc(c.fallos.slice(-3).map(function(f){ return f.label; }).join(', ')) +
+      '. La cola siguió con los demás; regenéralos a mano cuando quieras.</div>' : '') +
+  '</div>';
+}
+
 var latidoTimer = null;
 var latidoOcupado = false;
 
@@ -2670,7 +2860,16 @@ async function tic(){
 
   var generando = activos(p).filter(function(a){ return a.status === 'generating'; });
   var montando = p.finalCut && p.finalCut.status === 'building';
-  if (!generando.length && !montando) { latir(); return; }
+  // La cola tiene que moverse aunque no haya nada en marcha: es justo cuando
+  // está descansando entre lanzamientos o esperando a que apruebes algo.
+  if (estado.cola) { try { await colaTic(); } catch (e) { console.warn('[ams] cola', e && e.message); } }
+  if (!generando.length && !montando) {
+    // Con la cola viva se repinta igual: la cuenta atrás del descanso tiene
+    // que verse correr, o parece que se ha quedado colgada.
+    if (estado.cola) pintar(true);
+    latir();
+    return;
+  }
 
   latidoOcupado = true;
   try {

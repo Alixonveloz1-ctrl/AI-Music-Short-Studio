@@ -223,6 +223,101 @@ async function principal() {
     }
   });
 
+  comprobar('la cola respeta las dependencias y no se salta la aprobación', () => {
+    // La cola automatiza GENERAR. No automatiza APROBAR: eso es la regla del
+    // producto (PRD §4, §46) y la prueba de abajo la vigila con la cola dentro.
+    for (const nombre of ['colaSiguiente', 'colaPendientes', 'colaVacia']) {
+      cierto(typeof ui[nombre] === 'function', 'falta ' + nombre + ' en index.html');
+    }
+
+    const p = nuevo();
+    ui.estado.proyecto = p;
+    ui.estado.proyectoId = p.id;
+    ui.estado.cola = ui.colaVacia('images');
+
+    // Generar y aprobar un activo, como haría el usuario tras revisarlo.
+    const producir = (a) => {
+      const g = dominio.startGeneration(p, a, { prompt: 'p', negativePrompt: 'n', referenceAssetIds: [], provider: { name: 'prueba' }, seed: 1 });
+      dominio.completeGeneration(p, a, g, { path: a.id + '.png', bytes: 10, mimeType: 'image/png' });
+      return g;
+    };
+
+    // Se deja correr la cola hasta que no proponga nada más, aprobando cada
+    // cosa que propone. El tope es una red contra un bucle infinito.
+    const orden = [];
+    for (let vuelta = 0; vuelta < 200; vuelta += 1) {
+      const siguiente = ui.colaSiguiente(p);
+      if (!siguiente) break;
+      // Lo que la cola propone tiene que poder generarse DE VERDAD según el
+      // servidor. Si no, la cola se estaría saltando una dependencia.
+      const puerta = progreso.canGenerate(p, siguiente);
+      cierto(puerta.ok, 'la cola propuso algo que el servidor rechaza: ' + siguiente.id + ' — ' + puerta.reason);
+      orden.push(siguiente.id);
+      const g = producir(siguiente);
+      // Recién generado, la cola NO debe volver a proponerlo: está en revisión
+      // esperando al usuario, y eso no es trabajo suyo.
+      cierto(!ui.colaPendientes(p).some((x) => x.id === siguiente.id),
+        'la cola sigue contando como pendiente algo que ya espera decisión: ' + siguiente.id);
+      dominio.approveGeneration(p, siguiente.id, g.id);
+    }
+
+    // Con todo aprobado, la cola de imágenes se queda sin nada que hacer.
+    igual(ui.colaPendientes(p).length, 0, 'quedan imágenes pendientes al terminar');
+    // Y ha pasado por TODAS las imágenes, ninguna se quedó fuera.
+    igual(orden.length, p.assets.filter((a) => a.stage === 'images').length, 'imágenes recorridas');
+    // El orden respeta la cadena: los personajes antes que la escena, y la
+    // escena antes que cualquier imagen de toma.
+    const pos = (id) => orden.indexOf(id);
+    cierto(pos('master_scene') > pos('master_character'), 'la escena fue antes que el personaje');
+    cierto(pos('master_scene') > pos('master_environment'), 'la escena fue antes que el escenario');
+    for (const a of p.assets.filter((x) => x.kind === 'shot_image')) {
+      cierto(pos(a.id) > pos('master_scene'), 'una toma fue antes que la escena: ' + a.id);
+    }
+  });
+
+  comprobar('sin aprobar nada, la cola se queda esperando y no fuerza la puerta', () => {
+    const p = nuevo();
+    ui.estado.proyecto = p;
+    ui.estado.proyectoId = p.id;
+    ui.estado.cola = ui.colaVacia('images');
+
+    // Se genera TODO lo que la cola puede generar, pero no se aprueba nada.
+    const generados = new Set();
+    for (let vuelta = 0; vuelta < 200; vuelta += 1) {
+      const siguiente = ui.colaSiguiente(p);
+      if (!siguiente) break;
+      const g = dominio.startGeneration(p, siguiente, { prompt: 'p', negativePrompt: 'n', referenceAssetIds: [], provider: { name: 'prueba' }, seed: 1 });
+      dominio.completeGeneration(p, siguiente, g, { path: 'x.png', bytes: 10, mimeType: 'image/png' });
+      generados.add(siguiente.id);
+    }
+    // Sin una sola aprobación, la cola NO ha podido llegar a las tomas.
+    cierto(!generados.has('master_scene'), 'la cola generó la escena sin aprobar sus dependencias');
+    for (const a of p.assets.filter((x) => x.kind === 'shot_image')) {
+      cierto(!generados.has(a.id), 'la cola generó una toma sin aprobar la escena: ' + a.id);
+    }
+    // Y nada quedó aprobado por el camino: la cola nunca aprueba.
+    igual(p.assets.filter((a) => a.status === 'approved').length, 0, 'la cola aprobó algo por su cuenta');
+    // Pero queda trabajo pendiente, así que la barra debe decir «en espera» en
+    // vez de darse por terminada.
+    cierto(ui.colaPendientes(p).length > 0, 'la cola se creería terminada con trabajo por hacer');
+  });
+
+  comprobar('un 429 de Google se distingue de un fallo de verdad', () => {
+    cierto(typeof ui.esLimiteDeCuota === 'function', 'falta esLimiteDeCuota en index.html');
+    const limite = [
+      'Google está limitando las peticiones (cuota). Espera un momento y reintenta.',
+      'HTTP 429: Too Many Requests',
+      'RESOURCE_EXHAUSTED: quota exceeded',
+    ];
+    for (const m of limite) cierto(ui.esLimiteDeCuota(new Error(m)), 'no reconoce el límite: ' + m);
+    const rotos = [
+      'a la cuenta de servicio le falta el rol "Usuario de Vertex AI"',
+      'ese modelo no existe o no está disponible en esta región',
+      'El montaje sólo recibe material que hayas aprobado tú.',
+    ];
+    for (const m of rotos) cierto(!ui.esLimiteDeCuota(new Error(m)), 'confunde con un límite: ' + m);
+  });
+
   comprobar('coinciden en qué etapas están abiertas, en cada paso de la producción', () => {
     const p = nuevo();
     const etapas = ['images', 'videos', 'music', 'ambient'];
