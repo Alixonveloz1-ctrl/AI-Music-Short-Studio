@@ -302,6 +302,26 @@ async function principal() {
     cierto(ui.colaPendientes(p).length > 0, 'la cola se creería terminada con trabajo por hacer');
   });
 
+  comprobar('ninguna URL de Vertex sale con undefined dentro', () => {
+    // El fallo: los modelos de Veo llevan region:'' para heredar la del
+    // proyecto, pero vertex.js llamaba a regionVideo() sin pasar el valor por
+    // defecto, así que salía undefined y la URL quedaba en
+    // https://undefined-aiplatform.googleapis.com/.../locations/undefined/...
+    // googleapis.com resuelve cualquier subdominio, así que no daba error de
+    // red: daba la página 404 en HTML de Google. El vídeo no funcionaba nunca.
+    const { vertexUrl } = require(path.join(RAIZ, 'api/_lib/gcp.js'));
+    const modelos = require(path.join(RAIZ, 'api/_lib/modelos.js'));
+    const casos = modelos.MODELOS_VIDEO.map((m) => ['video', m.id])
+      .concat(modelos.MODELOS_IMAGEN.map((m) => ['imagen', m.id]));
+    for (const [tipo, id] of casos) {
+      const region = tipo === 'video' ? modelos.regionVideo(id) : modelos.regionImagen(id);
+      cierto(region && typeof region === 'string', 'sin región para ' + id + ': ' + region);
+      const url = vertexUrl('proyecto', region, id, 'predictLongRunning');
+      cierto(!/undefined|null/.test(url), 'URL rota para ' + id + ': ' + url);
+      cierto(/^https:\/\/[a-z0-9-]+\.googleapis\.com\//.test(url), 'host raro para ' + id + ': ' + url);
+    }
+  });
+
   comprobar('un 429 de Google se distingue de un fallo de verdad', () => {
     cierto(typeof ui.esLimiteDeCuota === 'function', 'falta esLimiteDeCuota en index.html');
     const limite = [
@@ -534,6 +554,64 @@ async function principal() {
     const p = arte.buildEnvironmentPrompt(biblia, config);
     cierto(/ESCENARIO VACÍO/.test(p), 'no lo pide vacío');
     cierto(/SIN PERSONAS/.test(p), 'no lo repite en los requisitos');
+  });
+
+  comprobar('en un dúo, el segundo intérprete no desaparece del corto', () => {
+    // El fallo tal como lo vio: pidió violín y violonchelo, y de trece tomas
+    // sólo UNA tenía a las dos. En las doce restantes salía la del violín sola.
+    // La causa: cada toma se describía «de una chica joven interpretando
+    // Violín», en singular y siempre con el primer instrumento de la lista.
+    const config = Object.assign({}, CONFIG, {
+      formationId: 'duo', instrumentIds: ['violin', 'cello'],
+    });
+    const e = productor.planStructure(60);
+    const brief = planificador.buildHeuristicBrief({ config, runtimeSec: 60, shots: e.shots });
+
+    const suyas = (n) => brief.shots.filter((s) => s.subject === n).length;
+    cierto(suyas(1) > 0, 'el intérprete 1 no sale en ninguna toma propia');
+    cierto(suyas(2) > 0, 'el intérprete 2 no sale en ninguna toma propia');
+    cierto(brief.shots.some((s) => s.subject === 'todos'), 'no hay ni una toma del grupo');
+    // Y el reparto es equilibrado: nadie se lleva todo lo cerrado.
+    cierto(Math.abs(suyas(1) - suyas(2)) <= 1, 'reparto desequilibrado: ' + suyas(1) + ' vs ' + suyas(2));
+
+    // El violonchelo tiene que nombrarse en alguna descripción; antes no
+    // aparecía en ninguna.
+    cierto(brief.shots.some((s) => /Violonchelo/.test(s.description)),
+      'el violonchelo no se menciona en ninguna toma');
+
+    // Y con cuatro músicos tampoco se olvida ninguno.
+    const cuatro = Object.assign({}, CONFIG, { formationId: 'quartet', instrumentIds: ['violin', 'cello'] });
+    const b4 = planificador.buildHeuristicBrief({
+      config: cuatro, runtimeSec: 180, shots: productor.planStructure(180).shots,
+    });
+    for (let n = 1; n <= 4; n += 1) {
+      cierto(b4.shots.some((s) => s.subject === n), 'el intérprete ' + n + ' se queda sin tomas');
+    }
+  });
+
+  comprobar('la toma dice quién sale y sólo recibe SU referencia', () => {
+    const config = Object.assign({}, CONFIG, {
+      formationId: 'duo', instrumentIds: ['violin', 'cello'],
+    });
+    const e = productor.planStructure(60);
+    const brief = planificador.buildHeuristicBrief({ config, runtimeSec: 60, shots: e.shots });
+    const biblia = arte.buildVisualBible(config, brief);
+
+    const deUno = brief.shots.find((s) => typeof s.subject === 'number');
+    const deTodos = brief.shots.find((s) => s.subject === 'todos');
+    cierto(deUno && deTodos, 'no hay tomas de los dos tipos para comparar');
+
+    const toma = Object.assign({}, e.shots[deUno.index - 1], deUno);
+    const p1 = arte.buildShotImagePrompt(biblia, toma, config);
+    cierto(/QUIÉN SALE EN ESTA TOMA/.test(p1), 'la toma no dice quién sale');
+    cierto(/UNA SOLA PERSONA/.test(p1), 'una toma individual no lo deja claro');
+    cierto(/NO aparecen en el encuadre/.test(p1), 'no se excluye al resto del grupo');
+    // Y no se le listan las dos fichas del reparto: eso invita a meter a las dos.
+    cierto(!/PERSONAS DISTINTAS/.test(p1), 'a una toma individual se le lista el reparto entero');
+
+    const tomaG = Object.assign({}, e.shots[deTodos.index - 1], deTodos);
+    const p2 = arte.buildShotImagePrompt(biblia, tomaG, config);
+    cierto(/LOS 2 INTÉRPRETES/.test(p2), 'la toma de grupo no pide a los dos');
   });
 
   comprobar('cada intérprete tiene SU cara, no la del primero', () => {

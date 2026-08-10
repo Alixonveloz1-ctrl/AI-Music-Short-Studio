@@ -359,6 +359,64 @@ function aplicarFicha(miembro, ficha) {
   return miembro;
 }
 
+/**
+ * QUIÉN SALE EN CADA TOMA.
+ *
+ * EL FALLO QUE ARREGLA. El usuario pidió un dúo, violín y violonchelo, y de las
+ * trece tomas del corto sólo UNA tenía a las dos chicas: en las doce restantes
+ * salía la del violín, sola. La chelista quedaba olvidada.
+ *
+ * La causa estaba a la vista en `describeShot`: cada toma se describía como
+ * «plano medio de una chica joven interpretando Violín», en singular y siempre
+ * con el PRIMER instrumento de la lista. No había ni una frase en todo el plan
+ * que mencionara al segundo intérprete.
+ *
+ * Así que hay que repartir el protagonismo, y repartirlo con criterio:
+ *
+ *  - Los planos abiertos son del grupo entero. No se puede hacer un plano
+ *    general de un dúo y sacar sólo a una: se vería el hueco donde está la otra.
+ *  - Los planos cerrados son de UNA persona, y van rotando. Un primer plano de
+ *    dos caras a la vez no es un primer plano.
+ *  - Y ninguna se queda fuera: si al terminar el reparto alguien no tiene ni una
+ *    toma propia, se le quita una a quien más tenga.
+ */
+const PLANOS_DE_GRUPO = ['establishing_wide', 'wide', 'high_angle', 'detail'];
+
+function repartirProtagonismo(shots, cuantos) {
+  if (cuantos <= 1) return shots.map(() => 1);
+
+  const sujetos = shots.map((shot) =>
+    PLANOS_DE_GRUPO.indexOf(shot.shotType) !== -1 ? 'todos' : null,
+  );
+
+  // Los cerrados se reparten por turnos, en el orden del corto.
+  let turno = 0;
+  for (let i = 0; i < sujetos.length; i += 1) {
+    if (sujetos[i] === null) {
+      sujetos[i] = (turno % cuantos) + 1;
+      turno += 1;
+    }
+  }
+
+  // Y el repaso final: nadie sin una sola toma suya.
+  for (let quien = 1; quien <= cuantos; quien += 1) {
+    if (sujetos.indexOf(quien) !== -1) continue;
+    // Se le quita al que más tenga, empezando por el final para no tocar la
+    // toma de apertura, que es la que presenta la escena.
+    const cuenta = {};
+    for (const s of sujetos) if (typeof s === 'number') cuenta[s] = (cuenta[s] || 0) + 1;
+    let masRico = 0;
+    for (const k in cuenta) if (!masRico || cuenta[k] > cuenta[masRico]) masRico = Number(k);
+    // Si nadie tiene ninguna —todo son planos de grupo— se convierte el último.
+    const donde = masRico
+      ? sujetos.lastIndexOf(masRico)
+      : sujetos.length - 1;
+    if (donde >= 0) sujetos[donde] = quien;
+  }
+
+  return sujetos;
+}
+
 /** El planificador determinista interno. Devuelve un brief creativo completo. */
 function buildHeuristicBrief(input) {
   const { config, shots, runtimeSec } = input;
@@ -462,6 +520,8 @@ function buildHeuristicBrief(input) {
     aplicarFicha(cast[n], rasgos.fichaDe(config, n + 1));
   }
 
+  const protagonismo = repartirProtagonismo(shots, cuantosMusicos);
+
 
   const brief = {
     title: truncate(title, 78),
@@ -557,8 +617,12 @@ function buildHeuristicBrief(input) {
       'Manos y dedos anatómicamente correctos y en posición coherente con la técnica',
       `Formación visible constante: ${formation?.description ?? 'un intérprete'}`,
     ],
-    shots: shots.map((shot) => ({
+    shots: shots.map((shot, i) => ({
       index: shot.index,
+      // Quién sale: 'todos' o el número del intérprete. Viaja con la toma
+      // porque el Director de Arte lo necesita para escribir el prompt y para
+      // elegir qué retratos manda como referencia.
+      subject: protagonismo[i],
       purpose: truncate(purposeFor(shot.beat, shot.index, shots.length), 190),
       description: truncate(
         describeShot({
@@ -569,6 +633,9 @@ function buildHeuristicBrief(input) {
           place: placeName,
           elements: scenario?.elements ?? [],
           timeOfDay,
+          // El reparto entero y quién manda en esta toma.
+          cast,
+          subject: protagonismo[i],
         }),
         580,
       ),
@@ -663,10 +730,27 @@ function purposeFor(beat, index, total) {
 
 function describeShot(args) {
   const anchor = args.elements[0] ? `, con ${args.elements[0]} en el encuadre` : '';
-  const base = `${capitalize(args.shotTypeLabel)} de ${args.performer} interpretando ${args.instrument} en ${args.place}${anchor}.`;
+  const reparto = Array.isArray(args.cast) ? args.cast : [];
+
+  // Quién sale y con qué instrumento. Con un solo músico esto se queda como
+  // estaba; con varios es lo que impide que el segundo desaparezca del corto.
+  let quien = args.performer;
+  let instrumento = args.instrument;
+  if (reparto.length > 1 && args.subject === 'todos') {
+    quien = `los ${reparto.length} intérpretes del grupo`;
+    instrumento = reparto.map((m) => m.instrument).filter(Boolean).join(' y ') || args.instrument;
+  } else if (reparto.length > 1 && typeof args.subject === 'number') {
+    const suyo = reparto[args.subject - 1];
+    if (suyo) {
+      quien = `EL INTÉRPRETE ${args.subject} DEL GRUPO Y NADIE MÁS (${suyo.instrument || args.instrument})`;
+      instrumento = suyo.instrument || args.instrument;
+    }
+  }
+
+  const base = `${capitalize(args.shotTypeLabel)} de ${quien} interpretando ${instrumento} en ${args.place}${anchor}.`;
   switch (args.beat) {
     case 'opening':
-      return `${base} El intérprete aparece integrado en el entorno, todavía a distancia; la luz de ${args.timeOfDay} define la profundidad del plano.`;
+      return `${base} ${args.subject === 'todos' && reparto.length > 1 ? 'Los intérpretes aparecen integrados' : 'El intérprete aparece integrado'} en el entorno, todavía a distancia; la luz de ${args.timeOfDay} define la profundidad del plano.`;
     case 'development':
       return `${base} El gesto de la interpretación es claramente visible: manos, brazos y respiración trabajando sobre el instrumento.`;
     case 'climax':

@@ -518,7 +518,16 @@ function buildAssets(config, plan) {
           // La escena maestra va PRIMERA: ya contiene a todos los
           // intérpretes en su sitio, así que es la referencia que más
           // información da por imagen. Detrás, el escenario y los retratos.
-          referenceAssetIds: [MASTER_SCENE_ID, MASTER_ENVIRONMENT_ID].concat(idsPersonajes),
+          //
+          // Y de los retratos van SÓLO los de quien sale en esta toma. Mandarle
+          // los cuatro para un primer plano de uno es enseñarle cuatro caras y
+          // pedirle que dibuje una: unas veces mezcla rasgos y otras mete a
+          // alguien de más en el encuadre.
+          referenceAssetIds: [MASTER_SCENE_ID, MASTER_ENVIRONMENT_ID].concat(
+            typeof shot.subject === 'number' && idsPersonajes[shot.subject - 1]
+              ? [idsPersonajes[shot.subject - 1]]
+              : idsPersonajes,
+          ),
           continuityNotes: bible.continuityRules,
         },
         dependsOn: [MASTER_SCENE_ID],

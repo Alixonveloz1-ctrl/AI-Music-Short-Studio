@@ -426,14 +426,51 @@ function interprete(bible, n) {
  * Devuelve null cuando sólo hay un intérprete: ahí no hay a quién distinguir y
  * la lista sólo sería ruido.
  */
+/**
+ * QUIÉN SALE EN ESTA TOMA, dicho en su propio bloque y sin ambigüedad.
+ *
+ * `shot.subject` lo decide el Director: 'todos' o el número del intérprete.
+ * Con un solo músico no hay nada que aclarar y el bloque no aparece.
+ */
+function bloqueQuienSale(bible, shot) {
+  const reparto = Array.isArray(bible.cast) ? bible.cast : [];
+  if (reparto.length < 2) return null;
+
+  if (typeof shot.subject === 'number' && reparto[shot.subject - 1]) {
+    const quien = reparto[shot.subject - 1];
+    return block('QUIÉN SALE EN ESTA TOMA', [
+      `UNA SOLA PERSONA: el intérprete ${shot.subject} del grupo, el de${quien.instrument ? 'l ' + quien.instrument : ' este plano'}`,
+      `Es esta persona y no otra: ${quien.face}. Cabello: ${quien.hair}. Vestuario: ${quien.wardrobe}`,
+      'Los demás intérpretes del grupo NO aparecen en el encuadre, ni de fondo ni desenfocados',
+    ]);
+  }
+
+  return block('QUIÉN SALE EN ESTA TOMA', [
+    `LOS ${reparto.length} INTÉRPRETES, todos dentro del encuadre y todos tocando`,
+    'No falta ninguno y no sobra nadie: son exactamente ' + reparto.length + ' personas',
+  ]);
+}
+
+/** La exigencia de belleza de quien sale en la toma, no la del grupo entero. */
+function bellezaDelSujeto(bible, sujeto) {
+  const reparto = Array.isArray(bible.cast) ? bible.cast : [];
+  if (typeof sujeto === 'number' && reparto[sujeto - 1]) {
+    return exigenciaDeBelleza(reparto[sujeto - 1].banco);
+  }
+  return bellezaDelReparto(bible);
+}
+
 /** La exigencia de belleza para un plano donde puede salir todo el reparto. */
 function bellezaDelReparto(bible) {
   const bancos = new Set((bible.cast || []).map((m) => m.banco).filter(Boolean));
   return exigenciaDeBelleza(bancos.size === 1 ? [...bancos][0] : null);
 }
 
-function bloqueReparto(bible) {
-  const reparto = Array.isArray(bible.cast) ? bible.cast : [];
+function bloqueReparto(bible, sujeto) {
+  let reparto = Array.isArray(bible.cast) ? bible.cast : [];
+  // Si la toma es de una sola persona, listar a las cuatro es invitar al modelo
+  // a meterlas todas en el cuadro. Se lista sólo a quien sale.
+  if (typeof sujeto === 'number' && reparto[sujeto - 1]) return null;
   if (reparto.length < 2) return null;
   return block(
     'REPARTO — son ' + reparto.length + ' PERSONAS DISTINTAS, no la misma repetida',
@@ -583,7 +620,7 @@ function buildScenePrompt(bible, config) {
     `PLANO MAESTRO DE ESCENA. ${bible.character.summary} interpretando su ${bible.instrument.names.join(' y ')} dentro de ${bible.environment.location}.`,
     // Con más de un músico hay que decir quién es quién, o la escena maestra
     // devuelve dos veces la misma persona y arrastra ese error a todas las tomas.
-    bloqueReparto(bible),
+    bloqueReparto(bible, 'todos'),
     block('Puesta en escena', [
       formation?.description ?? 'un intérprete en el centro de la escena',
       `Relación con el instrumento: ${bible.instrument.physicalRelation}`,
@@ -616,10 +653,15 @@ function buildShotImagePrompt(bible, shot, config) {
       `Tipo de plano: ${SHOT_TYPE_LABELS[shot.shotType]}`,
       `Movimiento previsto en el vídeo: ${CAMERA_MOVE_LABELS[shot.cameraMove]}`,
     ]),
-    bloqueReparto(bible),
+    // QUIÉN SALE. Sin esto, un dúo salía trece veces con la misma chica y la
+    // otra desaparecía del corto entero.
+    bloqueQuienSale(bible, shot),
+    bloqueReparto(bible, shot.subject),
     // Un plano detalle del instrumento o del entorno no lleva a nadie dentro:
     // pedirle belleza de rostro ahi solo confunde al modelo.
-    SIN_PERSONAS.indexOf(shot.shotType) === -1 ? block('La persona', bellezaDelReparto(bible)) : null,
+    SIN_PERSONAS.indexOf(shot.shotType) === -1
+      ? block('La persona', bellezaDelSujeto(bible, shot.subject))
+      : null,
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);

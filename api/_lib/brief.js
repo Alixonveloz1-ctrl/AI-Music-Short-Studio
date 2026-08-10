@@ -201,6 +201,10 @@ function normalizeCreativeBrief(candidate, fallback, shotCount) {
     };
     return {
       index,
+      // El reparto de protagonismo NO se le pide al modelo: lo decide el
+      // Director determinista y tiene que sobrevivir a la normalización. Si
+      // se perdiera aquí, todas las tomas volverían a ser del intérprete 1.
+      subject: fromFallback.subject || 'todos',
       purpose: fromModel?.purpose || fromFallback.purpose,
       description: fromModel?.description || fromFallback.description,
     };

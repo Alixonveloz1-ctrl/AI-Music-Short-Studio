@@ -26,6 +26,8 @@
 // ════════════════════════════════════════════════════════════════
 
 // Los mismos nombres que pinta la interfaz (verde / violeta / ámbar).
+const { cfg } = require('./gcp.js');
+
 const NIVELES = ['economico', 'equilibrado', 'calidad'];
 
 /**
@@ -164,9 +166,24 @@ function existeVideo(id) {
  *
  * Los Gemini 3.x solo están en «global». Los que no la declaran usan la región
  * general del proyecto, que se puede cambiar con GCP_LOCATION.
+ *
+ * EL FALLO QUE ARREGLA EL ÚLTIMO `||`. Los modelos de Veo llevan `region: ''` a
+ * propósito, para heredar la del proyecto. Pero quien llamaba —vertex.js— lo
+ * hacía sin pasar `porDefecto`, así que la región salía `undefined` y la URL
+ * quedaba en:
+ *
+ *   https://undefined-aiplatform.googleapis.com/.../locations/undefined/...
+ *
+ * googleapis.com resuelve cualquier subdominio, así que eso no daba un error de
+ * red: daba la página 404 en HTML de Google, que el usuario veía como un muro
+ * de `<!DOCTYPE html>` en la ficha del clip. El vídeo no funcionaba en absoluto.
+ *
+ * La región nunca puede quedar sin valor, así que el último recurso es la del
+ * proyecto. Nadie que llame a esto puede volver a producir una URL rota por
+ * olvidarse de un argumento.
  */
 function regionDe(modelo, porDefecto) {
-  return (modelo && modelo.region) || porDefecto;
+  return (modelo && modelo.region) || porDefecto || cfg.location;
 }
 
 /**

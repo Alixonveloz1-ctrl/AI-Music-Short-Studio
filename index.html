@@ -2698,8 +2698,25 @@ var RITMO_MS = { image: 8000, video: 12000, audio: 8000 };
 
 // El freno cuando salta la cuota. Empieza en medio minuto y se dobla hasta
 // tres, que es más que de sobra para cualquier límite por minuto.
+// Lo que se espera tras un fallo que NO es de cuota. Generoso a propósito:
+// un fallo repetido casi siempre es de configuración, y machacar la API no
+// lo arregla — sólo consume cuota y reinicia el contador del límite.
+var FALLO_ESPERA_MS = 15000;
+
 var FRENO_MIN_MS = 30000;
 var FRENO_MAX_MS = 180000;
+
+/**
+ * Deja un error en algo que se pueda leer en un móvil.
+ *
+ * Cuando la URL de Vertex sale mal, Google no contesta un JSON: contesta su
+ * página 404 en HTML entera. El usuario veía media pantalla de `<!DOCTYPE html>
+ * <meta charset=utf-8>…` sin ninguna pista de qué había pasado.
+ */
+function recorte(texto, max){
+  var t = String(texto || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return t.length > max ? t.slice(0, max) + '…' : t;
+}
 
 /** ¿Este error es «Google me está frenando» y no «esto está roto»? */
 function esLimiteDeCuota(e){
@@ -2708,8 +2725,12 @@ function esLimiteDeCuota(e){
 }
 
 function colaVacia(etapa){
-  return { proyectoId: estado.proyectoId, etapa: etapa, activa: true, actual: null, hechos: 0, fallos: [],
-           esperaHasta: 0, freno: 0, aviso: '' };
+  // `rotos` es la lista de los que ya fallaron en ESTA cola. Sin ella, la cola
+  // volvía a elegir el mismo una y otra vez: un activo que falla no queda «en
+  // revisión», vuelve a pendiente, así que seguía siendo el primero de la lista
+  // y la cola se comía ocho intentos seguidos contra el mismo clip roto.
+  return { proyectoId: estado.proyectoId, etapa: etapa, activa: true, actual: null, hechos: 0,
+           fallos: [], rotos: {}, esperaHasta: 0, freno: 0, aviso: '' };
 }
 
 /** Los activos de la cola: los de la etapa, o todos si la etapa es 'todo'. */
@@ -2730,8 +2751,11 @@ function colaPendientes(p){
 
 /** El siguiente que se puede lanzar AHORA, respetando dependencias. */
 function colaSiguiente(p){
+  var rotos = (estado.cola && estado.cola.rotos) || {};
   var libres = colaPendientes(p).filter(function(a){
-    return a.status !== 'generating' && puedeGenerar(p, a).ok;
+    // Lo que ya falló en esta cola no se vuelve a intentar solo. Se regenera a
+    // mano, que es cuando alguien ha mirado el error y sabe si tiene arreglo.
+    return !rotos[a.id] && a.status !== 'generating' && puedeGenerar(p, a).ok;
   });
   return libres.length ? libres[0] : null;
 }
@@ -2798,10 +2822,31 @@ async function colaTic(){
       c.esperaHasta = Date.now() + c.freno;
       c.aviso = 'Google está limitando las peticiones. Reintento en ' + Math.round(c.freno / 1000) + ' s.';
     } else {
-      // Un fallo de verdad: se anota, se salta y la cola sigue. Pararla entera
-      // por un activo roto obligaría a relanzar los dieciséis que quedaban.
+      // Un fallo de verdad: se anota, se marca para no repetirlo, y la cola
+      // sigue con los demás. Pararla entera por un activo roto obligaría a
+      // relanzar los dieciséis que quedaban.
+      c.rotos[siguiente.id] = true;
       c.fallos.push({ id: siguiente.id, label: siguiente.label, error: String(e && e.message || e) });
-      c.esperaHasta = Date.now() + 2000;
+
+      // Y se espera de verdad antes del siguiente. Encadenar fallos a dos
+      // segundos era lo peor de los dos mundos: si el error venía de la cuenta
+      // —una región mal puesta, un permiso que falta— la cola quemaba los
+      // diecisiete en medio minuto; y si venía de un límite por minuto mal
+      // identificado, cada reintento reiniciaba la cuenta del límite.
+      c.esperaHasta = Date.now() + FALLO_ESPERA_MS;
+
+      // Tres fallos seguidos no son tres activos con mala suerte: es que algo
+      // está mal en la configuración y los catorce restantes van a fallar
+      // igual. Se para y se le enseña el error al usuario.
+      var seguidos = 0;
+      for (var i = c.fallos.length - 1; i >= 0 && seguidos < 3; i -= 1) seguidos += 1;
+      if (c.fallos.length >= 3 && c.hechos === 0) {
+        c.activa = false;
+        c.aviso = 'Cola detenida: han fallado ' + c.fallos.length + ' seguidos sin que ninguno saliera bien. ' +
+          'Eso no es mala suerte, es que algo está mal configurado. Mira el error en el primero que falló.';
+        pintar();
+        return;
+      }
     }
   } finally {
     c.actual = null;
@@ -2839,7 +2884,8 @@ function htmlCola(p){
     (c.fallos.length ? '<div class="nota mala" style="margin-top:8px"><b>' + c.fallos.length +
       (c.fallos.length === 1 ? ' ha fallado' : ' han fallado') + ':</b> ' +
       esc(c.fallos.slice(-3).map(function(f){ return f.label; }).join(', ')) +
-      '. La cola siguió con los demás; regenéralos a mano cuando quieras.</div>' : '') +
+      '.<br><span class="mini">' + esc(recorte(c.fallos[c.fallos.length - 1].error, 180)) + '</span>' +
+      '<br>La cola no los reintenta sola: míralos y regenéralos a mano.</div>' : '') +
   '</div>';
 }
 

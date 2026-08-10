@@ -74,6 +74,10 @@ async function construirPlan(config) {
       beat: planned.beat,
       shotType: planned.shotType,
       cameraMove: planned.cameraMove,
+      // Quién sale en la toma: 'todos' o el número del intérprete. Sin esto,
+      // el Director de Arte no sabe a quién poner en el encuadre y un dúo
+      // acaba con la misma persona en todas las tomas.
+      subject: (creative && creative.subject) || 'todos',
       purpose: (creative && creative.purpose) || 'Sostener la continuidad narrativa del corto',
       description:
         (creative && creative.description) ||
