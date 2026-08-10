@@ -68,9 +68,6 @@ module.exports = async function handler(req, res) {
     return res.status(200).json(Object.assign({}, buildCatalog(), {
       modelosImagen: modelos.MODELOS_IMAGEN,
       modelosVideo: modelos.MODELOS_VIDEO,
-      // De dónde salen los precios que llevan las descripciones, y de cuándo
-      // son. Un precio sin fecha ni fuente envejece sin que se note.
-      fuentePrecios: modelos.FUENTE_PRECIOS,
     }));
   } catch (e) {
     return fallo(res, e);
