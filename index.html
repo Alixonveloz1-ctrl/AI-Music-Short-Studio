@@ -1367,7 +1367,11 @@ function prepararFormulario(){
     formato: primera(c.formatos, 'vertical'),
     modeloImagen: modeloPorDefecto(c.modelosImagen),
     modeloVideo: modeloPorDefecto(c.modelosVideo),
-    direccion: ''
+    direccion: '',
+    // Una ficha por intérprete principal. Empieza vacía: vacío = decide el
+    // Director. `fichaAbierta` es sólo pantalla, no viaja al servidor.
+    fichas: [],
+    fichaAbierta: 1
   };
   ajustarTipos();
 }
@@ -1614,8 +1618,10 @@ function vistaCrear(){
     '<p class="tenue mini" style="margin-top:10px">El modelo se fija al crear el corto y ya no se cambia: mezclar modelos a mitad de producción rompe la continuidad visual entre tomas.</p>' +
   '</div>';
 
+  html += htmlFichasPersonaje();
+
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">8</span>Dirección creativa</h3>' +
+    '<h3><span class="paso">9</span>Dirección creativa</h3>' +
     '<p class="tenue mini" style="margin-bottom:10px">Escribe libremente: apariencia, vestuario, ambiente, luz, época, colores, intención emocional. No hace falta que suene a prompt técnico; el equipo lo traduce.</p>' +
     '<textarea data-campo="direccion" rows="6" placeholder="Describe libremente lo que quieres ver…">' + esc(f.direccion) + '</textarea>' +
   '</div>';
@@ -1624,6 +1630,103 @@ function vistaCrear(){
     '<p class="tenue mini centro" style="margin-top:10px">La planificación tarda unos segundos: la IA escribe el concepto, la biblia visual y el plan de tomas.</p>';
 
   return html;
+}
+
+/**
+ * LAS FICHAS DE PERSONAJE.
+ *
+ * Por qué existen: escribir «dos chicas rubias en minifalda» en la dirección
+ * creativa no bastaba. El texto llegaba al prompt, pero debajo el prompt seguía
+ * diciendo «Cabello: negro azabache. Vestuario: falda larga», y el modelo se
+ * queda con el dato concreto, no con la frase que dice tener prioridad.
+ *
+ * Eligiendo aquí, el dato se SUSTITUYE antes de escribir el prompt. Lo que se
+ * deja en blanco lo decide el Director, como siempre.
+ */
+function cuantosInterpretes(){
+  var c = estado.catalogo, f = estado.form;
+  if (!c || !f) return 1;
+  var forma = (c.formations || []).find(function(x){ return x.id === f.formacion; });
+  var cuantos = forma ? Number(forma.performerCount) || 1 : 1;
+  var tope = (c.characterTraits && c.characterTraits.max) || 4;
+  return Math.max(1, Math.min(cuantos, tope));
+}
+
+function fichaEn(n){
+  var f = estado.form;
+  if (!f.fichas[n - 1]) f.fichas[n - 1] = {};
+  return f.fichas[n - 1];
+}
+
+/** Cuántos rasgos tiene rellenos una ficha, para el contador del botón. */
+function rellenosDe(n){
+  var ficha = estado.form.fichas[n - 1];
+  if (!ficha) return 0;
+  var total = 0;
+  for (var k in ficha) if (ficha[k] && String(ficha[k]).trim()) total += 1;
+  return total;
+}
+
+function htmlFichasPersonaje(){
+  var c = estado.catalogo, f = estado.form;
+  var cat = c && c.characterTraits;
+  if (!cat) return '';
+  var cuantos = cuantosInterpretes();
+  if (f.fichaAbierta > cuantos) f.fichaAbierta = 1;
+
+  var html = '<div class="tarjeta">' +
+    '<h3><span class="paso">8</span>Los personajes</h3>' +
+    '<p class="tenue mini" style="margin-bottom:10px">Elige cómo quieres que sean. ' +
+    '<b>Lo que dejes en blanco lo decide el director.</b> Junto a los botones puedes escribir lo tuyo si no está en la lista.</p>';
+
+  // Pestañas, sólo si hay más de un intérprete.
+  if (cuantos > 1) {
+    html += '<div class="chips" style="margin-bottom:12px">';
+    for (var n = 1; n <= cuantos; n += 1) {
+      var puestos = rellenosDe(n);
+      html += '<button class="chip' + (f.fichaAbierta === n ? ' on' : '') + (puestos ? ' completa' : '') + '" ' +
+        'data-accion="ficha-abrir" data-n="' + n + '">Intérprete ' + n +
+        (puestos ? ' <span class="cuenta">' + puestos + '</span>' : '') + '</button>';
+    }
+    html += '</div>';
+  }
+
+  var abierta = f.fichaAbierta;
+  var ficha = f.fichas[abierta - 1] || {};
+
+  (cat.rasgos || []).forEach(function(rasgo){
+    var valor = ficha[rasgo.id] || '';
+    // Un valor escrito a mano no coincide con ningún botón: entonces ninguno
+    // sale marcado y el texto se ve en su casilla, que es lo correcto.
+    var enLista = (rasgo.opciones || []).indexOf(valor) !== -1;
+    html += '<div style="margin-bottom:14px">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+        '<span style="font-size:12.5px;font-weight:700;color:var(--tenue)">' + esc(rasgo.etiqueta) + '</span>' +
+        (valor
+          ? '<button class="chip quitar" data-accion="ficha-limpiar" data-rasgo="' + rasgo.id + '">' + esc(valor) + '</button>'
+          : '<span class="mini tenue">lo decide el director</span>') +
+      '</div>' +
+      '<div class="chips">';
+    (rasgo.opciones || []).forEach(function(op){
+      html += '<button class="chip' + (valor === op ? ' on' : '') + '" data-accion="ficha-rasgo" ' +
+        'data-rasgo="' + rasgo.id + '" data-valor="' + esc(op) + '">' + esc(op) + '</button>';
+    });
+    html += '</div>' +
+      '<input type="text" data-ficha-texto="' + rasgo.id + '" placeholder="…o escríbelo tú" ' +
+        'style="margin-top:6px" value="' + esc(enLista ? '' : valor) + '">' +
+    '</div>';
+  });
+
+  html += '<label class="campo" style="margin-top:4px"><span>Otros detalles de este intérprete</span>' +
+    '<textarea data-ficha-texto="notes" rows="3" placeholder="Lo que no esté arriba: tatuajes, gafas, maquillaje, un detalle del vestuario…">' +
+      esc(ficha.notes || '') + '</textarea></label>';
+
+  if (cuantos > 1) {
+    html += '<button class="btn ancho" data-accion="ficha-copiar">Copiar esta ficha a los demás intérpretes</button>' +
+      '<p class="tenue mini" style="margin-top:8px">Aunque copies la ficha, el director les pone a cada uno una cara y un peinado distintos: son personas diferentes.</p>';
+  }
+
+  return html + '</div>';
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -2238,6 +2341,14 @@ async function crearProyecto(){
   if (f.formato) config.formatoId = f.formato;
   if (f.escenarioTexto.trim()) config.scenarioCustom = f.escenarioTexto.trim();
   if (f.estiloTexto.trim()) config.visualStyleCustom = f.estiloTexto.trim();
+  // Sólo se envían las fichas con algo dentro; el resto son huecos que el
+  // Director rellena. Se conserva la posición: la ficha 2 es del intérprete 2.
+  var fichas = (f.fichas || []).slice(0, cuantosInterpretes()).map(function(x){
+    var limpia = {};
+    for (var k in (x || {})) if (x[k] && String(x[k]).trim()) limpia[k] = String(x[k]).trim();
+    return Object.keys(limpia).length ? limpia : null;
+  });
+  if (fichas.some(Boolean)) config.performers = fichas;
   // Sólo se mandan si hay algo que mandar: un catálogo sin modelos (o un
   // servidor anterior a esta pantalla) debe seguir creando cortos con el
   // modelo que tenga por defecto, no recibir una cadena vacía y responder 400.
@@ -2469,6 +2580,33 @@ document.addEventListener('click', function(ev){
   }
   if (accion === 'duracion') { estado.form.duracion = Number(el.getAttribute('data-seg')); pintar(); return; }
   if (accion === 'formato') { estado.form.formato = el.getAttribute('data-id'); pintar(); return; }
+  if (accion === 'ficha-abrir') { estado.form.fichaAbierta = Number(el.getAttribute('data-n')); pintar(); return; }
+  if (accion === 'ficha-rasgo') {
+    var ficha = fichaEn(estado.form.fichaAbierta);
+    var rasgo = el.getAttribute('data-rasgo'), valor = el.getAttribute('data-valor');
+    // Volver a tocar el botón que ya estaba puesto lo quita: es la única forma
+    // de devolverle la decisión al director desde el móvil sin un botón extra.
+    ficha[rasgo] = (ficha[rasgo] === valor) ? '' : valor;
+    pintar();
+    return;
+  }
+  if (accion === 'ficha-limpiar') {
+    fichaEn(estado.form.fichaAbierta)[el.getAttribute('data-rasgo')] = '';
+    pintar();
+    return;
+  }
+  if (accion === 'ficha-copiar') {
+    var origen = estado.form.fichas[estado.form.fichaAbierta - 1] || {};
+    for (var i = 1; i <= cuantosInterpretes(); i += 1) {
+      if (i === estado.form.fichaAbierta) continue;
+      var copia = {};
+      for (var k in origen) if (origen[k]) copia[k] = origen[k];
+      estado.form.fichas[i - 1] = copia;
+    }
+    pintar();
+    avisar('Ficha copiada a los ' + (cuantosInterpretes() - 1) + ' intérpretes restantes.');
+    return;
+  }
   if (accion === 'crear-proyecto') { crearProyecto(); return; }
 });
 
@@ -2481,6 +2619,15 @@ document.addEventListener('input', function(ev){
   // Sólo la búsqueda repinta, y sólo su lista: los textos largos se escriben
   // sin que nada se mueva debajo del dedo.
   if (campo === 'busqueda') pintarEn('lista-instr', htmlInstrumentos());
+});
+
+// El texto libre de las fichas se guarda sin repintar: en el móvil, repintar
+// mientras se escribe cierra el teclado y pierde el cursor.
+document.addEventListener('input', function(ev){
+  var el = ev.target;
+  var rasgo = el.getAttribute && el.getAttribute('data-ficha-texto');
+  if (!rasgo || !estado.form) return;
+  fichaEn(estado.form.fichaAbierta)[rasgo] = el.value;
 });
 
 document.addEventListener('change', function(ev){

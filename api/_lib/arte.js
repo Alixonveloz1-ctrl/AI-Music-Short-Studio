@@ -442,7 +442,7 @@ function bloqueReparto(bible) {
         `Intérprete ${i + 1}${m.instrument ? ' (' + m.instrument + ')' : ''}: ` +
         `${m.face}. Cabello: ${m.hair}. ${m.build}. ` +
         `${m.apparentAge ? 'Edad aparente: ' + m.apparentAge + '. ' : ''}` +
-        `Vestuario: ${m.wardrobe}`,
+        `Vestuario: ${m.wardrobe}${m.mood ? '. Actitud: ' + m.mood : ''}`,
     ),
   );
 }
@@ -485,6 +485,8 @@ function buildCharacterPrompt(bible, config, indice, total, instrumento) {
       `Complexión: ${quien.build}`,
       `Edad aparente: ${quien.apparentAge}`,
       `Vestuario: ${quien.wardrobe}`,
+      // Lo que el usuario eligió en la ficha de este intérprete.
+      quien.mood ? `Actitud: ${quien.mood}` : null,
       quien.accessories && quien.accessories.length
         ? `Accesorios: ${quien.accessories.join(', ')}`
         : null,

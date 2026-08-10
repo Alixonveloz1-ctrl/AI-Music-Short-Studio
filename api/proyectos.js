@@ -26,6 +26,7 @@ const {
   VISUAL_STYLES_BY_ID,
 } = require('./_lib/catalogo.js');
 const modelos = require('./_lib/modelos.js');
+const rasgos = require('./_lib/rasgos.js');
 
 module.exports = async function handler(req, res) {
   if (empezar(req, res, ['GET', 'POST'])) return;
@@ -301,6 +302,10 @@ function validarConfiguracion(bruto) {
     );
   }
 
+  // --- Fichas de personaje ---
+  // Una por intérprete principal. Lo que se deja vacío lo decide el Director.
+  const performers = rasgos.normalizarFichas(bruto.performers);
+
   const config = {
     instrumentIds: Array.from(vistos),
     formationId,
@@ -319,6 +324,7 @@ function validarConfiguracion(bruto) {
   if (scenarioCustom) config.scenarioCustom = scenarioCustom;
   if (visualStyleCustom) config.visualStyleCustom = visualStyleCustom;
   if (titleHint) config.titleHint = titleHint;
+  if (performers) config.performers = performers;
 
   return config;
 }

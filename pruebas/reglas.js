@@ -61,6 +61,7 @@ const planificador = require(path.join(RAIZ, 'api/_lib/planificador.js'));
 const arte = require(path.join(RAIZ, 'api/_lib/arte.js'));
 const vertex = require(path.join(RAIZ, 'api/_lib/vertex.js'));
 const catalogo = require(path.join(RAIZ, 'api/_lib/catalogo.js'));
+const rasgos = require(path.join(RAIZ, 'api/_lib/rasgos.js'));
 const { construirPlan } = require(path.join(RAIZ, 'api/_lib/plan.js'));
 
 const CONFIG = {
@@ -592,6 +593,65 @@ async function principal() {
     const cabecera = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín').split('\n\n')[0];
     cierto(/PERSONAS dibujadas en anime/.test(cabecera), 'el estilo no habla de cómo se dibuja a la gente');
     cierto(/ojos grandes/.test(cabecera), 'el estilo no describe el rostro de anime');
+  });
+
+  comprobar('la ficha del usuario SUSTITUYE el dato, no discute con él', () => {
+    // El fallo tal como lo vio: pidió «dos chicas rubias en minifalda» en el
+    // cuadro de texto y salió pelo negro y falda larga. El texto sí llegaba al
+    // prompt, encima con un cartel de «esto manda», pero cinco líneas más abajo
+    // seguía poniendo «Cabello: negro azabache». El modelo se queda con el dato.
+    const { config, biblia } = bibliaDe({
+      formationId: 'duo',
+      instrumentIds: ['violin', 'cello'],
+      performers: [
+        { hairColor: 'Rubio', wardrobe: 'Minifalda', mood: 'Apasionada' },
+        { hairColor: 'Rubio', wardrobe: 'Minifalda', mood: 'Apasionada' },
+      ],
+    });
+    for (const n of [1, 2]) {
+      const p = arte.buildCharacterPrompt(biblia, config, n, 2, 'el suyo');
+      const persona = p.split('\n\n').filter((b) => b.indexOf('Persona:') === 0).join('');
+      cierto(/rubio/i.test(persona), 'el intérprete ' + n + ' no es rubio');
+      cierto(!/negro azabache|castaño|cobrizo/i.test(persona), 'le queda el color del banco al ' + n);
+      cierto(/minifalda/i.test(persona), 'el intérprete ' + n + ' no lleva minifalda');
+      cierto(!/falda negra de talle alto|vestido negro largo/i.test(persona), 'le queda la ropa del banco al ' + n);
+      cierto(/apasionada/i.test(persona), 'no se recoge la actitud del ' + n);
+    }
+    // Y siguen siendo dos personas: mismo color, distinta cara y peinado.
+    cierto(biblia.cast[0].face !== biblia.cast[1].face, 'dos rubias con la misma cara');
+    cierto(biblia.cast[0].hair !== biblia.cast[1].hair, 'dos rubias con el mismo peinado');
+  });
+
+  comprobar('lo que se deja en blanco lo decide el Director', () => {
+    // Media ficha rellena: lo elegido manda, lo vacío lo pone el banco.
+    const { config, biblia } = bibliaDe({ performers: [{ eyes: 'Verdes' }] });
+    const p = arte.buildCharacterPrompt(biblia, config, 1, 1, 'Violín');
+    cierto(/ojos verdes/i.test(p), 'no se aplican los ojos elegidos');
+    cierto(/Vestuario: .{15,}/.test(p), 'sin vestuario elegido, el Director no propuso ninguno');
+    cierto(/Cabello: .{15,}/.test(p), 'sin pelo elegido, el Director no propuso ninguno');
+    // Y sin ninguna ficha, todo sale del banco y nada se rompe.
+    const solo = bibliaDe({});
+    cierto(/Cabello: /.test(arte.buildCharacterPrompt(solo.biblia, solo.config, 1, 1, 'Violín')),
+      'sin ficha ninguna el prompt se queda sin pelo');
+  });
+
+  comprobar('la ficha se valida y se guarda sin basura', () => {
+    igual(rasgos.normalizarFichas(null), null, 'sin fichas debería quedar en nulo');
+    igual(rasgos.normalizarFichas([{}, {}]), null, 'fichas vacías deberían quedar en nulo');
+    // Se conserva el hueco: la ficha 2 es del intérprete 2 aunque la 1 esté vacía.
+    const f = rasgos.normalizarFichas([{}, { hairColor: 'Rubio' }]);
+    igual(f.length, 2, 'se ha comprimido el hueco');
+    igual(f[0], null, 'la primera debería ser un hueco');
+    igual(f[1].hairColor, 'Rubio', 'no se guarda lo elegido');
+    // Nada de campos inventados, y el tope de fichas se respeta.
+    const g = rasgos.normalizarFichas([{ hairColor: 'Rubio', loQueSea: 'x' }]);
+    cierto(!('loQueSea' in g[0]), 'se cuela un campo desconocido en el proyecto');
+    igual(rasgos.normalizarFichas(new Array(9).fill({ eyes: 'Verdes' })).length, rasgos.MAX_FICHAS,
+      'no se respeta el tope de fichas');
+    // Y la pantalla puede dibujarlas: el catálogo las lleva.
+    const cat = catalogo.buildCatalog().characterTraits;
+    cierto(cat && cat.rasgos.length >= 6, 'el catálogo no lleva los rasgos para la pantalla');
+    cierto(cat.rasgos.every((r) => r.id && r.etiqueta && r.opciones.length), 'hay un rasgo incompleto');
   });
 
   comprobar('a cada referencia se le dice PARA QUÉ es', () => {

@@ -308,6 +308,7 @@ function buildCatalog() {
     scenarios: SCENARIOS,
     visualStyles: VISUAL_STYLES,
     durations: DURATION_OPTIONS,
+    characterTraits: require('./rasgos.js').catalogoDeRasgos(),
   };
 }
 

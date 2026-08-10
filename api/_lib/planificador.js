@@ -33,6 +33,7 @@ const {
 } = require('./catalogo.js');
 const { shotTypeLabel, cameraMoveLabel } = require('./arte.js');
 const { creativeBriefJsonSchema, normalizeCreativeBrief } = require('./brief.js');
+const rasgos = require('./rasgos.js');
 
 // --- Generador de números pseudoaleatorios determinista (mulberry32) --------
 // El determinismo es el motivo de tener esto en lugar de Math.random: con la
@@ -156,38 +157,51 @@ const TIMES_OF_DAY = [
 // lo pone la cabecera de estilo, y estas mismas líneas tienen que funcionar
 // igual en óleo, en acuarela o en imagen realista.
 
+// Igual que el peinado: el rostro NO lleva el color de ojos dentro. Si lo
+// llevara, elegir «ojos azules» en la ficha dejaría el prompt diciendo «iris
+// castaño claro… y sobre todo: ojos azules», que es una contradicción que el
+// modelo resuelve como quiere.
 const ROSTROS = {
   femenino: [
-    'rostro ovalado y armónico, ojos grandes y expresivos de iris oscuro con brillo, pestañas largas, cejas finas de arco suave, nariz pequeña y recta, labios bien perfilados, piel limpia y luminosa',
-    'rostro en forma de corazón, ojos rasgados de mirada dulce color miel, pestañas espesas, cejas suaves y arqueadas, pómulos altos y delicados, boca pequeña, tez clara con rubor natural en las mejillas',
-    'rostro de óvalo alargado y elegante, ojos almendrados grandes de iris verde profundo y mirada serena, cejas rectas y finas, nariz estrecha, labios medios de comisuras suaves, tez cálida y uniforme',
-    'rostro redondeado y suave, ojos muy grandes y brillantes de iris castaño claro, pestañas largas, cejas cortas y delicadas, nariz pequeña respingona, boca menuda de sonrisa contenida, piel tersa',
+    'rostro ovalado y armónico, ojos grandes y expresivos con brillo, pestañas largas, cejas finas de arco suave, nariz pequeña y recta, labios bien perfilados, piel limpia y luminosa',
+    'rostro en forma de corazón, ojos rasgados de mirada dulce, pestañas espesas, cejas suaves y arqueadas, pómulos altos y delicados, boca pequeña, tez clara con rubor natural en las mejillas',
+    'rostro de óvalo alargado y elegante, ojos almendrados grandes de mirada serena, cejas rectas y finas, nariz estrecha, labios medios de comisuras suaves, tez cálida y uniforme',
+    'rostro redondeado y suave, ojos muy grandes y brillantes, pestañas largas, cejas cortas y delicadas, nariz pequeña respingona, boca menuda de sonrisa contenida, piel tersa',
   ],
   masculino: [
-    'rostro de facciones limpias y proporcionadas, ojos oscuros de mirada tranquila bajo cejas rectas, nariz recta, mandíbula definida sin dureza, piel limpia y luminosa',
-    'rostro anguloso y atractivo, pómulos marcados, ojos almendrados de iris gris claro, cejas bien dibujadas, nariz fina, labios de línea serena',
-    'rostro alargado y elegante, ojos grandes de iris castaño cálido y mirada amable, cejas suaves, nariz estrecha, boca de sonrisa apenas insinuada, piel uniforme',
-    'rostro de óvalo suave y juvenil, ojos vivos de iris oscuro con brillo, pestañas marcadas, cejas finas, nariz pequeña, facciones delicadas y armónicas',
+    'rostro de facciones limpias y proporcionadas, ojos de mirada tranquila bajo cejas rectas, nariz recta, mandíbula definida sin dureza, piel limpia y luminosa',
+    'rostro anguloso y atractivo, pómulos marcados, ojos almendrados, cejas bien dibujadas, nariz fina, labios de línea serena',
+    'rostro alargado y elegante, ojos grandes de mirada amable, cejas suaves, nariz estrecha, boca de sonrisa apenas insinuada, piel uniforme',
+    'rostro de óvalo suave y juvenil, ojos vivos con brillo, pestañas marcadas, cejas finas, nariz pequeña, facciones delicadas y armónicas',
   ],
 };
 
+const COLORES_DE_OJOS = ['oscuros', 'castaños', 'color miel', 'verdes', 'grises', 'azules'];
+// El peinado y el color van SEPARADOS a propósito.
+//
+// Antes cada peinado del banco traía su color metido dentro —«melena larga y
+// lisa de color negro azabache»—, así que cuando el usuario elegía «rubio» en
+// su ficha salía «melena larga y lisa de color negro azabache, de color rubio».
+// Separados, elegir el color cambia sólo el color y respeta el peinado, que es
+// lo que sigue diferenciando a dos rubias entre sí.
 const PEINADOS = {
   femenino: [
-    'melena larga y lisa de color negro azabache, con flequillo recto y dos mechones sueltos enmarcando el rostro',
-    'cabello castaño claro ondulado hasta los hombros, raya al lado y mucho volumen suave',
-    'cabello oscuro recogido en alto con un lazo, dejando caer dos mechones largos junto a las orejas',
-    'media melena rubio ceniza con las puntas hacia dentro y una horquilla fina sobre la sien izquierda',
-    'trenza gruesa recogida sobre un hombro, cabello castaño oscuro, con el nacimiento peinado hacia atrás',
+    'melena larga y lisa, con flequillo recto y dos mechones sueltos enmarcando el rostro',
+    'melena ondulada hasta los hombros, con raya al lado y mucho volumen suave',
+    'recogido alto con un lazo, dejando caer dos mechones largos junto a las orejas',
+    'media melena con las puntas hacia dentro y una horquilla fina sobre la sien izquierda',
+    'trenza gruesa recogida sobre un hombro, con el nacimiento peinado hacia atrás',
   ],
   masculino: [
-    'cabello negro corto y algo revuelto, con el flequillo cayendo sobre la frente',
-    'cabello castaño de largo medio peinado hacia atrás, despejando la frente',
-    'cabello oscuro corto por los lados y más largo arriba, con una onda marcada',
-    'cabello rubio ceniza a la altura de la mandíbula, con raya al lado',
-    'cabello negro recogido en una coleta baja y corta, con mechones sueltos junto a las sienes',
+    'corto y algo revuelto, con el flequillo cayendo sobre la frente',
+    'de largo medio peinado hacia atrás, despejando la frente',
+    'corto por los lados y más largo arriba, con una onda marcada',
+    'a la altura de la mandíbula, con raya al lado',
+    'recogido en una coleta baja y corta, con mechones sueltos junto a las sienes',
   ],
 };
 
+const COLORES_DE_PELO = ['negro azabache', 'castaño oscuro', 'castaño claro', 'rubio ceniza', 'cobrizo'];
 // El vestuario NO es lo que distingue a un intérprete de otro.
 //
 // Antes sí lo era: a cada músico se le asignaba un color distinto «por encima
@@ -281,6 +295,70 @@ function repartirSinRepetir(rng, lista, cuantos) {
   return salida;
 }
 
+/**
+ * Escribe en la ficha del intérprete lo que eligió el usuario.
+ *
+ * Cada rasgo pisa exactamente su campo y ninguno más: el color de pelo cambia
+ * el color y respeta el peinado que sorteó el Director, para que dos rubias
+ * sigan siendo dos personas distintas y no la misma repetida.
+ *
+ * `notes` es la casilla de texto libre de la ficha. Se pega al final del
+ * resumen del personaje, que es lo primero que se lee en el bloque «Persona».
+ */
+function aplicarFicha(miembro, ficha) {
+  if (!ficha) return miembro;
+
+  // El pelo se compone de color y peinado, y el usuario puede fijar uno, otro
+  // o los dos. Si sólo fija el color, se conserva el peinado sorteado.
+  if (ficha.hairColor || ficha.hairStyle) {
+    // El peinado del banco viene ya con «, de color X» pegado al final. Se le
+    // quita antes de poner el color nuevo, o quedarían los dos colores.
+    const sinColor = String(miembro.hair).replace(/,\s*de color [^,]*$/i, '');
+    const peinado = ficha.hairStyle ? ficha.hairStyle.toLowerCase() : sinColor;
+    const color = ficha.hairColor
+      ? ficha.hairColor.toLowerCase()
+      : (String(miembro.hair).match(/,\s*de color ([^,]*)$/i) || [])[1];
+    miembro.hair = truncate(color ? `${peinado}, de color ${color}` : peinado, 190);
+  }
+
+  // Los ojos y la piel viven dentro de la descripción del rostro, que es una
+  // frase entera. No se puede hacer cirugía sobre ella sin romperla, así que se
+  // le añaden al final: lo que va después manda sobre lo que va antes cuando
+  // ambos hablan de lo mismo, y además el rostro sorteado sigue diferenciando a
+  // unos de otros.
+  // El color de ojos se pega al final del rostro con el formato «, ojos X», así
+  // que se sustituye ahí mismo en vez de añadir un segundo color.
+  if (ficha.eyes) {
+    miembro.face = truncate(
+      String(miembro.face).replace(/,\s*ojos [^,]*$/i, '') + `, ojos ${ficha.eyes.toLowerCase()}`,
+      290,
+    );
+  }
+  // La piel sí se añade: el rostro la menciona de pasada («tez clara») y la
+  // frase del usuario, al ir después, es la que manda.
+  if (ficha.skin) {
+    miembro.face = truncate(`${miembro.face}, piel ${ficha.skin.toLowerCase()}`, 290);
+  }
+
+  if (ficha.build) miembro.build = truncate(`complexión ${ficha.build.toLowerCase()}`, 190);
+  if (ficha.age) miembro.apparentAge = truncate(ficha.age.toLowerCase(), 60);
+  // Una prenda suelta —«Minifalda»— deja sin definir el resto del conjunto, y
+  // ahí el modelo improvisa. Se fija lo que pidió y se le dice qué hacer con
+  // lo demás.
+  if (ficha.wardrobe) {
+    miembro.wardrobe = truncate(
+      `${ficha.wardrobe.toLowerCase()}, y el resto del conjunto a juego, elegante y coherente con el estilo del corto`,
+      290,
+    );
+  }
+  if (ficha.mood) miembro.mood = truncate(`actitud ${ficha.mood.toLowerCase()} al tocar`, 120);
+  if (ficha.notes) {
+    miembro.summary = truncate(`${miembro.summary} ${ficha.notes}`, 380);
+    miembro.notes = truncate(ficha.notes, 400);
+  }
+  return miembro;
+}
+
 /** El planificador determinista interno. Devuelve un brief creativo completo. */
 function buildHeuristicBrief(input) {
   const { config, shots, runtimeSec } = input;
@@ -341,6 +419,8 @@ function buildHeuristicBrief(input) {
     : repartirSinRepetir(rng, CONJUNTOS, cuantosMusicos);
   if (vestuarioConjuntado) conjuntos.fill(conjuntos[0]);
   const detalles = repartirSinRepetir(rng, DETALLES, cuantosMusicos);
+  const colores = repartirSinRepetir(rng, COLORES_DE_PELO, cuantosMusicos);
+  const ojos = repartirSinRepetir(rng, COLORES_DE_OJOS, cuantosMusicos);
   const edad = performerType?.id.startsWith('young') ? 'entre 18 y 24 años' : 'entre 28 y 38 años';
 
   // Los rostros y los peinados se reparten por banco, porque en un grupo mixto
@@ -365,13 +445,21 @@ function buildHeuristicBrief(input) {
         380,
       ),
       banco,
-      face: truncate(tomarDe(ROSTROS, banco), 290),
-      hair: truncate(tomarDe(PEINADOS, banco), 190),
+      face: truncate(`${tomarDe(ROSTROS, banco)}, ojos ${ojos[n]}`, 290),
+      hair: truncate(`${tomarDe(PEINADOS, banco)}, de color ${colores[n]}`, 190),
       wardrobe: truncate(`${conjuntos[n][banco]}, con ${detalles[n]}`, 290),
       build: truncate(tomarDe(COMPLEXIONES, banco), 190),
       apparentAge: edad,
       accessories: suyo ? [`funda del ${suyo.name}`] : [],
     });
+    // Y AHORA manda la ficha del usuario, si la rellenó.
+    //
+    // Va después de sortear a propósito: lo que él eligió SUSTITUYE el valor
+    // del banco, no discute con él. Decirle al modelo «esto tiene prioridad» y
+    // dejarle debajo el dato contrario es exactamente lo que fallaba: pidió
+    // rubia con minifalda y el prompt seguía diciendo «negro azabache, falda
+    // larga». Lo que el usuario elige entra en la ficha; el banco ni se mira.
+    aplicarFicha(cast[n], rasgos.fichaDe(config, n + 1));
   }
 
 
