@@ -425,7 +425,7 @@ function buildAssets(config, plan) {
       order: next(),
       spec: {
         objective: 'Definir el aspecto oficial del escenario para todo el corto.',
-        prompt: buildEnvironmentPrompt(bible),
+        prompt: buildEnvironmentPrompt(bible, config),
         negativePrompt: bible.negativePrompt,
         referenceAssetIds: [],
         continuityNotes: [
@@ -468,7 +468,7 @@ function buildAssets(config, plan) {
         shotId: shot.id,
         spec: {
           objective: shot.purpose,
-          prompt: buildShotImagePrompt(bible, shot),
+          prompt: buildShotImagePrompt(bible, shot, config),
           negativePrompt: bible.negativePrompt,
           referenceAssetIds: [MASTER_SCENE_ID, MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
           continuityNotes: bible.continuityRules,

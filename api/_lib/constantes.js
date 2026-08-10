@@ -20,6 +20,43 @@ const MAX_CLIP_SECONDS = 8;
 const MIN_CLIP_SECONDS = 2;
 
 /** Geometría de salida del corto terminado. */
+// Los dos formatos entre los que se elige al crear el corto.
+//
+// No es un detalle de presentación: el formato entra en el prompt de CADA
+// imagen y de CADA clip, así que no se puede cambiar a mitad de producción sin
+// que unas tomas salgan apaisadas y otras verticales.
+//
+// El vertical es el de redes; el apaisado, el de cine y YouTube.
+const FORMATOS = [
+  {
+    id: 'vertical',
+    etiqueta: 'Vertical',
+    proporcion: '9:16',
+    ancho: 1080,
+    alto: 1920,
+    para: 'Para Reels, TikTok y Shorts. Ocupa la pantalla entera del móvil.',
+  },
+  {
+    id: 'horizontal',
+    etiqueta: 'Apaisado',
+    proporcion: '16:9',
+    ancho: 1920,
+    alto: 1080,
+    para: 'Para YouTube y para verlo en una pantalla grande.',
+  },
+];
+
+const FORMATO_POR_DEFECTO = 'vertical';
+
+/** El formato con ese id, o el de por defecto. Nunca devuelve nada vacío. */
+function formato(id) {
+  return FORMATOS.find((f) => f.id === id) ||
+    FORMATOS.find((f) => f.id === FORMATO_POR_DEFECTO) ||
+    FORMATOS[0];
+}
+
+// Medidas del apaisado. Se conservan porque hay código que todavía las usa como
+// valor por defecto; lo que manda es el formato del proyecto.
 const OUTPUT_WIDTH = 1920;
 const OUTPUT_HEIGHT = 1080;
 const OUTPUT_FPS = 24;
@@ -155,6 +192,9 @@ module.exports = {
   DURATIONS_SEC,
   MAX_CLIP_SECONDS,
   MIN_CLIP_SECONDS,
+  FORMATOS,
+  FORMATO_POR_DEFECTO,
+  formato,
   OUTPUT_WIDTH,
   OUTPUT_HEIGHT,
   OUTPUT_FPS,

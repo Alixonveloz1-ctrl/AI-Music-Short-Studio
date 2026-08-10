@@ -29,7 +29,7 @@ const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
 const { computeProductionStatus, hasApprovedVersion, formatTimecode } = require('./_lib/progreso.js');
 const { lanzarMontaje, estadoMontaje } = require('./_lib/montaje.js');
-const { OUTPUT_WIDTH, OUTPUT_HEIGHT } = require('./_lib/constantes.js');
+const { formato } = require('./_lib/constantes.js');
 
 // Cuántos nombres caben en un mensaje de error antes de que deje de leerse en
 // un móvil. Los que no caben se cuentan, y la lista entera va en `detalle`.
@@ -109,7 +109,10 @@ async function lanzar(res, id) {
   const carpeta = almacen.rutaProyecto(id) + '/montajes/' + marcaDeTiempo() + '_' + dominio.shortId(6);
   const salida = almacen.rutaFinal(id, almacen.ARCHIVO_PREVISUALIZACION);
 
+  // El lienzo del MP4 lo decide el formato con el que se creó el corto.
+  const formatoId = (proyecto.config || {}).formatoId;
   const trabajo = await lanzarMontaje({
+    formatoId,
     token,
     projectId,
     bucket: cfg.bucket,
@@ -226,8 +229,8 @@ async function preguntar(res, id, jobPedido) {
     bytes: await tamano(token, salida),
     mimeType: 'video/mp4',
     durationSec: duracionDelPlan(proyecto),
-    width: OUTPUT_WIDTH,
-    height: OUTPUT_HEIGHT,
+    width: formato((proyecto.config || {}).formatoId).ancho,
+    height: formato((proyecto.config || {}).formatoId).alto,
   };
   const terminado = new Date().toISOString();
 

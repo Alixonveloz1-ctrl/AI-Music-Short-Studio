@@ -16,7 +16,7 @@ const { listarProyectos, crearProyecto } = require('./_lib/almacen.js');
 const { createProject } = require('./_lib/dominio.js');
 const { computeProductionStatus } = require('./_lib/progreso.js');
 const { construirPlan } = require('./_lib/plan.js');
-const { DURATIONS_SEC } = require('./_lib/constantes.js');
+const { DURATIONS_SEC, FORMATOS, FORMATO_POR_DEFECTO } = require('./_lib/constantes.js');
 const {
   INSTRUMENTS_BY_ID,
   FORMATIONS_BY_ID,
@@ -257,6 +257,18 @@ function validarConfiguracion(bruto) {
   }
 
   // --- Duración (PRD §12) ---
+  // --- Formato (vertical o apaisado) ---
+  // Entra en el prompt de cada imagen y de cada clip, así que se fija al crear
+  // el corto y ya no se cambia: a mitad de producción, unas tomas saldrían
+  // verticales y otras apaisadas.
+  const formatoId = texto(bruto.formatoId) || FORMATO_POR_DEFECTO;
+  if (!FORMATOS.some((f) => f.id === formatoId)) {
+    throw malaPeticion(
+      'Formato desconocido: "' + formatoId + '". Elige uno de los disponibles (' +
+        FORMATOS.map((f) => f.etiqueta).join(', ') + ').',
+    );
+  }
+
   const durationSec = Number(bruto.durationSec);
   if (!DURATIONS_SEC.includes(durationSec)) {
     throw malaPeticion(
@@ -298,6 +310,7 @@ function validarConfiguracion(bruto) {
     visualStyleId,
     creativeDirection,
     durationSec,
+    formatoId,
     imageModelId,
     videoModelId,
   };

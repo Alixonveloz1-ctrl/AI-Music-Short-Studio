@@ -13,6 +13,7 @@
 // ════════════════════════════════════════════════════════════════
 const { buildCatalog, searchInstruments } = require('./_lib/catalogo.js');
 const modelos = require('./_lib/modelos.js');
+const constantes = require('./_lib/constantes.js');
 const { empezar, fallo } = require('./_lib/http.js');
 
 // El buscador de instrumentos es un desplegable: más de 40 resultados no caben
@@ -66,6 +67,7 @@ module.exports = async function handler(req, res) {
     // api/_lib/modelos.js). Ese orden ES la información: no reordenar al
     // pintarlas.
     return res.status(200).json(Object.assign({}, buildCatalog(), {
+      formatos: constantes.FORMATOS,
       modelosImagen: modelos.MODELOS_IMAGEN,
       modelosVideo: modelos.MODELOS_VIDEO,
     }));

@@ -22,7 +22,18 @@
 // ════════════════════════════════════════════════════════════════
 const { cfg, vertexUrl } = require('./gcp');
 const modelos = require('./modelos');
-const { OUTPUT_ASPECT_RATIO } = require('./constantes');
+const { OUTPUT_ASPECT_RATIO, formato } = require('./constantes');
+
+/**
+ * La proporción que pidió el proyecto.
+ *
+ * Va en el prompt de cada imagen y de cada clip. Si no llega, se usa la del
+ * formato por defecto en vez de fallar: quedarse sin generar por un id raro
+ * sería peor que generar en el formato de siempre.
+ */
+function proporcionDe(formatoId) {
+  return formatoId ? formato(formatoId).proporcion : OUTPUT_ASPECT_RATIO;
+}
 
 class ProveedorError extends Error {
   constructor(message, status) {
@@ -127,7 +138,7 @@ async function imagenConImagen(opciones) {
 
   const parametros = {
     sampleCount: 1,
-    aspectRatio: OUTPUT_ASPECT_RATIO,
+    aspectRatio: proporcionDe(opciones.formatoId),
     // Personas adultas tocando instrumentos: sin esto Imagen rechaza casi todo
     // el catálogo, porque en todos los planos hay alguien.
     personGeneration: 'allow_adult',
@@ -200,7 +211,7 @@ async function imagenConGemini(opciones) {
       contents: [{ role: 'user', parts: partes }],
       generationConfig: {
         responseModalities: ['IMAGE', 'TEXT'],
-        imageConfig: { aspectRatio: OUTPUT_ASPECT_RATIO },
+        imageConfig: { aspectRatio: proporcionDe(opciones.formatoId) },
       },
     },
   );
@@ -298,7 +309,7 @@ async function iniciarVideo(opciones) {
   const tipo = (t) => (t === 'image/jpeg' || t === 'image/png' ? t : 'image/png');
 
   const parametros = {
-    aspectRatio: OUTPUT_ASPECT_RATIO,
+    aspectRatio: proporcionDe(opciones.formatoId),
     sampleCount: 1,
     durationSeconds: duracionValida(modelo, durationSec),
     // El corto es instrumental: la música se compone aparte y el audio que

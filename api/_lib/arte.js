@@ -180,10 +180,74 @@ function joinBlocks(blocks) {
 const CONTINUITY_HEADER =
   'CONTINUIDAD OBLIGATORIA (usa las imágenes de referencia aprobadas como verdad visual)';
 
+// ─── El estilo manda, y va delante ───
+//
+// POR QUÉ ESTO EXISTE: se pidió «anime cinematográfico» y el personaje maestro
+// salió fotorrealista, mientras que el escenario sí salió en anime. El prompt
+// SÍ decía «anime cinematográfico» — pero como un punto más dentro de un bloque
+// «Estilo» a mitad del texto, y el modelo lo trató como una sugerencia.
+//
+// Lo que funciona, y está comprobado en los otros estudios: el estilo va
+// PRIMERO, en mayúsculas, declarado innegociable y con la lista de lo que
+// queda prohibido. Un modelo de imagen obedece mucho mejor una prohibición
+// concreta («nada de fotografía») que una descripción positiva.
+const PROHIBIDO_POR_ESTILO = {
+  // Los estilos dibujados comparten enemigo: que se cuele la fotografía.
+  dibujado: 'fotografía, fotorrealismo, render 3D, CGI, imagen de acción real, ' +
+    'piel con poros y textura fotográfica, aspecto de Pixar o Disney 3D',
+  // Y los realistas, el contrario.
+  real: 'anime, manga, dibujo animado, ilustración, cel-shading, línea de tinta, ' +
+    'aspecto de cómic o de caricatura',
+};
+
+/** Qué familia es cada estilo, para saber contra qué hay que protegerlo. */
+const FAMILIA_DE_ESTILO = {
+  anime_2d: 'dibujado',
+  anime_cinematic: 'dibujado',
+  manga: 'dibujado',
+  illustration: 'dibujado',
+  fantasy: 'dibujado',
+  dark_fantasy: 'dibujado',
+  oil: 'dibujado',
+  watercolor: 'dibujado',
+  realistic: 'real',
+  cinematic_realistic: 'real',
+  retro: '',
+  vintage: '',
+  other: '',
+};
+
+/**
+ * La cabecera de estilo que abre TODOS los prompts de imagen del proyecto.
+ *
+ * Se compone una sola vez en la biblia visual y se repite igual en el
+ * personaje, el escenario, la escena y cada toma: si cada prompt describiera el
+ * estilo a su manera, las imágenes no parecerían la misma película, que es
+ * justo lo que esta herramienta viene a evitar.
+ */
+function cabeceraDeEstilo(bible, config) {
+  const familia = FAMILIA_DE_ESTILO[config.visualStyleId] || '';
+  const prohibido = PROHIBIDO_POR_ESTILO[familia] || '';
+  const partes = [
+    'ESTILO VISUAL (INNEGOCIABLE, se aplica a TODA la imagen y a cada persona ' +
+      'que aparezca en ella): ' + bible.aesthetic.treatment + '. ' +
+      bible.aesthetic.photography + '. ' + bible.aesthetic.finish + '.',
+  ];
+  if (config.visualStyleCustom && String(config.visualStyleCustom).trim()) {
+    partes.push('Indicación del usuario sobre el estilo: ' + String(config.visualStyleCustom).trim() + '.');
+  }
+  if (prohibido) {
+    partes.push('TERMINANTEMENTE PROHIBIDO: ' + prohibido + '.');
+  }
+  return partes.join(' ');
+}
+
+
 /** PERSONAJE MAESTRO — el primer eslabón de la cadena de continuidad (PRD §17). */
 function buildCharacterPrompt(bible, config) {
   const formation = FORMATIONS_BY_ID.get(config.formationId);
   return joinBlocks([
+    cabeceraDeEstilo(bible, config),
     `RETRATO MAESTRO DE PERSONAJE. Retrato de cuerpo entero de ${bible.character.summary}, sosteniendo su ${bible.instrument.names.join(' y ')} en posición de interpretación, sobre fondo neutro y limpio.`,
     block('Personaje', [
       `Rostro: ${bible.character.face}`,
@@ -199,11 +263,7 @@ function buildCharacterPrompt(bible, config) {
       `Posición: ${bible.instrument.positioning}`,
       `Escala: ${bible.instrument.scale}`,
     ]),
-    block('Estilo', [
-      bible.aesthetic.treatment,
-      bible.aesthetic.photography,
-      bible.aesthetic.finish,
-    ]),
+    block('Acabado', [bible.aesthetic.finish]),
     block('Requisitos', [
       'Manos completas y correctas, cinco dedos por mano',
       'El instrumento debe estar completo y bien construido',
@@ -215,9 +275,22 @@ function buildCharacterPrompt(bible, config) {
 }
 
 /** ESCENARIO MAESTRO — la localización sin el intérprete. */
-function buildEnvironmentPrompt(bible) {
+function buildEnvironmentPrompt(bible, config) {
   return joinBlocks([
-    `PLANO MAESTRO DE ESCENARIO. ${bible.environment.location}, sin personas en el encuadre.`,
+    cabeceraDeEstilo(bible, config),
+    // ESTA IMAGEN VA VACÍA, y hay que decirlo tres veces.
+    //
+    // Es la referencia del LUGAR: sirve para que todas las tomas ocurran en el
+    // mismo sitio. Si aquí sale alguien tocando, esa persona se cuela como
+    // referencia en las tomas siguientes y acaban saliendo intérpretes
+    // duplicados en el mismo encuadre.
+    //
+    // Decirlo una vez y de pasada no basta: ya se probó, y el modelo puso dos
+    // músicas en la azotea igual. Va al principio, en mayúsculas, y se repite
+    // al final entre los requisitos.
+    'ESCENARIO VACÍO. NO debe aparecer ninguna persona, ni figura humana, ' +
+      'ni silueta, ni sombra de nadie, ni instrumentos musicales. Solo el lugar.',
+    `PLANO MAESTRO DE ESCENARIO: ${bible.environment.location}.`,
     block('Elementos principales', bible.environment.primaryElements),
     block('Elementos secundarios', bible.environment.secondaryElements),
     block('Iluminación', [
@@ -226,9 +299,11 @@ function buildEnvironmentPrompt(bible) {
       `Intensidad: ${bible.lighting.intensity}`,
       `Atmósfera: ${bible.lighting.atmosphere}`,
     ]),
-    block('Estilo', [bible.aesthetic.treatment, bible.aesthetic.photography, bible.aesthetic.finish]),
+    block('Acabado', [bible.aesthetic.finish]),
     block('Requisitos', [
-      'Composición amplia y legible, con espacio para colocar al intérprete después',
+      'SIN PERSONAS: el encuadre está completamente vacío de figuras humanas',
+      'Sin instrumentos musicales: solo el lugar',
+      'Composición amplia y legible, con sitio libre donde colocar al intérprete después',
       'Esta imagen será la referencia oficial del escenario para todo el corto',
     ]),
   ]);
@@ -238,6 +313,7 @@ function buildEnvironmentPrompt(bible) {
 function buildScenePrompt(bible, config) {
   const formation = FORMATIONS_BY_ID.get(config.formationId);
   return joinBlocks([
+    cabeceraDeEstilo(bible, config),
     `PLANO MAESTRO DE ESCENA. ${bible.character.summary} interpretando su ${bible.instrument.names.join(' y ')} dentro de ${bible.environment.location}.`,
     block('Puesta en escena', [
       formation?.description ?? 'un intérprete en el centro de la escena',
@@ -245,7 +321,7 @@ function buildScenePrompt(bible, config) {
       `Atmósfera: ${bible.environment.atmosphere}`,
     ]),
     block(CONTINUITY_HEADER, bible.continuityRules),
-    block('Estilo', [bible.aesthetic.treatment, bible.aesthetic.photography, bible.aesthetic.finish]),
+    block('Acabado', [bible.aesthetic.finish]),
     block('Requisitos', [
       'El personaje debe ser exactamente el de la referencia de personaje aprobada',
       'El escenario debe ser exactamente el de la referencia de escenario aprobada',
@@ -255,8 +331,9 @@ function buildScenePrompt(bible, config) {
 }
 
 /** Imagen fija de cada toma, compuesta con la biblia más la intención de la toma. */
-function buildShotImagePrompt(bible, shot) {
+function buildShotImagePrompt(bible, shot, config) {
   return joinBlocks([
+    cabeceraDeEstilo(bible, config || bible.config || {}),
     `${shot.label.toUpperCase()} — ${SHOT_TYPE_LABELS[shot.shotType]}.`,
     shot.description,
     block('Intención', [shot.purpose, `Momento del corto: ${beatLabel(shot.beat)}`]),
@@ -265,7 +342,7 @@ function buildShotImagePrompt(bible, shot) {
       `Movimiento previsto en el vídeo: ${CAMERA_MOVE_LABELS[shot.cameraMove]}`,
     ]),
     block(CONTINUITY_HEADER, bible.continuityRules),
-    block('Estilo', [bible.aesthetic.treatment, bible.aesthetic.photography, bible.aesthetic.finish]),
+    block('Acabado', [bible.aesthetic.finish]),
   ]);
 }
 

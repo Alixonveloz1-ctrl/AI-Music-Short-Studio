@@ -1274,6 +1274,20 @@ function vistaProyectos(){
 // Vista: crear (configuración del corto)
 // ───────────────────────────────────────────────────────────────────────
 
+/** El formato elegido, para poder enseñar su descripción bajo las fichas. */
+/** El nombre legible de un formato, para la ficha del proyecto. */
+function nombreFormato(id){
+  var lista = (estado.catalogo && estado.catalogo.formatos) || [];
+  var hallado = lista.find(function(x){ return x.id === id; });
+  if (hallado) return hallado.etiqueta + ' · ' + hallado.proporcion;
+  return id || 'vertical';
+}
+
+function formatoElegido(f, formatos){
+  var hallado = formatos.find(function(x){ return x.id === f.formato; });
+  return hallado || formatos[0] || { para: '' };
+}
+
 function prepararFormulario(){
   var c = estado.catalogo || {};
   var primera = function(lista, id){
@@ -1293,6 +1307,7 @@ function prepararFormulario(){
     estilo: primera(c.visualStyles, 'anime_cinematic'),
     estiloTexto: '',
     duracion: 120,
+    formato: primera(c.formatos, 'vertical'),
     modeloImagen: modeloPorDefecto(c.modelosImagen),
     modeloVideo: modeloPorDefecto(c.modelosVideo),
     direccion: ''
@@ -1449,6 +1464,11 @@ function vistaCrear(){
   var c = estado.catalogo, f = estado.form;
   var duraciones = c.durations && c.durations.length ? c.durations
     : [{ seconds:60, label:'1 min' }, { seconds:120, label:'2 min' }, { seconds:180, label:'3 min' }];
+  // Si el servidor es más viejo que la interfaz y no manda formatos, se usan
+  // los dos de siempre en vez de dejar el bloque en blanco.
+  var formatos = c.formatos && c.formatos.length ? c.formatos
+    : [{ id:'vertical', etiqueta:'Vertical', proporcion:'9:16', para:'Para Reels, TikTok y Shorts.' },
+       { id:'horizontal', etiqueta:'Apaisado', proporcion:'16:9', para:'Para YouTube y pantalla grande.' }];
 
   var html = cab;
 
@@ -1503,10 +1523,19 @@ function vistaCrear(){
   '</div>';
 
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">5</span>Duración</h3>' +
+    '<h3><span class="paso">5</span>Duración y formato</h3>' +
     '<div class="chips">' + duraciones.map(function(d){
       return '<button class="chip' + (f.duracion === d.seconds ? ' on' : '') + '" data-accion="duracion" data-seg="' + d.seconds + '">' + esc(d.label) + '</button>';
     }).join('') + '</div>' +
+    // El formato entra en el prompt de CADA imagen y de CADA clip, así que se
+    // fija aquí y ya no se cambia: a mitad de producción unas tomas saldrían
+    // verticales y otras apaisadas.
+    '<p class="tenue mini" style="margin:14px 0 6px">Formato del vídeo. No se puede cambiar después de crear el corto.</p>' +
+    '<div class="chips">' + formatos.map(function(fo){
+      return '<button class="chip' + (f.formato === fo.id ? ' on' : '') + '" data-accion="formato" data-id="' + esc(fo.id) + '">' +
+        esc(fo.etiqueta) + ' · ' + esc(fo.proporcion) + '</button>';
+    }).join('') + '</div>' +
+    '<p class="tenue mini" style="margin-top:8px">' + esc(formatoElegido(f, formatos).para) + '</p>' +
   '</div>';
 
   // Los modelos van justo después de la duración porque son la otra mitad de
@@ -1794,6 +1823,7 @@ function panelPlan(p){
       ['Intérprete', cfg.performerTypeId],
       ['Escenario', cfg.scenarioCustom || cfg.scenarioId],
       ['Estilo visual', cfg.visualStyleCustom || cfg.visualStyleId],
+      ['Formato', nombreFormato(cfg.formatoId)],
       ['Modelo de imagen', nombreModelo('modelosImagen', cfg.imageModelId)],
       ['Modelo de vídeo', nombreModelo('modelosVideo', cfg.videoModelId)],
       ['Creado', fmtFecha(p.createdAt)]
@@ -2141,6 +2171,7 @@ async function crearProyecto(){
     creativeDirection: f.direccion.trim(),
     durationSec: f.duracion
   };
+  if (f.formato) config.formatoId = f.formato;
   if (f.escenarioTexto.trim()) config.scenarioCustom = f.escenarioTexto.trim();
   if (f.estiloTexto.trim()) config.visualStyleCustom = f.estiloTexto.trim();
   // Sólo se mandan si hay algo que mandar: un catálogo sin modelos (o un
@@ -2348,6 +2379,7 @@ document.addEventListener('click', function(ev){
     return;
   }
   if (accion === 'duracion') { estado.form.duracion = Number(el.getAttribute('data-seg')); pintar(); return; }
+  if (accion === 'formato') { estado.form.formato = el.getAttribute('data-id'); pintar(); return; }
   if (accion === 'crear-proyecto') { crearProyecto(); return; }
 });
 

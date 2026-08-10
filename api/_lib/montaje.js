@@ -30,6 +30,7 @@ const {
   OUTPUT_HEIGHT,
   OUTPUT_FPS,
   AUDIO_SAMPLE_RATE,
+  formato,
 } = require('./constantes');
 
 // Fundidos, en segundos. Los mismos que usaba el montaje local.
@@ -87,8 +88,15 @@ const n3 = (x) => Number(x).toFixed(3);
  * planifica la reutilización — y aquí eso no es un caso especial: se abre el
  * archivo tantas veces como haga falta.
  */
-function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
+function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, formatoId) {
   const total = entradas.reduce((suma, e) => suma + e.durationSec, 0);
+
+  // El lienzo lo decide el formato del proyecto: vertical para redes, apaisado
+  // para pantalla grande. Los clips vienen ya en esa proporción, pero el
+  // scale+pad los encaja igualmente por si alguno llegara distinto.
+  const f = formatoId ? formato(formatoId) : { ancho: OUTPUT_WIDTH, alto: OUTPUT_HEIGHT };
+  const ANCHO = f.ancho;
+  const ALTO = f.alto;
 
   const inputs = [];
   const filtros = [];
@@ -143,8 +151,8 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
     const cadena = [
       // Encajar sin deformar: se reduce hasta caber y se rellena con negro. Un
       // scale a pelo estiraría la imagen si el clip viniera con otra relación.
-      'scale=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':force_original_aspect_ratio=decrease',
-      'pad=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':(ow-iw)/2:(oh-ih)/2',
+      'scale=' + ANCHO + ':' + ALTO + ':force_original_aspect_ratio=decrease',
+      'pad=' + ANCHO + ':' + ALTO + ':(ow-iw)/2:(oh-ih)/2',
       'setsar=1',
       // Aquí se estira o se encoge el plano hasta su hueco. Conserva los dos
       // extremos del clip y solo cambia el ritmo.
@@ -293,7 +301,7 @@ function comilla(s) {
  * tarda minutos.
  */
 async function lanzarMontaje(opciones) {
-  const { token, projectId, bucket, carpeta, entradas, musica, ambiente, salida } = opciones;
+  const { token, projectId, bucket, carpeta, entradas, musica, ambiente, salida, formatoId } = opciones;
 
   if (!entradas || !entradas.length) {
     throw new Error('No hay ninguna toma aprobada que montar.');
@@ -320,7 +328,7 @@ async function lanzarMontaje(opciones) {
   descargas.push({ objeto: ambiente, local: ambienteLocal });
 
   const salidaLocal = 'pelicula.mp4';
-  const script = construirScript(entradasLocales, musicaLocal, ambienteLocal, salidaLocal);
+  const script = construirScript(entradasLocales, musicaLocal, ambienteLocal, salidaLocal, formatoId);
 
   // El encargo queda escrito en el bucket: el script que se ejecutó y la hoja
   // con lo que se pidió. Si algo sale raro, se puede mirar exactamente qué se
