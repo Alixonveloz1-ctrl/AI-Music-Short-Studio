@@ -294,11 +294,21 @@ function planStructure(runtimeSec) {
       const durationSec = Math.min(clip.durationSec, remaining);
       const isFirstEntry = timeline.length === 0;
       const beatChanged = previousBeat !== null && previousBeat !== assignment.beat;
+      // Un plano que VUELVE entra encadenado, no a corte.
+      //
+      // Es la contrapartida de reutilizar la mitad del corto: por muy bien
+      // elegido que esté el plano, un corte seco delata que ya se había visto.
+      // Medio segundo de superposición desdibuja esa costura y el material
+      // repetido pasa por material nuevo. Los estrenos siguen entrando a
+      // corte, que es lo que da ritmo.
+      const vuelveUnPlano = firstOfSlot && assignment.reused;
       const transitionIn = isFirstEntry
         ? 'fade_in'
         : firstOfSlot && beatChanged
           ? 'dip_to_black'
-          : 'cut';
+          : vuelveUnPlano
+            ? 'dissolve'
+            : 'cut';
       timeline.push({
         index: timeline.length,
         shotId: assignment.shot.id,

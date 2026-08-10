@@ -136,7 +136,10 @@ const CAMERA_MOVES = [
  * bloques — se llama así por lo que hace realmente, en lugar de dar a entender
  * un encadenado que el ensamblador no ejecuta.
  */
-const TRANSITIONS = ['cut', 'dip_to_black', 'fade_in', 'fade_out'];
+// Las transiciones que sabe montar el editor. Cada nombre dice lo que el
+// montaje HACE de verdad, no lo que sugiere: 'dissolve' es un encadenado real
+// —las dos imágenes se superponen— y no un fundido a negro disimulado.
+const TRANSITIONS = ['cut', 'dissolve', 'dip_to_black', 'fade_in', 'fade_out'];
 
 /** Ciclo de vida del montaje final. */
 const FINAL_CUT_STATUSES = [

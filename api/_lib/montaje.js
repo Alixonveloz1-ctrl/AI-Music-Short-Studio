@@ -39,6 +39,17 @@ const FUNDIDO_SALIDA = 1.6;
 // separa dos ideas, no abre la película.
 const FUNDIDO_BLOQUE = 0.4;
 
+// El encadenado con el que vuelve un plano ya visto.
+//
+// La mitad del corto se monta con material repetido. Por muy bien elegido que
+// esté el plano, un corte seco delata que ya se había visto: el ojo reconoce el
+// encuadre exacto. Medio segundo de superposición desdibuja esa costura y el
+// material repetido pasa por material nuevo.
+//
+// Medio segundo y no más: por encima de un segundo deja de leerse como un
+// corte y se convierte en un recurso de estilo, que es otra cosa.
+const DISOLVENCIA = 0.5;
+
 // La música manda y el ambiente acompaña. Con las dos al mismo volumen el
 // ambiente se come el instrumento, que es justo lo que el corto viene a enseñar.
 const GANANCIA_MUSICA = 0.85;
@@ -68,7 +79,18 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
 
   const inputs = [];
   const filtros = [];
-  const etiquetas = [];
+
+  // Un plano que vuelve entra ENCADENADO: se superpone medio segundo con lo
+  // anterior. Eso significa que su trozo tiene que durar medio segundo MÁS que
+  // su hueco, porque esa media se comparte con el corte de al lado. Sin este
+  // ajuste, cada encadenado le robaría medio segundo a la película y un corto
+  // de tres minutos acabaría durando varios segundos menos de lo planificado.
+  const llevaEncadenado = entradas.map(
+    (entrada, i) => i > 0 && entrada.transitionIn === 'dissolve',
+  );
+  const largos = entradas.map(
+    (entrada, i) => entrada.durationSec + (llevaEncadenado[i] ? DISOLVENCIA : 0),
+  );
 
   entradas.forEach((entrada, i) => {
     inputs.push('-i ' + comilla(entrada.local));
@@ -76,12 +98,12 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
     const primera = i === 0;
     const ultima = i === entradas.length - 1;
     const siguiente = entradas[i + 1];
+    const largo = largos[i];
 
     const cadena = [
       // El clip se recorta a lo que dura su hueco. Veo no siempre devuelve
-      // exactamente los segundos que se le pidieron, así que sin este trim la
-      // suma de la película no cuadraría con la duración planificada.
-      'trim=start=0:duration=' + n3(entrada.durationSec),
+      // exactamente los segundos que se le pidieron.
+      'trim=start=0:duration=' + n3(largo),
       'setpts=PTS-STARTPTS',
       // Encajar sin deformar: se reduce hasta caber y se rellena con negro. Un
       // scale a pelo estiraría la imagen si el clip viniera con otra relación.
@@ -89,6 +111,19 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
       'pad=' + OUTPUT_WIDTH + ':' + OUTPUT_HEIGHT + ':(ow-iw)/2:(oh-ih)/2',
       'setsar=1',
       'fps=' + OUTPUT_FPS,
+      // Y si el clip viene CORTO —Veo puede devolver menos segundos de los
+      // pedidos, y un plano reutilizado ocupa a veces un hueco más largo que
+      // aquel para el que se generó— se sostiene el último fotograma hasta
+      // completar. Sin esto la película sale más corta que su propia línea de
+      // tiempo y la música deja de cuadrar con la imagen.
+      'tpad=stop_mode=clone:stop_duration=' + n3(largo),
+      'trim=duration=' + n3(largo),
+      'setpts=PTS-STARTPTS',
+      // Todos los trozos con la MISMA base de tiempo. `concat` cambia la del
+      // resultado, y `xfade` se niega a mezclar dos entradas con bases
+      // distintas: sin esto, la primera vez que un encadenado viene detrás de
+      // un corte, ffmpeg muere con "timebase do not match".
+      'settb=AVTB',
     ];
 
     if (primera) {
@@ -98,22 +133,42 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal) {
     }
 
     if (ultima) {
-      cadena.push(
-        'fade=t=out:st=' + n3(Math.max(0, entrada.durationSec - FUNDIDO_SALIDA)) +
-          ':d=' + FUNDIDO_SALIDA,
-      );
+      cadena.push('fade=t=out:st=' + n3(Math.max(0, largo - FUNDIDO_SALIDA)) + ':d=' + FUNDIDO_SALIDA);
     } else if (siguiente && siguiente.transitionIn === 'dip_to_black') {
-      cadena.push(
-        'fade=t=out:st=' + n3(Math.max(0, entrada.durationSec - FUNDIDO_BLOQUE)) +
-          ':d=' + FUNDIDO_BLOQUE,
-      );
+      cadena.push('fade=t=out:st=' + n3(Math.max(0, largo - FUNDIDO_BLOQUE)) + ':d=' + FUNDIDO_BLOQUE);
     }
 
     filtros.push('[' + i + ':v]' + cadena.join(',') + '[v' + i + ']');
-    etiquetas.push('[v' + i + ']');
   });
 
-  filtros.push(etiquetas.join('') + 'concat=n=' + entradas.length + ':v=1:a=0[vout]');
+  // Se van pegando de dos en dos, no todos de golpe con `concat`: un
+  // encadenado necesita que los dos trozos se SOLAPEN, y concat solo sabe
+  // ponerlos uno detrás de otro. Encadenando por parejas se puede mezclar
+  // corte y encadenado en la misma película.
+  let acumulado = '[v0]';
+  let largoAcumulado = entradas[0].durationSec;
+
+  for (let i = 1; i < entradas.length; i += 1) {
+    const salida = '[x' + i + ']';
+    if (llevaEncadenado[i]) {
+      // El desplazamiento se mide sobre la película montada hasta aquí: el
+      // trozo nuevo empieza medio segundo ANTES de que termine la anterior.
+      const desplazamiento = Math.max(0, largoAcumulado - DISOLVENCIA);
+      filtros.push(
+        acumulado + '[v' + i + ']xfade=transition=fade:duration=' + DISOLVENCIA +
+          ':offset=' + n3(desplazamiento) + ',settb=AVTB' + salida,
+      );
+    } else {
+      filtros.push(acumulado + '[v' + i + ']concat=n=2:v=1:a=0,settb=AVTB' + salida);
+    }
+    // En los dos casos la película crece exactamente lo que dura el hueco: en
+    // el encadenado, porque el trozo trae ya el medio segundo de más que se
+    // solapa.
+    largoAcumulado += entradas[i].durationSec;
+    acumulado = salida;
+  }
+
+  filtros.push(acumulado + 'null[vout]');
 
   const iMusica = entradas.length;
   const iAmbiente = entradas.length + 1;

@@ -204,6 +204,32 @@ input:focus,textarea:focus,select:focus{ outline:none; border-color:var(--acento
 }
 .opcion small{ color:var(--tenue); font-size:12px; }
 .opcion.on{ border-color:var(--acento); background:var(--acento-tap); }
+/* Las listas cortas (los modelos son tres o cuatro) no llevan scroll propio:
+   un contenedor que se desplaza dentro de la página se pelea con el pulgar. */
+.opciones.corta{ max-height:none; overflow:visible; }
+
+/* ── Elección de modelo ──────────────────────────────────────────────── */
+/* Es una .opcion con dos líneas más: para qué sirve el modelo y su
+   identificador real. El usuario decide por la frase, no por el id. */
+.opcion.modelo{ align-items:flex-start; padding:13px 14px; }
+.modelo-txt{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.modelo-txt b{ font-size:14.5px; }
+.modelo-txt small{ color:var(--tenue); font-size:12px; line-height:1.4; }
+.modelo-txt .modelo-id{
+  color:var(--tenue2); font-size:10.5px; letter-spacing:.01em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere;
+}
+/* El nivel se lee de un vistazo por el color: verde barato, violeta
+   intermedio, ámbar caro. Es lo único que dice esta interfaz sobre el
+   coste, porque las tarifas reales dependen de la cuenta y de la región. */
+.nivel{
+  flex:0 0 auto; padding:4px 9px; border-radius:999px;
+  font-size:10.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+  border:1px solid var(--borde); color:var(--tenue); white-space:nowrap;
+}
+.nivel.n-economico{ color:var(--ok); border-color:rgba(53,211,154,.42); background:rgba(53,211,154,.10); }
+.nivel.n-equilibrado{ color:var(--acento2); border-color:rgba(176,108,255,.42); background:rgba(176,108,255,.10); }
+.nivel.n-calidad{ color:var(--aviso); border-color:rgba(255,180,84,.45); background:rgba(255,180,84,.10); }
 
 /* ── Filas de producción ─────────────────────────────────────────────── */
 .filas{ display:flex; flex-direction:column; gap:8px; }
@@ -692,6 +718,12 @@ var ETIQ_MONTAJE = {
 var ETIQ_PULSO = { opening:'apertura', development:'desarrollo', climax:'clímax', closing:'cierre' };
 var ETIQ_TRANSICION = { cut:'corte', dip_to_black:'fundido a negro', fade_in:'entra fundido', fade_out:'sale fundido' };
 
+// Los tres niveles de gasto del catálogo de modelos. A propósito NO hay
+// ninguna cifra: la tarifa real depende de la cuenta de Google Cloud, de la
+// región y del momento, y un número inventado aquí haría presupuestar mal un
+// corto entero. El nivel ordena; la factura la dice Google.
+var ETIQ_NIVEL = { economico: 'Económico', equilibrado: 'Equilibrado', calidad: 'Máxima calidad' };
+
 function activos(p){ return (p && Array.isArray(p.assets)) ? p.assets : []; }
 
 function porOrden(p){
@@ -950,6 +982,10 @@ async function cargarLoQueFalte(){
       return;
     }
     if (estado.vista === 'proyecto' && estado.proyectoId) {
+      // El plan enseña con qué modelos se está produciendo el corto, y el
+      // nombre legible de cada modelo está en el catálogo. Sin él sólo se
+      // vería el identificador crudo de Vertex, que no le dice nada a nadie.
+      if (!estado.catalogo) { await cargarCatalogo(); pintar(); }
       if (!estado.proyecto || estado.proyecto.id !== estado.proyectoId) {
         estado.proyecto = null;
         pintar();
@@ -1257,9 +1293,78 @@ function prepararFormulario(){
     estilo: primera(c.visualStyles, 'anime_cinematic'),
     estiloTexto: '',
     duracion: 120,
+    modeloImagen: modeloPorDefecto(c.modelosImagen),
+    modeloVideo: modeloPorDefecto(c.modelosVideo),
     direccion: ''
   };
   ajustarTipos();
+}
+
+/**
+ * ¿Este modelo viene impuesto por el entorno del servidor?
+ *
+ * Cuando IMAGE_MODEL o VEO_MODEL están puestos, el servidor añade ese modelo
+ * al catálogo marcado, y ese es el que manda: es la vía de escape de un
+ * proyecto que no tiene acceso al resto. Lo único que el contrato promete es
+ * que la marca existe, no cómo se llama, así que se aceptan varios nombres en
+ * vez de romperse por una letra.
+ */
+function modeloDelEntorno(m){
+  return !!(m && (m.deEntorno || m.desdeEntorno || m.delEntorno || m.entorno || m.porDefecto));
+}
+
+/** El modelo que sale elegido de entrada: el impuesto, o el primero de la
+ *  lista — que el catálogo llega del más barato al más caro. */
+function modeloPorDefecto(lista){
+  if (!Array.isArray(lista) || !lista.length) return '';
+  var forzado = lista.find(modeloDelEntorno);
+  return (forzado || lista[0]).id;
+}
+
+/** Lista de modelos como fichas de elección, en el orden en que vienen. */
+function htmlModelos(lista, elegido, accion){
+  if (!Array.isArray(lista) || !lista.length) {
+    return '<p class="tenue mini">El servidor no ofreció ningún modelo para elegir; el corto usará el que tenga configurado.</p>';
+  }
+  return '<div class="opciones corta">' + lista.map(function(m){
+    var puesto = (m.id === elegido);
+    var nivel = String(m.nivel || '');
+    var pie = [m.id, m.region, modeloDelEntorno(m) ? 'fijado por el servidor' : ''].filter(Boolean).join(' · ');
+    return '<button class="opcion modelo' + (puesto ? ' on' : '') + '" data-accion="' + accion + '" data-id="' + esc(m.id) + '">' +
+      '<span class="modelo-txt">' +
+        '<b>' + esc(m.etiqueta || m.id) + '</b>' +
+        (m.para ? '<small>' + esc(m.para) + '</small>' : '') +
+        '<small class="modelo-id">' + esc(pie) + '</small>' +
+      '</span>' +
+      '<span class="nivel n-' + esc(nivel) + '">' + esc(ETIQ_NIVEL[nivel] || nivel || 'sin nivel') + '</span>' +
+    '</button>';
+  }).join('') + '</div>';
+}
+
+function htmlModelosImagen(){
+  var c = estado.catalogo || {};
+  return htmlModelos(c.modelosImagen, estado.form.modeloImagen, 'modelo-imagen');
+}
+
+function htmlModelosVideo(){
+  var c = estado.catalogo || {};
+  return htmlModelos(c.modelosVideo, estado.form.modeloVideo, 'modelo-video');
+}
+
+/**
+ * Cómo se nombra un modelo ya guardado en un proyecto.
+ *
+ * Un proyecto viejo no guardó ninguno, y uno guardado puede haber
+ * desaparecido del catálogo: en los dos casos se enseña lo que haya en vez de
+ * dejar la ficha con un hueco que parece un fallo.
+ */
+function nombreModelo(clave, id){
+  if (!id) return 'el que tenga configurado el servidor';
+  var lista = (estado.catalogo && estado.catalogo[clave]) || [];
+  var m = lista.find(function(x){ return x.id === id; });
+  if (!m) return id;
+  var nivel = ETIQ_NIVEL[m.nivel] || m.nivel || '';
+  return (m.etiqueta || m.id) + (nivel ? ' · ' + nivel : '') + ' (' + m.id + ')';
 }
 
 /** Los tipos de intérprete dependen del género elegido: se recalculan siempre. */
@@ -1404,8 +1509,28 @@ function vistaCrear(){
     }).join('') + '</div>' +
   '</div>';
 
+  // Los modelos van justo después de la duración porque son la otra mitad de
+  // la misma decisión: cuánto va a costar este corto. Y van ANTES de crear el
+  // proyecto porque después ya no se pueden cambiar.
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">6</span>Dirección creativa</h3>' +
+    '<h3><span class="paso">6</span>Modelo de imagen</h3>' +
+    '<p class="tenue mini" style="margin-bottom:4px">Genera los retratos maestros, el escenario y las imágenes de cada toma. De más barato a más caro.</p>' +
+    '<div id="lista-modelo-imagen">' + htmlModelosImagen() + '</div>' +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">7</span>Modelo de vídeo</h3>' +
+    '<p class="tenue mini" style="margin-bottom:10px">Anima cada toma a partir de su imagen aprobada. De más barato a más caro.</p>' +
+    '<div class="nota aviso">' +
+      '<b>El vídeo es la parte cara del corto.</b> Un corto genera muchos clips, y el modelo que elijas aquí multiplica el coste de todos ellos. ' +
+      'No enseñamos precios porque la tarifa depende de tu cuenta de Google Cloud, de la región y de la fecha: míralos en la facturación de Vertex AI antes de lanzar un corto de tres minutos.' +
+    '</div>' +
+    '<div id="lista-modelo-video">' + htmlModelosVideo() + '</div>' +
+    '<p class="tenue mini" style="margin-top:10px">El modelo se fija al crear el corto y ya no se cambia: mezclar modelos a mitad de producción rompe la continuidad visual entre tomas.</p>' +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">8</span>Dirección creativa</h3>' +
     '<p class="tenue mini" style="margin-bottom:10px">Escribe libremente: apariencia, vestuario, ambiente, luz, época, colores, intención emocional. No hace falta que suene a prompt técnico; el equipo lo traduce.</p>' +
     '<textarea data-campo="direccion" rows="6" placeholder="Describe libremente lo que quieres ver…">' + esc(f.direccion) + '</textarea>' +
   '</div>';
@@ -1669,8 +1794,13 @@ function panelPlan(p){
       ['Intérprete', cfg.performerTypeId],
       ['Escenario', cfg.scenarioCustom || cfg.scenarioId],
       ['Estilo visual', cfg.visualStyleCustom || cfg.visualStyleId],
+      ['Modelo de imagen', nombreModelo('modelosImagen', cfg.imageModelId)],
+      ['Modelo de vídeo', nombreModelo('modelosVideo', cfg.videoModelId)],
       ['Creado', fmtFecha(p.createdAt)]
     ]) +
+    // Que no se pueda cambiar es una decisión, no un olvido: hay que decirlo
+    // donde el usuario iría a buscar el botón que no existe.
+    '<p class="tenue mini" style="margin-top:8px">Los modelos se eligen al crear el corto y no se pueden cambiar: producir unas tomas con un modelo y otras con otro rompería la continuidad visual entre ellas.</p>' +
     (cfg.creativeDirection
       ? '<h4 style="margin-top:12px">Dirección creativa</h4><p class="mini" style="margin-top:6px;color:#cfd0ee">' + esc(cfg.creativeDirection) + '</p>'
       : '') +
@@ -2013,6 +2143,11 @@ async function crearProyecto(){
   };
   if (f.escenarioTexto.trim()) config.scenarioCustom = f.escenarioTexto.trim();
   if (f.estiloTexto.trim()) config.visualStyleCustom = f.estiloTexto.trim();
+  // Sólo se mandan si hay algo que mandar: un catálogo sin modelos (o un
+  // servidor anterior a esta pantalla) debe seguir creando cortos con el
+  // modelo que tenga por defecto, no recibir una cadena vacía y responder 400.
+  if (f.modeloImagen) config.imageModelId = f.modeloImagen;
+  if (f.modeloVideo) config.videoModelId = f.modeloVideo;
 
   await ejecutar(async function(){
     var d = await api.crear(config);
@@ -2200,6 +2335,18 @@ document.addEventListener('click', function(ev){
     return;
   }
   if (accion === 'tipo') { estado.form.tipo = el.getAttribute('data-id'); pintarEn('tipos-interprete', htmlTipos()); return; }
+  // Sólo se repinta la lista tocada: el formulario entero se lleva por delante
+  // el foco de la dirección creativa, y con él el teclado a media palabra.
+  if (accion === 'modelo-imagen') {
+    estado.form.modeloImagen = el.getAttribute('data-id');
+    pintarEn('lista-modelo-imagen', htmlModelosImagen());
+    return;
+  }
+  if (accion === 'modelo-video') {
+    estado.form.modeloVideo = el.getAttribute('data-id');
+    pintarEn('lista-modelo-video', htmlModelosVideo());
+    return;
+  }
   if (accion === 'duracion') { estado.form.duracion = Number(el.getAttribute('data-seg')); pintar(); return; }
   if (accion === 'crear-proyecto') { crearProyecto(); return; }
 });

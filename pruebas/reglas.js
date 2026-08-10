@@ -401,6 +401,71 @@ async function principal() {
     cierto(s.indexOf('exec 2>error.txt') !== -1, 'el motivo del fallo no se guardaría');
   });
 
+  comprobar('un plano que vuelve entra encadenado, no a corte', () => {
+    // El ojo reconoce un encuadre repetido. Medio segundo de superposición
+    // desdibuja la costura; un corte seco la delata.
+    const e = productor.planStructure(120);
+    const vueltas = e.timeline.filter((t) => t.reused);
+    cierto(vueltas.length > 0, 'este corto no reutiliza nada');
+    const encadenados = vueltas.filter(
+      (t) => t.transitionIn === 'dissolve' || t.transitionIn === 'dip_to_black',
+    );
+    cierto(
+      encadenados.length >= vueltas.filter((t) => t.transitionIn !== 'cut').length,
+      'hay planos que vuelven entrando a corte seco',
+    );
+  });
+
+  comprobar('el encadenado no le roba segundos a la película', () => {
+    // El trozo que entra encadenado tiene que durar medio segundo MÁS que su
+    // hueco, porque esa media se comparte. Sin ese ajuste, cada encadenado
+    // acortaría el corto y la música dejaría de cuadrar con la imagen.
+    const s = montaje.construirScript(
+      [
+        { local: 'a.mp4', durationSec: 6, transitionIn: 'fade_in' },
+        { local: 'b.mp4', durationSec: 4, transitionIn: 'dissolve' },
+      ],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    cierto(s.indexOf('xfade=transition=fade:duration=0.5') !== -1, 'no usa encadenado real');
+    // El segundo trozo se recorta a 4,5 s: sus 4 s de hueco más el medio que solapa.
+    cierto(s.indexOf('trim=start=0:duration=4.500') !== -1, 'el trozo encadenado no trae el solape');
+    // Y el desplazamiento lo coloca medio segundo antes de que acabe el anterior.
+    cierto(s.indexOf('offset=5.500') !== -1, 'el encadenado no arranca donde debe');
+  });
+
+  comprobar('todos los trozos comparten base de tiempo', () => {
+    // `concat` cambia la base de tiempo del resultado y `xfade` se niega a
+    // mezclar dos entradas con bases distintas. La primera vez que un
+    // encadenado venía detrás de un corte, ffmpeg moría con "timebase do not
+    // match" — y solo pasaba en películas con las dos cosas.
+    const s = montaje.construirScript(
+      [
+        { local: 'a.mp4', durationSec: 5, transitionIn: 'fade_in' },
+        { local: 'b.mp4', durationSec: 5, transitionIn: 'cut' },
+        { local: 'a.mp4', durationSec: 5, transitionIn: 'dissolve' },
+      ],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    const concats = (s.match(/concat=n=2/g) || []).length;
+    const settb = (s.match(/settb=AVTB/g) || []).length;
+    cierto(concats >= 1, 'no hay ningún corte que comprobar');
+    // Uno por trozo más uno por cada unión.
+    cierto(settb >= 3 + concats, 'faltan normalizaciones de base de tiempo');
+  });
+
+  comprobar('un clip que viene corto sostiene su último fotograma', () => {
+    // Veo no siempre devuelve los segundos que se le piden, y un plano
+    // reutilizado ocupa a veces un hueco más largo que aquel para el que se
+    // generó. Sin esto la película sale más corta que su línea de tiempo.
+    const s = montaje.construirScript(
+      [{ local: 'a.mp4', durationSec: 7, transitionIn: 'fade_in' }],
+      'm.wav', 'amb.wav', 'salida.mp4',
+    );
+    cierto(s.indexOf('tpad=stop_mode=clone:stop_duration=7.000') !== -1, 'no sostiene el fotograma');
+    cierto(s.indexOf('trim=duration=7.000') !== -1, 'no fuerza la duración exacta');
+  });
+
   comprobar('un clip repetido se descarga una sola vez', () => {
     const s = montaje.construirScript(
       [
@@ -410,7 +475,14 @@ async function principal() {
       ],
       'm.wav', 'amb.wav', 'salida.mp4',
     );
-    igual(s.indexOf('concat=n=3') !== -1, true, 'los tres cortes están en el concat');
+    // El mismo archivo se abre tres veces como entrada de ffmpeg —eso es
+    // gratis— pero la descarga desde el bucket ocurre una sola vez, porque
+    // `lanzarMontaje` lo mapea a un único nombre local. Aquí se comprueba lo
+    // que corresponde al script: los tres cortes están en la película.
+    const aperturas = (s.match(/-i 'a\.mp4'/g) || []).length;
+    igual(aperturas, 2, 'el clip repetido no aparece en sus dos huecos');
+    const uniones = (s.match(/concat=n=2|xfade=/g) || []).length;
+    igual(uniones, 2, 'faltan uniones entre los tres cortes');
   });
 
   // ── El audio ──
