@@ -550,14 +550,15 @@ else
   ok "se conserva la clave que ya tenias"
 fi
 
-# APP_KEY: la contrasena de la herramienta. Sin ella, cualquiera
-# que encuentre la URL puede gastar tus creditos generando video.
-# Se propone ya hecha para que no haya que inventarla.
-if command -v openssl >/dev/null 2>&1; then
-  APP_KEY="$(openssl rand -hex 24)"
-else
-  APP_KEY="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-fi
+# APP_KEY: la contrasena de la herramienta. Sin ella, cualquiera que
+# encuentre la direccion puede gastar tus creditos generando video.
+#
+# NO SE GENERA AQUI, A PROPOSITO. Antes este script proponia una de 48
+# caracteres en hexadecimal, y eso esta mal por dos motivos: la
+# contrasena es del duenno de la herramienta y la elige el, y ademas
+# hay que TECLEARLA en el movil cada vez que se entra en la app. Una
+# tirada de 48 caracteres al azar es justo lo que no se puede teclear
+# en una pantalla pequenna.
 
 # ─── El resumen: lo unico que hay que copiar ───
 
@@ -603,11 +604,16 @@ echo ""
 echo "$LINEA"
 echo "  VARIABLE 3 de 3"
 echo "  Nombre:  APP_KEY"
-echo "  (la contrasena para entrar en la app;"
-echo "   guardala, la vas a teclear al abrirla)"
 echo "$LINEA"
 echo ""
-echo "$APP_KEY"
+echo "  Esta la eliges TU. Es tu contrasena para"
+echo "  entrar en la app, y no la genera nadie mas."
+echo ""
+echo "  Piensa una que recuerdes y puedas teclear"
+echo "  comodamente en el movil: la vas a escribir"
+echo "  cada vez que entres."
+echo ""
+echo "  Escribela en Vercel como valor de APP_KEY."
 echo ""
 
 echo "$RAYA"
