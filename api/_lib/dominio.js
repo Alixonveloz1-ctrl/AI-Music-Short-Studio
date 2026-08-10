@@ -35,6 +35,13 @@ function equipo() {
   return _arte;
 }
 
+// El catálogo, por el mismo motivo y con la misma forma.
+let _catalogo = null;
+function catalogo() {
+  if (!_catalogo) _catalogo = require('./catalogo.js');
+  return _catalogo;
+}
+
 // ---------------------------------------------------------------------------
 // Errores de dominio
 // ---------------------------------------------------------------------------
@@ -362,6 +369,10 @@ function touch(project) {
 // ---------------------------------------------------------------------------
 
 const MASTER_CHARACTER_ID = 'master_character';
+
+// Cuántos retratos maestros individuales se piden como mucho. Más allá, aprobar
+// uno a uno deja de tener sentido y manda la escena maestra.
+const MAX_PERSONAJES_MAESTROS = 4;
 const MASTER_ENVIRONMENT_ID = 'master_environment';
 const MASTER_SCENE_ID = 'master_scene';
 const MUSIC_ASSET_ID = 'music';
@@ -397,24 +408,58 @@ function buildAssets(config, plan) {
   let order = 0;
   const next = () => (order += 10);
 
-  const characterSpec = {
-    objective: 'Definir el aspecto oficial del intérprete para todo el corto.',
-    prompt: buildCharacterPrompt(bible, config),
-    negativePrompt: bible.negativePrompt,
-    referenceAssetIds: [],
-    continuityNotes: bible.continuityRules.slice(0, 4),
-  };
-  assets.push(
-    asset({
-      id: MASTER_CHARACTER_ID,
-      kind: 'master_character',
-      stage: ASSET_KIND_STAGE.master_character,
-      label: 'Personaje maestro',
-      order: next(),
-      spec: characterSpec,
-      dependsOn: [],
-    }),
-  );
+  // ─── Un retrato maestro POR INTÉRPRETE ───
+  //
+  // Con los dos músicos en la misma imagen no se puede usar ninguno como
+  // referencia limpia: al generar una toma, el modelo recibe una imagen con dos
+  // personas y acaba mezclando caras, ropas e instrumentos. Separados, cada
+  // toma pide exactamente la identidad que necesita.
+  //
+  // Se topa en CUATRO. Para una orquesta de veinticuatro no tiene sentido
+  // aprobar veinticuatro retratos uno a uno: a partir de ahí el grupo se trata
+  // como conjunto y quien manda es la escena maestra.
+  const formacion = catalogo().FORMATIONS_BY_ID.get(config.formationId);
+  const cuantosToca = Math.max(1, Number(formacion && formacion.performerCount) || 1);
+  const cuantos = Math.min(cuantosToca, MAX_PERSONAJES_MAESTROS);
+
+  const nombresInstrumentos = (config.instrumentIds || [])
+    .map((id) => catalogo().INSTRUMENTS_BY_ID.get(id))
+    .filter(Boolean)
+    .map((i) => i.name);
+
+  const idsPersonajes = [];
+  for (let n = 1; n <= cuantos; n += 1) {
+    // A cada intérprete le toca un instrumento de los elegidos. Si hay menos
+    // instrumentos que músicos —un dúo de violines— se reparten en ciclo.
+    const suyo = nombresInstrumentos.length
+      ? nombresInstrumentos[(n - 1) % nombresInstrumentos.length]
+      : '';
+    const id = n === 1 ? MASTER_CHARACTER_ID : `${MASTER_CHARACTER_ID}_${n}`;
+    idsPersonajes.push(id);
+    assets.push(
+      asset({
+        id,
+        kind: 'master_character',
+        stage: ASSET_KIND_STAGE.master_character,
+        label: cuantos > 1
+          ? `Intérprete ${n}${suyo ? ' — ' + suyo : ''}`
+          : 'Personaje maestro',
+        order: next(),
+        spec: {
+          objective: cuantos > 1
+            ? `Definir el aspecto oficial del intérprete ${n} de ${cuantos} para todo el corto.`
+            : 'Definir el aspecto oficial del intérprete para todo el corto.',
+          prompt: buildCharacterPrompt(bible, config, n, cuantos, suyo),
+          negativePrompt: bible.negativePrompt,
+          // Cada intérprete ve a los anteriores para no repetir su cara: el
+          // requisito de ser distinto solo se puede cumplir si sabe de quién.
+          referenceAssetIds: idsPersonajes.slice(0, -1),
+          continuityNotes: bible.continuityRules.slice(0, 4),
+        },
+        dependsOn: idsPersonajes.slice(0, -1),
+      }),
+    );
+  }
 
   assets.push(
     asset({
@@ -447,10 +492,10 @@ function buildAssets(config, plan) {
         objective: 'Fijar la relación entre el intérprete, el instrumento y el escenario.',
         prompt: buildScenePrompt(bible, config),
         negativePrompt: bible.negativePrompt,
-        referenceAssetIds: [MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+        referenceAssetIds: idsPersonajes.concat([MASTER_ENVIRONMENT_ID]),
         continuityNotes: bible.continuityRules,
       },
-      dependsOn: [MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+      dependsOn: idsPersonajes.concat([MASTER_ENVIRONMENT_ID]),
     }),
   );
 
@@ -470,7 +515,10 @@ function buildAssets(config, plan) {
           objective: shot.purpose,
           prompt: buildShotImagePrompt(bible, shot, config),
           negativePrompt: bible.negativePrompt,
-          referenceAssetIds: [MASTER_SCENE_ID, MASTER_CHARACTER_ID, MASTER_ENVIRONMENT_ID],
+          // La escena maestra va PRIMERA: ya contiene a todos los
+          // intérpretes en su sitio, así que es la referencia que más
+          // información da por imagen. Detrás, el escenario y los retratos.
+          referenceAssetIds: [MASTER_SCENE_ID, MASTER_ENVIRONMENT_ID].concat(idsPersonajes),
           continuityNotes: bible.continuityRules,
         },
         dependsOn: [MASTER_SCENE_ID],

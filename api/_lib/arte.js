@@ -244,12 +244,31 @@ function cabeceraDeEstilo(bible, config) {
 
 
 /** PERSONAJE MAESTRO — el primer eslabón de la cadena de continuidad (PRD §17). */
-function buildCharacterPrompt(bible, config) {
-  const formation = FORMATIONS_BY_ID.get(config.formationId);
+/**
+ * RETRATO MAESTRO DE UN INTÉRPRETE.
+ *
+ * Hay UNO POR CADA intérprete de la formación, no uno con todos dentro. Con
+ * todos en la misma imagen no se puede usar ninguno como referencia limpia: al
+ * generar una toma, el modelo recibe una imagen con dos personas y mezcla sus
+ * caras, sus ropas y sus instrumentos. Separados, cada toma puede pedir
+ * exactamente la identidad que necesita.
+ *
+ * `indice` va de 1 a `total`, e `instrumento` es el que le toca a ESTE
+ * intérprete.
+ */
+function buildCharacterPrompt(bible, config, indice, total, instrumento) {
+  const n = indice || 1;
+  const cuantos = total || 1;
+  const suyo = instrumento || bible.instrument.names.join(' y ');
+  const enGrupo = cuantos > 1;
+
   return joinBlocks([
     cabeceraDeEstilo(bible, config),
-    `RETRATO MAESTRO DE PERSONAJE. Retrato de cuerpo entero de ${bible.character.summary}, sosteniendo su ${bible.instrument.names.join(' y ')} en posición de interpretación, sobre fondo neutro y limpio.`,
-    block('Personaje', [
+    'RETRATO MAESTRO DE INTÉRPRETE' + (enGrupo ? ' ' + n + ' DE ' + cuantos : '') +
+      '. UNA SOLA PERSONA en el encuadre, de cuerpo entero, sosteniendo su ' + suyo +
+      ' en posición de interpretación, sobre fondo neutro y limpio.',
+    block('Persona', [
+      bible.character.summary,
       `Rostro: ${bible.character.face}`,
       `Cabello: ${bible.character.hair}`,
       `Complexión: ${bible.character.build}`,
@@ -258,18 +277,26 @@ function buildCharacterPrompt(bible, config) {
       bible.character.accessories.length ? `Accesorios: ${bible.character.accessories.join(', ')}` : null,
     ]),
     block('Instrumento', [
-      `Instrumento: ${bible.instrument.names.join(' + ')}`,
+      `Instrumento: ${suyo}`,
       `Apariencia: ${bible.instrument.appearance}`,
       `Posición: ${bible.instrument.positioning}`,
       `Escala: ${bible.instrument.scale}`,
     ]),
     block('Acabado', [bible.aesthetic.finish]),
     block('Requisitos', [
+      'UNA SOLA PERSONA: no debe aparecer nadie más en el encuadre',
+      'UN SOLO INSTRUMENTO: el suyo, y ninguno más',
+      // Sin esto salen clones: el modelo recibe la misma descripción para los
+      // dos intérpretes y devuelve dos veces la misma cara.
+      enGrupo
+        ? 'Esta persona tiene que ser CLARAMENTE DISTINTA de los otros ' +
+          (cuantos - 1) + ' intérpretes del grupo: otro rostro, otro peinado y ' +
+          'otro color de ropa, dentro de la misma gama y del mismo estilo'
+        : null,
       'Manos completas y correctas, cinco dedos por mano',
       'El instrumento debe estar completo y bien construido',
       'Sin texto ni marcas de agua',
-      `Formación de referencia: ${formation?.description ?? 'solista'}`,
-      'Esta imagen será la referencia oficial del personaje para todo el corto',
+      'Esta imagen será la referencia oficial de este intérprete para todo el corto',
     ]),
   ]);
 }
