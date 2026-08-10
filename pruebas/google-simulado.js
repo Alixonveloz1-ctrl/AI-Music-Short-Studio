@@ -41,10 +41,22 @@ function instalarGoogleSimulado() {
   // Antes este simulacro contestaba con un WAV bien formado, y por eso la
   // prueba pasaba en verde mientras en producción la pieza no se podía ni
   // abrir: un simulacro más amable que el servicio real no comprueba nada.
+  // 48 kHz ESTÉREO, y el mimeType NO declara los canales: exactamente lo que
+  // manda un modelo de música. Suponer mono ahí es lo que convertía la pieza en
+  // estática, porque las muestras de los dos canales se leían como si fueran
+  // una detrás de otra.
+  const PCM_RATE = 48000;
+  const PCM_CANALES = 2;
+  const PCM_SEGUNDOS = 60;
+  const PCM_MIME = 'audio/L16;codec=pcm;rate=48000';
   const PCM_CRUDO = (() => {
-    const n = 24000 * 31;
-    const b = Buffer.alloc(n * 2);
-    for (let i = 0; i < n; i += 1) b.writeInt16LE(Math.round(6000 * Math.sin(i / 12)), i * 2);
+    const n = PCM_RATE * PCM_SEGUNDOS;
+    const b = Buffer.alloc(n * PCM_CANALES * 2);
+    for (let i = 0; i < n; i += 1) {
+      const v = Math.round(6000 * Math.sin((2 * Math.PI * 440 * i) / PCM_RATE));
+      b.writeInt16LE(v, i * 4);        // izquierdo
+      b.writeInt16LE(v, i * 4 + 2);    // derecho
+    }
     return b.toString('base64');
   })();
   const PNG_FALSO = Buffer.from('imagen de prueba').toString('base64');
@@ -239,7 +251,7 @@ function instalarGoogleSimulado() {
         if (!/\[\d{2}:\d{2}\]/.test(texto)) {
           return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
             { text: 'sin línea de tiempo: pieza corta de unos 30 s' },
-            { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: PCM_CRUDO } },
+            { inlineData: { mimeType: PCM_MIME, data: PCM_CRUDO } },
           ] } }] });
         }
 
@@ -253,7 +265,7 @@ function instalarGoogleSimulado() {
         }
 
         return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
-          { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: PCM_CRUDO } },
+          { inlineData: { mimeType: PCM_MIME, data: PCM_CRUDO } },
         ] } }] });
       }
       // Los modelos de imagen de Gemini («Nano Banana») no hablan `:predict`

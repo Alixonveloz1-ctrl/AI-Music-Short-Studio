@@ -365,6 +365,99 @@ async function principal() {
     }
   });
 
+  comprobar('el audio de Lyria se lee con su formato real, no con uno supuesto', () => {
+    // EL FALLO: la pista se generaba entera y sonaba a estática. Google declara
+    // la frecuencia en el mimeType pero casi nunca los CANALES, y suponer uno
+    // es razonable para una voz y está mal para música: Lyria compone en
+    // estéreo. Leer estéreo como mono es tomar las muestras de los dos canales
+    // como si fueran una detrás de otra, y eso es ruido blanco.
+    //
+    // Por eso el formato se DEDUCE de los bytes y la duración pedida, que es
+    // una medición, en lugar de suponerse.
+    const pcm = (rate, canales, segundos) => Buffer.alloc(rate * canales * 2 * segundos);
+
+    const casos = [
+      // [mimeType, rate real, canales reales]
+      ['audio/L16;codec=pcm;rate=48000', 48000, 2],   // el caso que fallaba
+      ['audio/L16;codec=pcm', 48000, 2],
+      ['audio/L16;codec=pcm;rate=44100', 44100, 2],
+      ['', 44100, 2],
+      ['audio/L16;codec=pcm;rate=24000', 24000, 1],
+      ['audio/L16;codec=pcm;rate=24000;channels=1', 24000, 1],
+    ];
+    for (const [mime, rate, canales] of casos) {
+      const f = vertex.formatoDelPcm(pcm(rate, canales, 60), mime, 60);
+      igual([f.rate, f.canales], [rate, canales],
+        'formato mal deducido para «' + (mime || 'sin mimeType') + '»');
+    }
+
+    // Y la cabecera que se escribe dice la verdad, de punta a punta.
+    const crudo = pcm(48000, 2, 60);
+    const r = vertex.juntarAudio({ candidates: [{ content: { parts: [
+      { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=48000', data: crudo.toString('base64') } },
+    ] } }] }, 60);
+    const wav = Buffer.from(r.base64, 'base64');
+    igual(wav.toString('latin1', 0, 4), 'RIFF', 'no lleva cabecera RIFF');
+    igual(wav.readUInt16LE(22), 2, 'la cabecera declara los canales mal');
+    igual(wav.readUInt32LE(24), 48000, 'la cabecera declara la frecuencia mal');
+    // Y se puede abrir de verdad, con la duración correcta. Las muestras vienen
+    // ENTRELAZADAS —izquierda, derecha, izquierda…— así que la duración se saca
+    // dividiendo también por los canales. Contarlas como si fueran mono es
+    // exactamente el error que producía la estática.
+    const d = audio.decodeWav(wav);
+    igual(d.sampleRate, 48000, 'frecuencia al decodificar');
+    igual(d.channels, 2, 'canales al decodificar');
+    igual(Math.round(d.samples.length / d.channels / d.sampleRate), 60, 'duración al decodificar');
+
+    // Y la pieza terminada conserva el estéreo y la duración: si aquí se
+    // perdiera un canal, volvería la estática.
+    const pieza = audio.decodeWav(audio.unirFragmentos([wav], { duracionSec: 60 }));
+    igual(pieza.channels, 2, 'la pieza final perdió el estéreo');
+    igual(pieza.sampleRate, 48000, 'la pieza final cambió de frecuencia');
+    igual(Math.round(pieza.samples.length / pieza.channels / pieza.sampleRate), 60,
+      'la pieza final no dura lo que se pidió');
+  });
+
+  comprobar('la pieza suena como la compuso Lyria, no a estática', () => {
+    // La comprobación de verdad: se mete un tono puro de 440 Hz y se mide qué
+    // tono sale al otro lado. Con el formato mal supuesto salía a 110 Hz —dos
+    // veces por la frecuencia y dos veces por leer los canales entrelazados
+    // como si fueran muestras seguidas— y eso, con música real en vez de un
+    // tono, es ruido blanco.
+    const R = 48000;
+    const N = R * 5;
+    const pcm = Buffer.alloc(N * 4);
+    for (let i = 0; i < N; i += 1) {
+      const v = Math.round(9000 * Math.sin((2 * Math.PI * 440 * i) / R));
+      pcm.writeInt16LE(v, i * 4);
+      pcm.writeInt16LE(v, i * 4 + 2);
+    }
+    const respuesta = { candidates: [{ content: { parts: [
+      { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=48000', data: pcm.toString('base64') } },
+    ] } }] };
+
+    // Frecuencia del canal izquierdo, contando cruces por cero.
+    const tonoDe = (wav) => {
+      const d = audio.decodeWav(wav);
+      let cruces = 0;
+      let previo = d.samples[0];
+      const frames = d.samples.length / d.channels;
+      for (let f = 1; f < frames; f += 1) {
+        const v = d.samples[f * d.channels];
+        if ((previo < 0) !== (v < 0)) cruces += 1;
+        previo = v;
+      }
+      return cruces / 2 / (frames / d.sampleRate);
+    };
+
+    const pieza = audio.unirFragmentos(
+      [Buffer.from(vertex.juntarAudio(respuesta, 5).base64, 'base64')],
+      { duracionSec: 5, fadeInSec: 0, fadeOutSec: 0 },
+    );
+    const hz = tonoDe(pieza);
+    cierto(Math.abs(hz - 440) < 5, 'el tono salió a ' + hz.toFixed(0) + ' Hz en vez de 440');
+  });
+
   await comprobarAsync('una llamada que no contesta se convierte en un error visible', async () => {
     // EL FALLO, tal como lo vivió el usuario: media hora mirando «Generando…».
     // La llamada a Vertex no tenía límite de espera, así que cuando el modelo

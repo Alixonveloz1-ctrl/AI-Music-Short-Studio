@@ -1901,7 +1901,7 @@ function htmlRevision(p){
   }
 
   if (gen) {
-    var prov = gen.provider ? ((gen.provider.name || '') + (gen.provider.model ? ' · ' + gen.provider.model : '')) : '';
+    var prov = gen.provider ? ((gen.provider.name || '') + (gen.provider.model ? ' · ' + gen.provider.model : '') + (gen.provider.formato ? ' · ' + gen.provider.formato : '')) : '';
     var dur = gen.file && gen.file.durationSec ? ' · ' + Number(gen.file.durationSec).toFixed(1) + ' s' : '';
     var peso = gen.file && gen.file.bytes ? ' · ' + fmtBytes(gen.file.bytes) : '';
     var tardo = gen.elapsedMs ? ' · tardó ' + Math.round(gen.elapsedMs / 1000) + ' s' : '';

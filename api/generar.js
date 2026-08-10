@@ -555,6 +555,15 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
   }
 
   const bytes = Buffer.from(r.base64, 'base64');
+  // Qué formato traía el audio y cuál se le puso. Si la pieza vuelve a sonar
+  // mal, esto es la mitad del diagnóstico y ahorra otra ronda de preguntas.
+  if (r.formato) {
+    await anotar(proyecto.id, (p) => {
+      const a = dominio.getAsset(p, activoId);
+      const g = generacionDe(a, genId);
+      if (g && g.provider) g.provider.formato = r.formato;
+    });
+  }
   const ruta = almacen.rutaGeneracion(proyecto.id, activo, gen.index, sufijoFragmento(indice));
   // `r.mimeType` viene ya normalizado a audio/wav por vertex.js, que es quien
   // le pone la cabecera al PCM crudo que manda Lyria. Se usa el suyo y no una
