@@ -31,12 +31,23 @@ bash i.sh
 Tarda uno o dos minutos. Por el camino:
 
 - Enciende las APIs que hacen falta (Vertex AI, Cloud Storage, Cloud Build)
-- Crea o reutiliza el bucket donde vivirá tu material
-- Crea la cuenta de servicio y le da sus permisos
-- Y te entrega la credencial
+- **Reutiliza** el bucket que ya tengas — no crea ninguno nuevo
+- **Reutiliza** la cuenta de servicio que ya tengas, y le añade los permisos
+  que le falten
+- Y si esa cuenta ya tiene una clave, **no crea otra**: te dice que conserves la
+  que ya está puesta en Vercel
 
-**Puede que te pregunte algo.** Si tienes varios buckets, te pedirá cuál usar. Se
-contesta con una palabra corta.
+Solo propone crear algo cuando de verdad no hay nada que reutilizar, y
+preguntando antes. Esta herramienta convive con tus otros proyectos en la misma
+cuenta de Google y no va a llenarte el IAM de cuentas parecidas.
+
+**Te va a preguntar tres o cuatro cosas**, y casi todas se contestan con una
+letra:
+
+- ¿Es el proyecto correcto? → **s**
+- ¿Uso el bucket `creancion-de-contenido`? → **s**
+- ¿Es correcta esta cuenta de servicio? → **s**
+- ¿Creo una clave nueva? → **n** (ya tienes una funcionando)
 
 Si algo falla, el propio script te dice qué y cómo se arregla. No se muere con un
 número.
