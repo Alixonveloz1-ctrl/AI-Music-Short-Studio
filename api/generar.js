@@ -556,7 +556,10 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
 
   const bytes = Buffer.from(r.base64, 'base64');
   const ruta = almacen.rutaGeneracion(proyecto.id, activo, gen.index, sufijoFragmento(indice));
-  await almacen.subirMedio(ruta, bytes, 'audio/wav');
+  // `r.mimeType` viene ya normalizado a audio/wav por vertex.js, que es quien
+  // le pone la cabecera al PCM crudo que manda Lyria. Se usa el suyo y no una
+  // constante, para que si algún día cambia el formato, la etiqueta no mienta.
+  await almacen.subirMedio(ruta, bytes, r.mimeType || 'audio/wav');
 
   // El avance se guarda en el bucket y en el proyecto porque la petición que
   // haga el fragmento siguiente será otra, en otra instancia: aquí no hay
@@ -796,8 +799,24 @@ async function empujarMusica(proyecto, activo, gen) {
 
   // Todos hechos: toca unirlos y cerrar.
   if (siguiente === null) {
-    const proyectoFinal = await unirYCerrar(proyecto, activo, gen);
-    return { proyecto: proyectoFinal };
+    try {
+      const proyectoFinal = await unirYCerrar(proyecto, activo, gen);
+      return { proyecto: proyectoFinal };
+    } catch (e) {
+      // ESTE `catch` FALTABA, Y ESO HIZO INVISIBLE UN FALLO REAL. Lyria devolvía
+      // PCM crudo guardado como si fuera WAV, y aquí se rechazaba con un
+      // mensaje perfectamente claro que nadie llegaba a ver: el error subía sin
+      // que se apuntara en la generación, la petición devolvía un 500 que la
+      // interfaz descartaba, el activo seguía en «generando» y el latido volvía
+      // a intentarlo. Cuatro minutos de ruedecita hasta que saltaba el
+      // vigilante, con la causa escrita y tirada a la basura en cada vuelta.
+      //
+      // Unir tampoco se reintenta: si el material guardado no se puede abrir,
+      // no se va a poder abrir dentro de cinco segundos.
+      return {
+        proyecto: await anotarFallo(proyecto.id, activo.id, gen.id, motivoLegible(e)),
+      };
+    }
   }
 
   let actualizado;

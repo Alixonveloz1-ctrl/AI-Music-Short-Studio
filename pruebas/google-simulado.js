@@ -36,6 +36,17 @@ function instalarGoogleSimulado() {
     for (let i = 0; i < n; i++) m[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / 44100);
     return encodeWav(m, 44100).toString('base64');
   })();
+  // PCM crudo de 16 bits a 24 kHz: EXACTAMENTE lo que devuelve Lyria. Sin
+  // cabecera RIFF, que es justo lo que rompía al abrir el audio guardado.
+  // Antes este simulacro contestaba con un WAV bien formado, y por eso la
+  // prueba pasaba en verde mientras en producción la pieza no se podía ni
+  // abrir: un simulacro más amable que el servicio real no comprueba nada.
+  const PCM_CRUDO = (() => {
+    const n = 24000 * 31;
+    const b = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i += 1) b.writeInt16LE(Math.round(6000 * Math.sin(i / 12)), i * 2);
+    return b.toString('base64');
+  })();
   const PNG_FALSO = Buffer.from('imagen de prueba').toString('base64');
 
   global.fetch = async function (url, opciones) {
@@ -228,7 +239,7 @@ function instalarGoogleSimulado() {
         if (!/\[\d{2}:\d{2}\]/.test(texto)) {
           return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
             { text: 'sin línea de tiempo: pieza corta de unos 30 s' },
-            { inlineData: { mimeType: 'audio/wav', data: WAV_VACIO } },
+            { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: PCM_CRUDO } },
           ] } }] });
         }
 
@@ -242,7 +253,7 @@ function instalarGoogleSimulado() {
         }
 
         return ok({ candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [
-          { inlineData: { mimeType: 'audio/wav', data: WAV_VACIO } },
+          { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: PCM_CRUDO } },
         ] } }] });
       }
       // Los modelos de imagen de Gemini («Nano Banana») no hablan `:predict`

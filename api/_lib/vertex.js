@@ -684,11 +684,21 @@ async function generarMusica(opciones) {
 }
 
 /**
- * Saca el audio de la respuesta.
+ * Saca el audio de la respuesta y lo deja como un WAV de verdad.
  *
- * El modelo puede partir la pieza en varias `parts` con `inlineData`. Se
- * concatenan en el orden en que vienen: son trozos del MISMO archivo, no piezas
- * distintas, así que no hay costura que disimular.
+ * EL FALLO QUE ARREGLA. Lyria NO devuelve WAV: devuelve PCM crudo, con el
+ * formato declarado en el mimeType («audio/L16;codec=pcm;rate=24000»). Se estaba
+ * guardando tal cual con la etiqueta `audio/wav`, y el paso siguiente —el que
+ * une los trozos y ajusta la duración— lo abría esperando una cabecera RIFF que
+ * no existía y lo rechazaba. Como ese rechazo tampoco se apuntaba en ninguna
+ * parte, el latido lo reintentaba en bucle y el usuario veía «Generando…»
+ * durante cuatro minutos hasta que saltaba el vigilante.
+ *
+ * Aquí se arregla en el origen: si viene PCM crudo se le pone su cabecera WAV,
+ * y si vienen varios trozos se les quita la cabecera a todos menos al primero
+ * —dos cabeceras seguidas en medio del audio suenan como un chasquido— y se
+ * corrige el tamaño declarado, que si no ffmpeg lee sólo el primer trozo y la
+ * pieza sale corta.
  */
 function juntarAudio(d) {
   const cand = d && Array.isArray(d.candidates) ? d.candidates[0] : null;
@@ -696,19 +706,70 @@ function juntarAudio(d) {
   const trozos = [];
   let mimeType = '';
   for (const p of partes) {
-    const dato = p && p.inlineData;
-    if (dato && dato.data) {
-      trozos.push(dato.data);
-      if (!mimeType) mimeType = dato.mimeType || '';
-    }
+    const dato = (p && (p.inlineData || p.inline_data)) || null;
+    if (!dato || !dato.data) continue;
+    const suyo = dato.mimeType || dato.mime_type || '';
+    // Una parte de imagen aquí sería un error del modelo, pero colarla en el
+    // audio lo dejaría inservible sin decir por qué.
+    if (suyo.indexOf('image') === 0) continue;
+    if (!mimeType) mimeType = suyo;
+    let buf = Buffer.from(dato.data, 'base64');
+    // Del segundo trozo en adelante, fuera la cabecera.
+    if (trozos.length && esRiff(buf)) buf = buf.slice(44);
+    trozos.push(buf);
   }
   if (!trozos.length) return null;
-  return {
-    base64: trozos.length === 1
-      ? trozos[0]
-      : Buffer.concat(trozos.map((t) => Buffer.from(t, 'base64'))).toString('base64'),
-    mimeType: mimeType || 'audio/wav',
-  };
+
+  let bytes = trozos.length === 1 ? trozos[0] : Buffer.concat(trozos);
+  bytes = esRiff(bytes) ? corregirTamanoWav(bytes) : cabeceraWav(bytes, mimeType);
+
+  return { base64: bytes.toString('base64'), mimeType: 'audio/wav' };
+}
+
+function esRiff(buf) {
+  return buf.length > 44 && buf.toString('latin1', 0, 4) === 'RIFF';
+}
+
+/**
+ * Le pone cabecera WAV a un bloque de PCM crudo.
+ *
+ * La frecuencia y los canales salen del mimeType, que es donde Google los
+ * declara. Los valores por defecto son los que usa Lyria cuando no lo dice.
+ */
+function cabeceraWav(pcm, mimeType) {
+  const rate = parseInt((/rate=(\d+)/.exec(mimeType || '') || [])[1], 10) || 24000;
+  const canales = parseInt((/channels=(\d+)/.exec(mimeType || '') || [])[1], 10) || 1;
+  const bits = 16;
+  const bloque = (canales * bits) / 8;
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0);
+  h.writeUInt32LE(36 + pcm.length, 4);
+  h.write('WAVE', 8);
+  h.write('fmt ', 12);
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);              // 1 = PCM sin comprimir
+  h.writeUInt16LE(canales, 22);
+  h.writeUInt32LE(rate, 24);
+  h.writeUInt32LE(rate * bloque, 28);
+  h.writeUInt16LE(bloque, 32);
+  h.writeUInt16LE(bits, 34);
+  h.write('data', 36);
+  h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+/**
+ * Corrige el tamaño declarado tras pegar varios trozos.
+ *
+ * La cabecera del primero sigue diciendo lo que medía ÉL. Un lector estricto
+ * —ffmpeg lo es— se cree ese número y deja de leer ahí, así que la pieza sale
+ * con la duración del primer trozo y no la del conjunto.
+ */
+function corregirTamanoWav(buf) {
+  const out = Buffer.from(buf);
+  out.writeUInt32LE(out.length - 8, 4);
+  if (out.toString('latin1', 36, 40) === 'data') out.writeUInt32LE(out.length - 44, 40);
+  return out;
 }
 
 /**
@@ -736,5 +797,7 @@ module.exports = {
   MODELO_MUSICA_PRO,
   aIngles,
   lineaDeTiempo,
+  juntarAudio,
+  cabeceraWav,
   SIN_VOZ,
 };
