@@ -363,84 +363,59 @@ async function principal() {
       'la caja de ritmos en la calle debería ir más rápida que el arpa en la iglesia');
   });
 
-  await comprobarAsync('el ambiente se puede hacer de dos maneras y las dos se guardan', async () => {
-    // «Generaré una música de ambiente como la estás haciendo ahora, generaré
-    // otra con la IA, y la que suena mejor, yo decidiré utilizarla. Debe haber
-    // un botón para poder seleccionar cuál utilizar.»
+  comprobar('el sonido ambiental ya no existe en ninguna parte', () => {
+    // SE QUITÓ DEL PRODUCTO, y en palabras del usuario: los efectos con IA «la
+    // generación falla mucho y, cuando por fin los hace, vienen con música»; los
+    // sintéticos, «tú dices que hay pájaros y cosas así, pero yo no escucho nada
+    // de eso, solamente escucho un ruido horrible, que lo que hace es dañar la
+    // calidad de la música».
     //
-    // La comparación y la aprobación ya existían: cada activo guarda TODAS sus
-    // generaciones. Lo que faltaba era poder elegir el método de cada intento.
+    // Esta comprobación existe porque quitar algo a medias es peor que no
+    // quitarlo: un activo que ya no se puede generar bloquearía su etapa y el
+    // usuario no podría ni montar el corto ni saber por qué.
     const p = nuevo();
-    const a = dominio.getAsset(p, 'ambient');
-    cierto(a, 'no hay activo de ambiente');
+    cierto(!p.assets.some((a) => a.kind === 'ambient'),
+      'un corto nuevo sigue naciendo con un activo de ambiente');
+    cierto(!p.plan.ambient, 'el plan sigue llevando un encargo de ambiente');
 
-    const uno = dominio.startGeneration(p, a, {
-      prompt: 'x', negativePrompt: '', referenceAssetIds: [], provider: { name: 'local' },
-      seed: 1, metodo: 'sintetizado',
-    });
-    dominio.completeGeneration(p, a, uno, { path: 'a.wav', bytes: 10, mimeType: 'audio/wav' });
-    const dos = dominio.startGeneration(p, a, {
-      prompt: 'x', negativePrompt: '', referenceAssetIds: [], provider: { name: 'Lyria' },
-      seed: 2, metodo: 'ia',
-    });
-    dominio.completeGeneration(p, a, dos, { path: 'b.mp3', bytes: 20, mimeType: 'audio/mpeg' });
+    const c = require(path.join(RAIZ, 'api/_lib/constantes.js'));
+    cierto(c.ASSET_KINDS.indexOf('ambient') === -1, 'ambient sigue siendo un tipo de activo');
+    cierto(c.STAGES.indexOf('ambient') === -1, 'ambient sigue siendo una etapa');
+    cierto(!c.ASSET_KIND_STAGE.ambient, 'ambient sigue teniendo etapa asignada');
 
-    igual(a.generations.length, 2, 'no se guardaron las dos versiones');
-    igual(a.generations[0].metodo, 'sintetizado', 'la primera no recuerda su metodo');
-    igual(a.generations[1].metodo, 'ia', 'la segunda no recuerda su metodo');
-    // Ninguna queda aprobada sola: la eleccion es del usuario (PRD 4).
-    igual(a.status, 'review', 'una de las dos se aprobo sola');
-    dominio.approveGeneration(p, 'ambient', dos.id);
-    igual(a.approvedGenerationId, dos.id, 'no se pudo elegir la de IA');
-    cierto(a.generations.some((g) => g.id === uno.id), 'se perdio la version sintetizada');
+    // Y el sintetizador de ruido se fue con él.
+    cierto(!audio.renderAmbient, 'audio.js sigue exportando el sintetizador de ambiente');
+    cierto(!vertex.generarAmbiente, 'vertex.js sigue exportando la generación de ambiente con IA');
+
+    // Ninguna etapa se quedó con un hueco: las que hay son las que se recorren.
+    const etapas = new Set(p.assets.map((a) => a.stage));
+    for (const e of etapas) {
+      cierto(c.STAGES.indexOf(e) !== -1, 'hay activos en una etapa que ya no existe: ' + e);
+    }
   });
 
-  await comprobarAsync('al ambiente con IA se le prohibe hacer musica', async () => {
-    // Se le pide a un modelo de MUSICA que no haga musica. Sin insistir, devuelve
-    // una pieza con melodia y pulso, y entonces suenan dos musicas a la vez.
-    const c = Object.assign({}, CONFIG, {
-      scenarioId: 'street',
-      scenarioCustom: 'via publica abandonada, mundo postapocaliptico lleno de zombis',
+  comprobar('un corto viejo con ambiente dentro se abre sin arrastrarlo', () => {
+    // Hay proyectos guardados en el bucket con su activo «ambient», a veces
+    // aprobado. Si al leerlos siguiera apareciendo, su etapa estaría siempre
+    // incompleta —ya no se puede generar— y el montaje no se abriría nunca.
+    const almacen = require(path.join(RAIZ, 'api/_lib/almacen.js'));
+    cierto(typeof almacen.jubilarSonidoAmbiental === 'function',
+      'almacen.js no expone la retirada del ambiente, así que no se puede comprobar');
+
+    const viejo = nuevo();
+    viejo.assets.push({
+      id: 'ambient', kind: 'ambient', stage: 'ambient', label: 'Sonido ambiental',
+      order: 99, status: 'approved', locked: true, approvedGenerationId: 'gen_x',
+      generations: [], dependsOn: [], spec: {},
     });
-    const armado = await construirPlan(c);
-    const en = armado.plan.ambient.promptEn;
-    cierto(en, 'el plan no lleva encargo de ambiente en ingles');
+    viejo.plan.ambient = { layers: ['viento'], prompt: 'x', durationSec: 60 };
 
-    // Lo que el usuario escribio manda, y las capas del catalogo NO aparecen:
-    // para «Via publica» el catalogo pide «trafico lejano, pasos, voces», que es
-    // justo lo contrario de una calle abandonada sin nadie.
-    cierto(/ruined concrete|metal groaning/.test(en),
-      'su escena no se convirtio en sonidos concretos: ' + en);
-    cierto(!/distant traffic|footsteps/.test(en),
-      'las capas del catalogo contradicen lo que escribio: ' + en);
-
-    // NI UNA PALABRA EN ESPAÑOL. Lyria rechaza el encargo entero con
-    // «Unsupported language detected» en cuanto detecta otro idioma, asi que el
-    // texto del usuario se LEE y se traduce a sonidos, nunca se pega tal cual.
-    cierto(!/[áéíóúñ¿¡]/i.test(en), 'queda español en el encargo del ambiente: ' + en);
-
-    // Sin escenario propio, las capas del catalogo si valen, y en ingles.
-    const sinTexto = await construirPlan(Object.assign({}, CONFIG, {
-      scenarioId: 'forest', creativeDirection: '',
-    }));
-    const bosque = sinTexto.plan.ambient.promptEn;
-    cierto(/wind through leaves|birds/.test(bosque), 'sin descripcion propia faltan las capas del escenario');
-    cierto(!/[áéíóúñ¿¡]/i.test(bosque), 'las capas del catalogo llegan en español: ' + bosque);
-
-    // Y las 47 frases del catalogo estan traducidas: si mañana se añade un
-    // escenario con una frase nueva sin traducir, se caeria en silencio.
-    const catalogoMod = require(path.join(RAIZ, 'api/_lib/catalogo.js'));
-    for (const esc of catalogoMod.SCENARIOS) {
-      const suyo = await construirPlan(Object.assign({}, CONFIG, {
-        scenarioId: esc.id, creativeDirection: '', scenarioCustom: '',
-      }));
-      const t = suyo.plan.ambient.promptEn;
-      cierto(!/[áéíóúñ¿¡]/i.test(t), 'el escenario «' + esc.label + '» mete español: ' + t);
-      cierto(/What is heard:/.test(t), 'el escenario «' + esc.label + '» se queda sin sonidos');
-    }
-
-    // Y el sintetizador sigue teniendo su lista, que es lo unico que entiende.
-    cierto(armado.plan.ambient.layers.length, 'el sintetizador se quedo sin capas');
+    almacen.jubilarSonidoAmbiental(viejo);
+    cierto(!viejo.assets.some((a) => a.kind === 'ambient'), 'el activo viejo sobrevive a la lectura');
+    cierto(!viejo.plan.ambient, 'el encargo viejo sobrevive en el plan');
+    // Y lo demás del corto queda intacto: no es una purga, es quitar una pieza.
+    cierto(viejo.assets.some((a) => a.kind === 'music'), 'se llevó por delante la música');
+    cierto(viejo.assets.some((a) => a.kind === 'clip'), 'se llevó por delante los clips');
   });
 
   comprobar('la musica arranca con el instrumento que se ve en pantalla', () => {
@@ -706,6 +681,27 @@ async function principal() {
     for (const d of [60, 120, 180]) {
       igual(vertex.fragmentosNecesarios(d), 1, 'el corto de ' + d + ' s se está troceando');
     }
+  });
+
+  comprobar('un encargo que ya está en inglés le llega a Lyria sin tocar', () => {
+    // vertex.js lleva una tabla español→inglés como respaldo para los cortos
+    // creados antes de que el encargo se escribiera ya en inglés. Sus reglas van
+    // con la marca `i`, así que pasaban por encima de un texto inglés y lo
+    // cambiaban: «Tempo:» salía «tempo:», «Piano» salía «piano».
+    //
+    // Daba igual para el modelo, pero no da igual desde que el usuario puede
+    // reescribir el prompt a mano: lo que escribe tiene que llegar tal cual, o
+    // estaría corrigiendo un texto que el servidor va a reescribir después.
+    const ingles = 'Instruments: erhu. Mood: calm. Tempo: around 70 BPM. Piano, instrumental.';
+    igual(vertex.aIngles(ingles), ingles, 'se tocó un encargo que ya estaba en inglés');
+
+    // Y el respaldo sigue funcionando para los cortos viejos, que es para lo
+    // único que existe.
+    const espanol = 'Pieza instrumental. Tonalidad: Re menor, escala menor natural.';
+    const traducido = vertex.aIngles(espanol);
+    cierto(/instrumental piece/.test(traducido), 'ya no traduce el español de los cortos viejos');
+    cierto(/natural minor/.test(traducido), 'la escala se quedó en español: ' + traducido);
+    cierto(!/[áéíóú]/i.test(traducido.replace(/Re /, '')), 'quedan tildes: ' + traducido);
   });
 
   comprobar('el audio de Lyria se lee con su formato real, no con uno supuesto', () => {
@@ -1032,6 +1028,70 @@ async function principal() {
     }
   });
 
+  comprobar('todo corto termina con un plano en el que nadie toca', () => {
+    // LA CAUSA RAÍZ, y estuvo escrita en el código todo el tiempo:
+    //
+    //     // El hueco de cierre rima a propósito con la imagen de apertura.
+    //     if (isFinalSlot) { const opener = candidates.find(s => s.beat === 'opening'); ... }
+    //
+    // El corto terminaba REPITIENDO el plano de apertura, donde el intérprete
+    // está tocando. Y la pieza de Lyria resuelve y deja dos o tres segundos de
+    // silencio al final, así que el corto acababa con alguien aporreando el
+    // instrumento en silencio.
+    for (const segundos of [60, 120, 180]) {
+      const e = productor.planStructure(segundos);
+      const ultimo = e.timeline[e.timeline.length - 1];
+      const cierre = e.shots.find((t) => t.id === ultimo.shotId);
+
+      cierto(cierre.esCierre, segundos + ' s: el corto no termina en el plano de cierre');
+      igual(cierre.shotType, productor.PLANO_DE_CIERRE, segundos + ' s: el plano final no es del tipo de cierre');
+      cierto(!ultimo.reused, segundos + ' s: el corto cierra con material repetido de otro momento');
+      igual(ultimo.transitionIn, 'dissolve', segundos + ' s: el plano final entra a corte seco');
+
+      // Tiene su hueco entero: es un plano que se genera aposta, y darle el
+      // sobrante de cuatro segundos sería pagar ocho y tirar la mitad.
+      igual(ultimo.durationSec, 8, segundos + ' s: el plano de cierre no se lleva los ocho segundos');
+
+      // Y NO sale en ningún otro sitio: un plano sin nadie tocando en mitad de
+      // la película contradiría la música que sigue sonando.
+      const veces = e.timeline.filter((t) => t.shotId === cierre.id).length;
+      igual(veces, 1, segundos + ' s: el plano de cierre se reutiliza donde sí debería tocar');
+      cierto(!cierre.reusable, segundos + ' s: el plano de cierre está marcado como repetible');
+    }
+  });
+
+  comprobar('el plano de cierre no le cuesta al usuario una generación de más', () => {
+    // El plano final es una imagen y un clip nuevos. Podría haber salido caro:
+    // ocupa un hueco que antes se rellenaba con material repetido, así que sin
+    // más la reutilización habría bajado del 50 % al 38 % y cada corto de un
+    // minuto pasaría a pagar un clip de Veo extra.
+    //
+    // No pasa porque el reparto de repeticiones cuenta sobre el corto entero y
+    // elige posiciones sólo entre los huecos disponibles. El resultado son las
+    // mismas tomas de siempre, con la última cambiada por el cierre.
+    igual(productor.planStructure(60).shots.length, 4, 'el corto de 1 min ya no tiene 4 tomas');
+    igual(productor.planStructure(120).shots.length, 8, 'el corto de 2 min ya no tiene 8 tomas');
+    igual(productor.planStructure(180).shots.length, 12, 'el corto de 3 min ya no tiene 12 tomas');
+  });
+
+  comprobar('el sobrante de segundos va al penúltimo hueco, no al último', () => {
+    // Sesenta y ciento ochenta no son múltiplos de ocho: sobran cuatro. Ese
+    // hueco corto tiene que ocuparlo un plano REPETIDO, nunca el de cierre, que
+    // se genera entero a propósito.
+    for (const segundos of [60, 180]) {
+      const e = productor.planStructure(segundos);
+      const cortos = e.timeline.filter((t) => t.durationSec < 8);
+      cierto(cortos.length, segundos + ' s: no hay ningún hueco corto y debería haberlo');
+      for (const c of cortos) {
+        cierto(c.reused, segundos + ' s: un hueco corto estrena plano y tira la mitad de lo pagado');
+        cierto(c.index !== e.timeline.length - 1, segundos + ' s: el hueco corto cayó en el cierre');
+      }
+    }
+    // Y en 120, que sí es múltiplo de ocho, no sobra nada.
+    cierto(!productor.planStructure(120).timeline.some((t) => t.durationSec < 8),
+      '120 s: aparecieron huecos cortos donde no sobra nada');
+  });
+
   comprobar('ningun plano aparece dos veces seguidas', () => {
     // Que vuelva material no canta; que vuelva el MISMO plano pegado a si
     // mismo, si.
@@ -1082,22 +1142,36 @@ async function principal() {
   comprobar('el Director sabe que tomas van a volver', () => {
     // Sin la marca en la lista, el modelo escribe todas las tomas igual y las
     // repetibles salen con un gesto unico que delata la repeticion.
-    const e = productor.planStructure(60);
-    const apariciones = new Map();
-    for (const id of aparicionesEnPantalla(e)) {
-      apariciones.set(id, (apariciones.get(id) || 0) + 1);
-    }
-    const prompt = planificador.buildUserPrompt({
-      config: CONFIG,
-      runtimeSec: 60,
-      shots: e.shots.map((t) => ({
-        index: t.index, label: t.label, beat: t.beat, shotType: t.shotType,
-        cameraMove: t.cameraMove, durationSec: t.durationSec,
-        reusable: t.reusable, apariciones: apariciones.get(t.id) || 1,
-      })),
-    });
+    const listaDe = (segundos) => {
+      const e = productor.planStructure(segundos);
+      const apariciones = new Map();
+      for (const id of aparicionesEnPantalla(e)) {
+        apariciones.set(id, (apariciones.get(id) || 0) + 1);
+      }
+      return planificador.buildUserPrompt({
+        config: CONFIG,
+        runtimeSec: segundos,
+        shots: e.shots.map((t) => ({
+          index: t.index, label: t.label, beat: t.beat, shotType: t.shotType,
+          cameraMove: t.cameraMove, durationSec: t.durationSec,
+          reusable: t.reusable, apariciones: apariciones.get(t.id) || 1,
+        })),
+      });
+    };
+    const prompt = listaDe(60);
     cierto(prompt.indexOf('REPETIBLE') !== -1, 'la lista no marca las tomas repetibles');
-    cierto(prompt.indexOf('ÚNICA') !== -1, 'la lista no marca las tomas únicas');
+    // «ÚNICA» sólo aparece cuando el corto tiene alguna toma que no se repite.
+    // En uno de un minuto las tres tomas con interpretación son repetibles, así
+    // que se comprueba donde de verdad las hay.
+    cierto(listaDe(120).indexOf('ÚNICA') !== -1, 'la lista no marca las tomas únicas');
+
+    // Y EL PLANO FINAL lleva su propia marca, que no es ninguna de las dos: lo
+    // que hay que saber de él no es cuántas veces sale, es que ahí nadie toca.
+    // Sin decírselo, el modelo lo describe como los otros y escribe «tocando»,
+    // que es la palabra con la que se queda el modelo de imagen.
+    cierto(/PLANO FINAL — la pieza YA TERMINÓ/.test(prompt),
+      'la lista de tomas no avisa de que el plano final no se toca');
+    cierto(/NADIE TOCA/.test(prompt), 'la marca del plano final no es explícita');
     cierto(
       planificador.SYSTEM_PROMPT.indexOf('aguanten volver') !== -1,
       'el Director no recibe la instruccion de escribir tomas que aguanten volver',
@@ -1517,12 +1591,18 @@ async function principal() {
   // ── El montaje ──
   console.log('\nEl montaje');
 
-  comprobar('el script de ffmpeg mezcla sin bajar la música a la mitad', () => {
+  comprobar('el corto lleva una sola pista de audio: la música', () => {
+    // Había una segunda pista —el lecho de sonido ambiental— mezclada por
+    // debajo con amix. Se quitó del producto: era un ruido plano que ensuciaba
+    // lo único que el corto viene a enseñar.
     const s = montaje.construirScript(
       [{ local: 'a.mp4', durationSec: 5, transitionIn: 'fade_in' }],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
-    cierto(s.indexOf('amix=inputs=2:duration=first:normalize=0') !== -1, 'falta normalize=0 en amix');
+    cierto(s.indexOf('amix') === -1, 'sigue mezclando dos pistas de audio');
+    cierto(s.indexOf('ambiente') === -1, 'el script sigue nombrando el ambiente');
+    // Y la música conserva su volumen: amix la habría dividido entre dos.
+    cierto(/volume=0\.85/.test(s), 'la música no entra a su volumen');
     cierto(s.indexOf('alimiter') !== -1, 'falta el limitador');
     cierto(s.indexOf('exec 2>error.txt') !== -1, 'el motivo del fallo no se guardaría');
   });
@@ -1551,7 +1631,7 @@ async function principal() {
         { local: 'a.mp4', durationSec: 6, transitionIn: 'fade_in' },
         { local: 'b.mp4', durationSec: 4, transitionIn: 'dissolve' },
       ],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     cierto(s.indexOf('xfade=transition=fade:duration=0.5') !== -1, 'no usa encadenado real');
     // El segundo trozo se retima a 4,5 s: sus 4 s de hueco más el medio que
@@ -1575,16 +1655,38 @@ async function principal() {
     const conFinal = clips.filter((a) => /CÓMO TERMINA EL CORTO/.test(a.spec.prompt));
     igual(conFinal.length, 1, 'tiene que pedir el final exactamente un clip');
 
-    // Y es el último que se VE, que con material repetido no es el último que
-    // se generó.
-    const ultimo = plan.timeline[plan.timeline.length - 1].clipId;
-    igual(conFinal[0].id, ultimo, 'el final se le pide a un clip que no cierra la película');
-    cierto(/BAJA EL INSTRUMENTO/.test(conFinal[0].spec.prompt), 'no pide bajar el instrumento');
-    cierto(/se queda quieto/.test(conFinal[0].spec.prompt), 'no pide que se quede quieto');
+    // Y es el último que se VE. Antes NO lo era: el último hueco lo ocupaba un
+    // plano REUTILIZADO de la apertura —«el hueco de cierre rima con la imagen
+    // de apertura»— y en la apertura se está tocando. Por eso pedirle al último
+    // clip que dejara de tocar no arreglaba nada: un mismo clip no puede estar
+    // tocando en el minuto uno y no tocando al final.
+    const ultimo = plan.timeline[plan.timeline.length - 1];
+    igual(conFinal[0].id, ultimo.clipId, 'el final se le pide a un clip que no cierra la película');
+    cierto(!ultimo.reused, 'el corto sigue cerrando con material reutilizado de otro momento');
+
+    // El plano de cierre es SUYO y no sale en ningún otro sitio.
+    const veces = plan.timeline.filter((t) => t.shotId === ultimo.shotId).length;
+    igual(veces, 1, 'el plano de cierre se reutiliza en otro hueco, donde sí debería tocar');
+
+    const prompt = conFinal[0].spec.prompt;
+    cierto(/NO TOCA EN NINGÚN MOMENTO/.test(prompt), 'no prohíbe tocar en el clip final');
+    cierto(/instrumento sigue bajado/.test(prompt), 'no exige el instrumento bajado');
+    // Y su IMAGEN ya lo enseña quieto: ahí está la diferencia con el intento
+    // anterior. El vídeo no tiene que inventarse la transición de tocar a no
+    // tocar, porque su fotograma de partida ya es el de después.
+    const imagen = p.assets.find((a) => a.id === ultimo.shotId + '_image');
+    cierto(imagen, 'el plano de cierre no tiene imagen propia');
+    cierto(/NO ESTÁ TOCANDO/.test(imagen.spec.prompt), 'la imagen del cierre no dice que no toca');
+    cierto(/BAJADO y en reposo/.test(imagen.spec.prompt), 'la imagen del cierre no baja el instrumento');
+    // Ni a la imagen ni al clip del cierre se les pide intensidad de toque: es
+    // el bloque que ata el gesto a la música, y aquí no hay gesto que atar.
+    cierto(!/TIENEN QUE PEGAR/.test(imagen.spec.prompt), 'a la imagen del cierre se le pide intensidad de toque');
+    cierto(!/TIENEN QUE PEGAR/.test(prompt), 'al clip del cierre se le pide intensidad de toque');
+
     // Los demás siguen pidiendo movimiento sostenido: si todos cerraran, el
     // corto entero sería un desfile de finales.
     for (const c of clips) {
-      if (c.id === ultimo) continue;
+      if (c.id === ultimo.clipId) continue;
       cierto(/Movimiento contenido/.test(c.spec.prompt), 'a un clip normal le falta el movimiento: ' + c.id);
     }
   });
@@ -1598,13 +1700,24 @@ async function principal() {
         { local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' },
         { local: 'b.mp4', durationSec: 8, transitionIn: 'cut' },
       ],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
-    const salidas = (s.match(/fade=t=out:st=([0-9.]+):d=([0-9.]+)/g) || []);
-    cierto(salidas.length, 'no hay ningún fundido de salida');
-    const ultima = salidas[salidas.length - 1];
-    const dur = Number(/d=([0-9.]+)/.exec(ultima)[1]);
-    cierto(dur >= 3, 'el cierre dura sólo ' + dur + ' s: la música tarda más en resolverse');
+    // LOS DOS FUNDIDOS SON DISTINTOS A PROPÓSITO. El de la IMAGEN es largo: la
+    // pieza resuelve a lo largo de varios segundos y el negro tiene que entrar
+    // con ella. El del AUDIO es corto porque la pieza YA se apaga sola —incluso
+    // deja dos o tres segundos de silencio al final del archivo— y bajarle
+    // encima otro fundido largo era apagar dos veces lo mismo.
+    const audioOut = /afade=t=out:st=([0-9.]+):d=([0-9.]+)/.exec(s);
+    cierto(audioOut, 'no hay fundido de salida en el audio');
+    const videoOuts = s.match(/(?:^|[^a])fade=t=out:st=([0-9.]+):d=([0-9.]+)/g) || [];
+    cierto(videoOuts.length, 'no hay fundido de salida en la imagen');
+
+    const durVideo = Number(/d=([0-9.]+)/.exec(videoOuts[videoOuts.length - 1])[1]);
+    const durAudio = Number(audioOut[2]);
+    cierto(durVideo >= 3, 'la imagen se apaga en sólo ' + durVideo + ' s: la música tarda más en resolverse');
+    cierto(durAudio <= 1.5,
+      'el audio se apaga durante ' + durAudio + ' s encima de una pieza que ya termina sola');
+    cierto(durVideo > durAudio, 'la imagen debería apagarse más despacio que la música');
   });
 
   comprobar('el paquete de descarga es un ZIP que se puede abrir', () => {
@@ -1658,7 +1771,7 @@ async function principal() {
         { local: 'b.mp4', durationSec: 8, transitionIn: 'cut' },
         { local: 'c.mp4', durationSec: 8, transitionIn: 'cut' },
       ],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     igual((s.match(/concat=n=2/g) || []).length, 0, 'queda una junta pegada a hueso');
     igual((s.match(/xfade=transition=fade/g) || []).length, 2, 'faltan cruces en los cortes');
@@ -1686,7 +1799,7 @@ async function principal() {
         { local: 'b.mp4', durationSec: 5, transitionIn: 'dip_to_black' },
         { local: 'a.mp4', durationSec: 5, transitionIn: 'dissolve' },
       ],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     const concats = (s.match(/concat=n=2/g) || []).length;
     const settb = (s.match(/settb=AVTB/g) || []).length;
@@ -1703,7 +1816,7 @@ async function principal() {
     // altera el ritmo.
     const s = montaje.construirScript(
       [{ local: 'a.mp4', durationSec: 7, transitionIn: 'fade_in' }],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     // La duración real se mide en el momento del montaje, no al escribir el
     // script: aquí todavía no se sabe cuánto dura el clip.
@@ -1725,7 +1838,7 @@ async function principal() {
     // segundos se ve a la legua, mientras que recortar no se nota.
     const s = montaje.construirScript(
       [{ local: 'a.mp4', durationSec: 8, transitionIn: 'fade_in' }],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     cierto(s.indexOf('if(r<1)r=1') !== -1, 'un clip que sobra se está acelerando en vez de recortar');
     cierto(s.indexOf('if(r>2)r=2') !== -1, 'no limita la ralentización de un clip que falta');
@@ -1795,7 +1908,7 @@ async function principal() {
         { local: 'b.mp4', durationSec: 4, transitionIn: 'cut' },
         { local: 'a.mp4', durationSec: 4, transitionIn: 'cut' },
       ],
-      'm.wav', 'amb.wav', 'salida.mp4',
+      'm.wav', 'salida.mp4',
     );
     // El mismo archivo se abre tres veces como entrada de ffmpeg —eso es
     // gratis— pero la descarga desde el bucket ocurre una sola vez, porque

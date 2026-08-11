@@ -35,17 +35,23 @@ const {
 
 // Fundidos, en segundos. Los mismos que usaba el montaje local.
 const FUNDIDO_ENTRADA = 1.2;
-// EL CIERRE DE LA PELÍCULA.
+// EL CIERRE DE LA PELÍCULA — la imagen.
 //
-// Eran 1,6 segundos y se quedaba corto. El usuario lo describió exacto: «la
-// música termina de una forma suave, perfecta, pero los personajes siguen
-// moviendo los instrumentos como si estuvieran tocando, y ya está en silencio».
-// Lyria resuelve la pieza a lo largo de los últimos cinco o seis segundos, y la
-// imagen seguía a pleno brillo hasta el penúltimo suspiro.
-//
-// Ahora el negro entra con la música, no después. Tres segundos y medio: lo
-// bastante para que la imagen se apague al mismo ritmo que la última nota.
+// Eran 1,6 segundos y se quedaba corto: Lyria resuelve la pieza a lo largo de
+// los últimos cinco o seis segundos y la imagen seguía a pleno brillo hasta el
+// penúltimo suspiro. Ahora el negro entra con la música, no después.
 const FUNDIDO_SALIDA = 3.5;
+
+// EL CIERRE DE LA PELÍCULA — la música, y es MUCHO más corto. No es una
+// asimetría por descuido.
+//
+// La pieza que compone Lyria ya viene con su propio final: resuelve, se apaga y
+// deja ella sola dos o tres segundos de silencio al final del archivo. Bajarle
+// encima un fundido de tres segundos y medio era apagar dos veces lo mismo, y
+// el resultado es lo que describió el usuario — «ya termina la música y quedan
+// unos dos, tres segundos de silencio». Aquí sólo hace falta lo justo para que
+// no suene un chasquido si la pieza acabara de golpe.
+const FUNDIDO_SALIDA_AUDIO = 0.8;
 // Un fundido a negro entre bloques narrativos es más corto que el de apertura:
 // separa dos ideas, no abre la película.
 const FUNDIDO_BLOQUE = 0.4;
@@ -97,10 +103,10 @@ function cruceDe(transicion) {
 const VELOCIDAD_MAX = 2;    // hasta el doble de lento
 const VELOCIDAD_MIN = 0.25; // hasta cuatro veces más rápido
 
-// La música manda y el ambiente acompaña. Con las dos al mismo volumen el
-// ambiente se come el instrumento, que es justo lo que el corto viene a enseñar.
+// La música es LA pista. Antes había además un lecho de sonido ambiental por
+// debajo, y se ha quitado: se comía el instrumento, que es justo lo que el corto
+// viene a enseñar.
 const GANANCIA_MUSICA = 0.85;
-const GANANCIA_AMBIENTE = 0.28;
 
 /** Imagen que trae ffmpeg. Sobreescribible por si alguna vez desaparece. */
 function imagenFfmpeg() {
@@ -121,7 +127,7 @@ const n3 = (x) => Number(x).toFixed(3);
  * planifica la reutilización — y aquí eso no es un caso especial: se abre el
  * archivo tantas veces como haga falta.
  */
-function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, formatoId) {
+function construirScript(entradas, musicaLocal, salidaLocal, formatoId) {
   const total = entradas.reduce((suma, e) => suma + e.durationSec, 0);
 
   // El lienzo lo decide el formato del proyecto: vertical para redes, apaisado
@@ -264,28 +270,21 @@ function construirScript(entradas, musicaLocal, ambienteLocal, salidaLocal, form
   filtros.push(acumulado + 'null[vout]');
 
   const iMusica = entradas.length;
-  const iAmbiente = entradas.length + 1;
   inputs.push('-i ' + comilla(musicaLocal));
-  inputs.push('-i ' + comilla(ambienteLocal));
 
-  // apad antes de atrim: si la pista es más corta que la película se alarga con
-  // silencio en vez de cortar el vídeo. amix con `duration=first` terminaría la
-  // mezcla al acabarse la primera entrada, y sin el apad eso deja el final mudo.
+  // apad antes de atrim: si la pista se quedara corta se alarga con silencio en
+  // vez de cortar el vídeo, que dejaría la película sin sus últimos segundos.
+  //
+  // EL FUNDIDO DE SALIDA ES CORTO A PROPÓSITO. Llegó a ser de tres segundos y
+  // medio, buscando un final suave, pero la pieza que compone Lyria YA termina
+  // resolviendo y apagándose sola. Encadenar las dos cosas apagaba la música
+  // mucho antes de que acabara la imagen. Aquí sólo hace falta lo justo para que
+  // no suene un chasquido al cortar.
   filtros.push(
     '[' + iMusica + ':a]apad,atrim=0:' + n3(total) +
-      ',asetpts=PTS-STARTPTS,volume=' + GANANCIA_MUSICA + '[amus]',
-  );
-  filtros.push(
-    '[' + iAmbiente + ':a]apad,atrim=0:' + n3(total) +
-      ',asetpts=PTS-STARTPTS,volume=' + GANANCIA_AMBIENTE + '[aamb]',
-  );
-  // normalize=0 es obligatorio: por defecto amix divide cada entrada entre el
-  // número de entradas, así que mezclar dos pistas bajaría la música a la mitad
-  // sin que nada lo indique. El alimiter final evita que la suma sature.
-  filtros.push(
-    '[amus][aamb]amix=inputs=2:duration=first:normalize=0,' +
+      ',asetpts=PTS-STARTPTS,volume=' + GANANCIA_MUSICA + ',' +
       'afade=t=in:st=0:d=' + FUNDIDO_ENTRADA + ',' +
-      'afade=t=out:st=' + n3(Math.max(0, total - FUNDIDO_SALIDA)) + ':d=' + FUNDIDO_SALIDA + ',' +
+      'afade=t=out:st=' + n3(Math.max(0, total - FUNDIDO_SALIDA_AUDIO)) + ':d=' + FUNDIDO_SALIDA_AUDIO + ',' +
       'alimiter=limit=0.95[aout]',
   );
 
@@ -347,7 +346,7 @@ function comilla(s) {
  * tarda minutos.
  */
 async function lanzarMontaje(opciones) {
-  const { token, projectId, bucket, carpeta, entradas, musica, ambiente, salida, formatoId } = opciones;
+  const { token, projectId, bucket, carpeta, entradas, musica, salida, formatoId } = opciones;
 
   if (!entradas || !entradas.length) {
     throw new Error('No hay ninguna toma aprobada que montar.');
@@ -369,12 +368,10 @@ async function lanzarMontaje(opciones) {
   });
 
   const musicaLocal = 'musica' + extension(musica, '.wav');
-  const ambienteLocal = 'ambiente' + extension(ambiente, '.wav');
   descargas.push({ objeto: musica, local: musicaLocal });
-  descargas.push({ objeto: ambiente, local: ambienteLocal });
 
   const salidaLocal = 'pelicula.mp4';
-  const script = construirScript(entradasLocales, musicaLocal, ambienteLocal, salidaLocal, formatoId);
+  const script = construirScript(entradasLocales, musicaLocal, salidaLocal, formatoId);
 
   // El encargo queda escrito en el bucket: el script que se ejecutó y la hoja
   // con lo que se pidió. Si algo sale raro, se puede mirar exactamente qué se
@@ -542,6 +539,6 @@ module.exports = {
   estadoMontaje,
   FUNDIDO_ENTRADA,
   FUNDIDO_SALIDA,
+  FUNDIDO_SALIDA_AUDIO,
   GANANCIA_MUSICA,
-  GANANCIA_AMBIENTE,
 };

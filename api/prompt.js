@@ -41,11 +41,11 @@ const MAX_PROMPT = 12000;
 /**
  * QUÉ CAMPO SE EDITA EN CADA TIPO DE ELEMENTO.
  *
- * El audio se pide en inglés y las imágenes y los vídeos en español, que es
+ * La música se pide en inglés y las imágenes y los vídeos en español, que es
  * como está escrito el resto del producto. Lo que se edita es siempre el que
  * viaja a Google, porque editar el otro no cambiaría nada de lo que se genera.
  */
-const CAMPO_EN_INGLES = ['music', 'ambient'];
+const CAMPO_EN_INGLES = ['music'];
 
 function campoDePrompt(activo) {
   return CAMPO_EN_INGLES.indexOf(activo.kind) !== -1 ? 'promptEn' : 'prompt';

@@ -71,7 +71,6 @@ const STAGES = [
   'images',
   'videos',
   'music',
-  'ambient',
   'edit',
   'delivery',
 ];
@@ -81,7 +80,6 @@ const STAGE_LABELS = {
   images: 'Imágenes',
   videos: 'Vídeos',
   music: 'Música',
-  ambient: 'Sonido ambiental',
   edit: 'Edición',
   delivery: 'Entrega',
 };
@@ -111,7 +109,6 @@ const ASSET_KINDS = [
   'shot_image',
   'clip',
   'music',
-  'ambient',
 ];
 
 const ASSET_KIND_STAGE = {
@@ -121,7 +118,6 @@ const ASSET_KIND_STAGE = {
   shot_image: 'images',
   clip: 'videos',
   music: 'music',
-  ambient: 'ambient',
 };
 
 /** Tipo de medio de cada elemento: 'image' | 'video' | 'audio'. */
@@ -132,7 +128,6 @@ const ASSET_KIND_MEDIA = {
   shot_image: 'image',
   clip: 'video',
   music: 'audio',
-  ambient: 'audio',
 };
 
 /** Pulsos narrativos que usa el Director para dar forma al corto. */

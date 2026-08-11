@@ -7,7 +7,7 @@
 //
 // Este módulo hace dos cosas que conviene no confundir:
 //
-//   1. SINTETIZAR sonido propio (renderMusic, renderAmbient). Es el
+//   1. SINTETIZAR sonido propio (renderMusic). Es el
 //      proveedor interno: produce una pieza real, con arco narrativo,
 //      para que el ciclo «escuchar → aprobar o regenerar» (PRD §29) se
 //      pueda ejercitar sin gastar cuota de Vertex.
@@ -648,154 +648,16 @@ function renderMusic(options) {
   return encodeWav(out, sampleRate, 1);
 }
 
-const AMBIENT_LAYERS = [
-  {
-    match: ['viento', 'brisa', 'aire'],
-    build: ({ out, sampleRate, rng }) => {
-      let low = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        low = low * 0.995 + white * 0.005;
-        const gust = 0.5 + 0.5 * Math.sin((2 * Math.PI * i) / (sampleRate * 11));
-        out[i] = out[i] + low * 26 * gust * 0.35;
-      }
-    },
-  },
-  {
-    match: ['hoja', 'hierba', 'arena'],
-    build: ({ out, sampleRate, rng }) => {
-      let band = 0;
-      let prev = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        band = band * 0.86 + (white - prev) * 0.14;
-        prev = white;
-        const rustle = 0.5 + 0.5 * Math.sin((2 * Math.PI * i) / (sampleRate * 3.7));
-        out[i] = out[i] + band * 0.07 * rustle;
-      }
-    },
-  },
-  {
-    match: ['agua', 'ola', 'rio', 'río', 'corriente'],
-    build: ({ out, sampleRate, rng }) => {
-      let low = 0;
-      let high = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        low = low * 0.9 + white * 0.1;
-        high = high * 0.6 + white * 0.4;
-        const swell = 0.55 + 0.45 * Math.sin((2 * Math.PI * i) / (sampleRate * 6.3));
-        out[i] = out[i] + (low * 0.12 + high * 0.03) * swell;
-      }
-    },
-  },
-  {
-    match: ['pajaro', 'pájaro', 'ave', 'gaviota'],
-    build: ({ out, sampleRate, durationSec, rng }) => {
-      const calls = Math.max(3, Math.floor(durationSec / 7));
-      for (let c = 0; c < calls; c += 1) {
-        const start = rng() * (durationSec - 1);
-        const baseFreq = 1800 + rng() * 1600;
-        const length = 0.09 + rng() * 0.16;
-        const startIndex = Math.floor(start * sampleRate);
-        const count = Math.floor(length * sampleRate);
-        for (let i = 0; i < count; i += 1) {
-          const idx = startIndex + i;
-          if (idx >= out.length) break;
-          const t = i / sampleRate;
-          const env = Math.sin((Math.PI * i) / count);
-          const sweep = baseFreq * (1 + 0.35 * Math.sin(2 * Math.PI * 9 * t));
-          out[idx] = out[idx] + Math.sin(2 * Math.PI * sweep * t) * env * 0.05;
-        }
-      }
-    },
-  },
-  {
-    match: ['insecto', 'grillo'],
-    build: ({ out, sampleRate, durationSec, rng }) => {
-      const chirps = Math.max(8, Math.floor(durationSec * 1.5));
-      for (let c = 0; c < chirps; c += 1) {
-        const start = rng() * (durationSec - 0.2);
-        const startIndex = Math.floor(start * sampleRate);
-        const count = Math.floor(0.045 * sampleRate);
-        const freq = 4200 + rng() * 900;
-        for (let i = 0; i < count; i += 1) {
-          const idx = startIndex + i;
-          if (idx >= out.length) break;
-          const t = i / sampleRate;
-          const env = Math.sin((Math.PI * i) / count);
-          out[idx] = out[idx] + Math.sin(2 * Math.PI * freq * t) * env * 0.02;
-        }
-      }
-    },
-  },
-  {
-    match: ['publico', 'público', 'voces', 'gente', 'sala', 'ambiente'],
-    build: ({ out, sampleRate, rng }) => {
-      let low = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        low = low * 0.97 + white * 0.03;
-        const murmur = 0.6 + 0.4 * Math.sin((2 * Math.PI * i) / (sampleRate * 4.1));
-        out[i] = out[i] + low * 0.09 * murmur;
-      }
-    },
-  },
-  {
-    match: ['trafico', 'tráfico', 'urbano', 'ciudad', 'pasos'],
-    build: ({ out, rng }) => {
-      let low = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        low = low * 0.993 + white * 0.007;
-        out[i] = out[i] + low * 18 * 0.3;
-      }
-    },
-  },
-  {
-    match: ['reverberacion', 'reverberación', 'silencio', 'eco', 'zumbido'],
-    build: ({ out, sampleRate, rng }) => {
-      let low = 0;
-      for (let i = 0; i < out.length; i += 1) {
-        const white = rng() * 2 - 1;
-        low = low * 0.998 + white * 0.002;
-        out[i] = out[i] + low * 12 * 0.25 + Math.sin((2 * Math.PI * 52 * i) / sampleRate) * 0.0015;
-      }
-    },
-  },
-];
-
-/**
- * Sintetiza el lecho ambiental.
- *
- * opciones: { brief, seed, sampleRate? }
- */
-function renderAmbient(options) {
-  const sampleRate = options.sampleRate ?? AUDIO_SAMPLE_RATE;
-  const durationSec = Math.max(5, options.brief.durationSec);
-  const total = Math.ceil(durationSec * sampleRate);
-  const out = new Float32Array(total);
-  const rng = createRng(options.seed);
-  const ctx = { out, sampleRate, durationSec, rng };
-
-  const wanted = options.brief.layers.map((l) => normalizeKeyword(l));
-  let matched = 0;
-  for (const layer of AMBIENT_LAYERS) {
-    const hit = wanted.some((w) => layer.match.some((m) => w.includes(normalizeKeyword(m))));
-    if (!hit) continue;
-    layer.build(ctx);
-    matched += 1;
-  }
-  if (matched === 0) {
-    // Que el revisor tenga *algo* que escuchar: el lecho de sala vacía.
-    AMBIENT_LAYERS[7].build(ctx);
-  }
-
-  const reverb = REVERB_BY_ACOUSTICS[options.brief.acoustics] || REVERB_BY_ACOUSTICS.natural;
-  applyReverb(out, sampleRate, (reverb.mix ?? 0.2) * 0.7, reverb.decay ?? 0.7);
-  finalizeBuffer(out, sampleRate, { peak: 0.55, fadeInSec: 2.5, fadeOutSec: 3 });
-  return encodeWav(out, sampleRate, 1);
-}
+// AQUÍ ESTABAN LAS OCHO CAPAS DEL LECHO AMBIENTAL —viento, hojas, agua,
+// pájaros, insectos, murmullo, tráfico y zumbido— y `renderAmbient`, que las
+// mezclaba buscando palabras sueltas en el encargo.
+//
+// Se han borrado con el resto del ambiente. Sobre el papel hacía ocho sonidos;
+// en el altavoz era un ruido plano. El usuario lo dijo sin rodeos: «tú dices
+// que hay pájaros y cosas así, pero yo no escucho nada de eso, solamente
+// escucho un ruido horrible, que lo que hace es dañar la calidad de la música».
+//
+// `renderMusic` se queda: sigue siendo la red de seguridad si Lyria no está.
 
 module.exports = {
   encodeWav,
@@ -806,6 +668,5 @@ module.exports = {
   parseScale,
   timbreForInstruments,
   renderMusic,
-  renderAmbient,
   CRUCE_SEC,
 };

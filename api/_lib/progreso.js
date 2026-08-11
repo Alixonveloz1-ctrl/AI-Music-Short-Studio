@@ -21,7 +21,7 @@ function constantes() {
 }
 
 /** Etapas que contienen activos generados, en orden de producción. */
-const ASSET_STAGES = ['images', 'videos', 'music', 'ambient'];
+const ASSET_STAGES = ['images', 'videos', 'music'];
 
 /**
  * Un activo cuenta como aprobado en cuanto tiene una generación oficial

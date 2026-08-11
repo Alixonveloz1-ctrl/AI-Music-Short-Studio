@@ -31,6 +31,9 @@ const SHOT_TYPE_LABELS = {
   low_angle: 'contrapicado',
   high_angle: 'picado',
   profile: 'plano lateral de perfil',
+  // El plano con el que termina todo corto. Su etiqueta ya dice lo esencial,
+  // porque es lo que lo distingue de los otros trece: aquí no se toca.
+  closing_still: 'plano final, con el intérprete SIN TOCAR',
 };
 
 const CAMERA_MOVE_LABELS = {
@@ -744,6 +747,48 @@ function buildScenePrompt(bible, config) {
 /** Planos donde no aparece ninguna cara, asi que no hay belleza que exigir. */
 const SIN_PERSONAS = ['instrument_detail', 'detail'];
 
+/** El tipo de plano que cierra el corto. Mismo valor que en productor.js. */
+const PLANO_DE_CIERRE = 'closing_still';
+
+/**
+ * EL PLANO CON EL QUE TERMINA EL CORTO: aquí nadie está tocando.
+ *
+ * Es la pieza que faltaba. La música que compone Lyria resuelve y deja dos o
+ * tres segundos de silencio al final, y el corto terminaba con un plano
+ * reutilizado en el que el intérprete seguía dándole al instrumento. El usuario:
+ * «ya termina la música y quedan unos dos, tres segundos de silencio, pero el
+ * personaje sigue tocando el instrumento, como si estuviera sonando».
+ *
+ * Pedirle al último clip que «dejara de tocar» no funcionaba porque ese clip era
+ * material repetido de otro momento. Así que ahora hay un plano propio, con su
+ * imagen, cuyo único trabajo es éste — y la imagen ya lo enseña quieto, así que
+ * el vídeo no tiene que inventarse la transición de tocar a no tocar.
+ */
+const CIERRE_IMAGEN = [
+  'NO ESTÁ TOCANDO. Éste es el único plano del corto en el que el instrumento no ' +
+    'se está tocando, y es lo más importante de la imagen',
+  'El instrumento está BAJADO y en reposo: colgando de la mano, apoyado en el ' +
+    'suelo o sobre las piernas, o sujeto contra el cuerpo sin tocarlo. Nunca en ' +
+    'posición de tocar',
+  'Las manos están quietas y fuera de las cuerdas, las teclas o los parches: ' +
+    'ni una mano en posición de ataque',
+  'De pie o sentado en el mismo escenario, en una postura tranquila; puede mirar ' +
+    'a cámara, al horizonte o al instrumento',
+  'La expresión es de después: calma, respiración, algo de satisfacción o de ' +
+    'melancolía. No es esfuerzo, no es concentración',
+  'Todo lo demás sigue igual que en el resto del corto: la misma persona, el mismo ' +
+    'vestuario, el mismo escenario y la misma luz',
+];
+
+const CIERRE_VIDEO = [
+  'NO TOCA EN NINGÚN MOMENTO de este clip. Nada de retomar la interpretación, ni ' +
+    'una nota, ni un gesto de empezar',
+  'El movimiento es mínimo y de reposo: respirar, un parpadeo, el pelo o la ropa ' +
+    'con el aire, una mirada lenta',
+  'El instrumento sigue bajado del primer fotograma al último',
+  'El último segundo es casi inmóvil: la película se está apagando',
+];
+
 /** Imagen fija de cada toma, compuesta con la biblia más la intención de la toma. */
 function buildShotImagePrompt(bible, shot, config) {
   return joinBlocks([
@@ -768,8 +813,14 @@ function buildShotImagePrompt(bible, shot, config) {
       : null,
     // Con cuánta fuerza está tocando. En un plano detalle del instrumento no
     // hay nadie a quien pedírselo, pero en uno de las manos sí — y ahí es justo
-    // donde más se nota si el gesto no pega con lo que suena.
-    shot.shotType === 'detail' ? null : bloqueComoSeToca(bible, 'imagen'),
+    // donde más se nota si el gesto no pega con lo que suena. Y en el plano de
+    // cierre no se pide NADA de esto, que es justo el que no toca.
+    shot.shotType === 'detail' || shot.shotType === PLANO_DE_CIERRE
+      ? null
+      : bloqueComoSeToca(bible, 'imagen'),
+    shot.shotType === PLANO_DE_CIERRE
+      ? block('CÓMO TERMINA EL CORTO (este es el plano final)', CIERRE_IMAGEN)
+      : null,
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);
@@ -777,6 +828,12 @@ function buildShotImagePrompt(bible, shot, config) {
 
 /** Prompt de vídeo de cada clip, anclado en la imagen aprobada de su toma. */
 function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
+  // El plano de cierre se reconoce por su TIPO, no por su posición en la lista.
+  // Antes se usaba «es el último de la película», y eso fallaba: el último hueco
+  // lo ocupaba un clip REUTILIZADO de la apertura, escrito para el minuto uno,
+  // así que la instrucción de dejar de tocar caía en un clip que también salía
+  // antes tocando. Un clip no puede estar tocando y no tocando a la vez.
+  const esCierre = shot.shotType === PLANO_DE_CIERRE || esElUltimoDelCorto === true;
   const phase =
     totalClips === 1
       ? 'toma completa'
@@ -790,40 +847,29 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
     shot.description,
     block('Movimiento', [
       `Cámara: ${CAMERA_MOVE_LABELS[shot.cameraMove]}, muy suave y continuo`,
-      'Intérprete: movimiento natural de interpretación, coherente con la técnica del instrumento',
-      `Relación intérprete-instrumento: ${bible.instrument.physicalRelation}`,
+      esCierre
+        ? 'Intérprete: en reposo, sin tocar. El instrumento se queda bajado'
+        : 'Intérprete: movimiento natural de interpretación, coherente con la técnica del instrumento',
+      esCierre ? null : `Relación intérprete-instrumento: ${bible.instrument.physicalRelation}`,
       `Entorno: ${bible.environment.atmosphere}`,
-    ]),
-    // El clip es donde se vio el fallo: el personaje rasgueando joropo a toda
-    // velocidad encima de una pieza melancólica. En el último plano no va, que
-    // ahí lo que toca es dejar de tocar.
-    esElUltimoDelCorto ? null : bloqueComoSeToca(bible, 'video'),
+    ].filter(Boolean)),
+    // Con cuánta fuerza toca. En el plano de cierre no se pide: es el que NO
+    // toca, y pedirle intensidad de interpretación sería deshacerlo.
+    esCierre ? null : bloqueComoSeToca(bible, 'video'),
     block(CONTINUITY_HEADER, [
       'El primer fotograma debe coincidir con la imagen de referencia aprobada',
       ...bible.continuityRules,
     ]),
-    // EL FINAL DEL CORTO. Lo vio el usuario en su primer montaje: «la música
-    // termina de una forma suave, perfecta, pero los personajes siguen moviendo
-    // los instrumentos como si estuvieran tocando, pero ya está en silencio».
-    //
-    // Y es que ningún clip sabía que era el último. Todos pedían lo mismo —
-    // movimiento sostenido de interpretación— así que la película se quedaba
-    // sin final: la música se resolvía y la imagen seguía como si tal cosa.
-    esElUltimoDelCorto
-      ? block('CÓMO TERMINA EL CORTO (este es el último plano)', [
-          'La interpretación TERMINA dentro de este clip: no sigue tocando hasta el corte',
-          'Primero la última nota, con el gesto que la cierra —el arco que se levanta ' +
-            'despacio de la cuerda, las manos que se separan del instrumento—',
-          'Después BAJA EL INSTRUMENTO y se queda quieto, en silencio, sosteniendo la mirada',
-          'El último segundo es casi inmóvil: sólo la respiración y la luz',
-          'Nada de empezar un gesto nuevo al final: aquí se cierra, no se abre',
-        ])
-      : null,
+    // EL FINAL DEL CORTO. Aquí ya no hay que pedirle al modelo que invente la
+    // transición de tocar a no tocar: la imagen de referencia de este plano ya
+    // enseña al intérprete quieto y con el instrumento bajado, así que el clip
+    // sólo tiene que no estropearlo.
+    esCierre ? block('CÓMO TERMINA EL CORTO (este es el plano final)', CIERRE_VIDEO) : null,
     block('Requisitos', [
       'Sin cortes internos ni cambios de plano',
       'Sin deformaciones en manos, rostro ni instrumento',
       'Sin texto en pantalla',
-      esElUltimoDelCorto
+      esCierre
         ? 'El movimiento se va apagando hasta quedar quieto'
         : 'Movimiento contenido: mejor poco movimiento correcto que mucho movimiento roto',
     ]),

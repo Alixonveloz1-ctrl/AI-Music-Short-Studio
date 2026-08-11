@@ -52,7 +52,7 @@ function errorDominio(mensaje, estado) {
 //   <prefijo>/proyectos/<id>/imagenes/<toma>/gen_002.png
 //   <prefijo>/proyectos/<id>/videos/<clip>/gen_001.mp4
 //   <prefijo>/proyectos/<id>/musica/gen_001.wav
-//   <prefijo>/proyectos/<id>/ambiente/gen_001.wav
+
 //   <prefijo>/proyectos/<id>/final/corto_final.mp4
 //
 // Las generaciones RECHAZADAS no se borran: son el historial que el usuario
@@ -114,7 +114,6 @@ const CARPETA_POR_TIPO = {
   shot_image: 'imagenes',
   clip: 'videos',
   music: 'musica',
-  ambient: 'ambiente',
 };
 
 // Un tipo de medio, una extensión. El corto es siempre instrumental: el audio
@@ -256,12 +255,40 @@ async function leerProyecto(id) {
     throw errorDominio(`El proyecto ${id} está corrupto y no se puede leer`, 500);
   }
 
+  jubilarSonidoAmbiental(proyecto);
+
   // La etapa guardada es sólo una caché. Se recalcula en cada lectura para que
   // nunca se quede vieja respecto a los activos: la etapa se deduce de qué hay
   // aprobado, y aprobar algo no debería obligar a acordarse de actualizarla.
   proyecto.currentStage = progreso().computeCurrentStage(proyecto);
 
   return { proyecto, generacion: r.headers.get('x-goog-generation') || null };
+}
+
+/**
+ * EL SONIDO AMBIENTAL YA NO EXISTE, y los cortos de antes lo llevan dentro.
+ *
+ * Se quitó del producto porque no servía: el sintetizado era un ruido plano que
+ * ensuciaba la música y el de IA fallaba casi siempre y, cuando salía, venía con
+ * música dentro. Pero hay proyectos guardados en el bucket que tienen su activo
+ * «ambient», a veces hasta aprobado.
+ *
+ * Se retira AL LEER, en un solo sitio, y no repartiendo comprobaciones por todo
+ * el código. Así ninguna otra parte tiene que acordarse de que esto existió: ni
+ * el cálculo del progreso, ni la puerta del montaje, ni la cola, ni la pantalla.
+ * Para todos ellos, el ambiente no está y nunca estuvo.
+ *
+ * Como `modificarProyecto` lee y vuelve a guardar, el activo desaparece del
+ * JSON de verdad la primera vez que se toque el corto. No se fuerza esa
+ * escritura: un corto que nadie vuelve a abrir se queda como está, y da igual.
+ *
+ * El MP4 ya exportado sigue siendo el suyo, con su ambiente dentro. Sólo
+ * cambiaría si decide volver a montarlo — que es justo lo que querrá.
+ */
+function jubilarSonidoAmbiental(proyecto) {
+  if (!proyecto || !Array.isArray(proyecto.assets)) return;
+  proyecto.assets = proyecto.assets.filter((a) => a && a.kind !== 'ambient');
+  if (proyecto.plan) delete proyecto.plan.ambient;
 }
 
 async function existeProyecto(id) {
@@ -599,6 +626,7 @@ async function urlFirmada(rutaObjeto, opciones) {
 }
 
 module.exports = {
+  jubilarSonidoAmbiental,
   // Rutas
   ARCHIVO_PROYECTO,
   CARPETA_FINAL,

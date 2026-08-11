@@ -693,10 +693,8 @@ var api = {
   },
   proyecto: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id)); },
   borrar: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id), { metodo:'DELETE' }); },
-  generar: function(id, activo, comoSeHace){
+  generar: function(id, activo){
     var cuerpo = { id:id, activo:activo };
-    // `comoSeHace` sólo lo usa el ambiente: 'sintetizado' o 'ia'.
-    if (comoSeHace) cuerpo.metodo = comoSeHace;
     return pedir('generar', { metodo:'POST', cuerpo:cuerpo });
   },
   estadoGeneracion: function(id, activo, gen){
@@ -731,12 +729,12 @@ var api = {
 // no depende de la forma concreta de la respuesta.
 // ───────────────────────────────────────────────────────────────────────
 
-var ETAPAS_ACTIVOS = ['images','videos','music','ambient'];
-var ETAPAS = ['concept','images','videos','music','ambient','edit','delivery'];
+var ETAPAS_ACTIVOS = ['images','videos','music'];
+var ETAPAS = ['concept','images','videos','music','edit','delivery'];
 
 var ETIQ_ETAPA = {
   concept: 'Concepto', images: 'Imágenes', videos: 'Vídeos',
-  music: 'Música', ambient: 'Ambiente', edit: 'Montaje', delivery: 'Entrega'
+  music: 'Música', edit: 'Montaje', delivery: 'Entrega'
 };
 
 var ETIQ_ESTADO = {
@@ -747,7 +745,7 @@ var ETIQ_MEDIO = { image:'Imagen', video:'Vídeo', audio:'Audio' };
 
 var MEDIO_DE_TIPO = {
   master_character:'image', master_environment:'image', master_scene:'image',
-  shot_image:'image', clip:'video', music:'audio', ambient:'audio'
+  shot_image:'image', clip:'video', music:'audio'
 };
 
 var ETIQ_MONTAJE = {
@@ -1681,7 +1679,7 @@ function vistaCrear(){
 /**
  * QUÉ CAMPO DEL ENCARGO SE EDITA, según el tipo de elemento.
  *
- * La música y el ambiente se le piden a Google EN INGLÉS —es el único idioma
+ * La música se le pide a Google EN INGLÉS —es el único idioma
  * que entiende el modelo de audio— y guardan además una versión en español que
  * es la que se le enseña al usuario. Lo que se edita tiene que ser el que
  * viaja: corregir el español no cambiaría ni una nota.
@@ -1689,7 +1687,7 @@ function vistaCrear(){
  * La misma regla está en api/prompt.js, escrita igual y sobre el mismo `kind`.
  * Una prueba comprueba que las dos listas siguen coincidiendo.
  */
-var PROMPT_EN_INGLES = ['music', 'ambient'];
+var PROMPT_EN_INGLES = ['music'];
 
 function campoDePrompt(a){
   return PROMPT_EN_INGLES.indexOf(a && a.kind) !== -1 ? 'promptEn' : 'prompt';
@@ -2045,17 +2043,12 @@ function htmlRevision(p){
         : g.status === 'rejected' ? ' ✕'
         : g.status === 'failed' ? ' !'
         : g.status === 'generating' ? ' …' : '';
-      // Con qué se hizo, para poder comparar sintetizado contra IA de un vistazo.
-      if (g.metodo === 'ia') marca = ' IA' + marca;
-      else if (g.metodo === 'sintetizado') marca = ' ~' + marca;
       return '<button class="chip' + (gen && gen.id === g.id ? ' on' : '') + '" data-accion="ver-gen" data-gen="' + esc(g.id) + '">#' + esc(g.index) + marca + '</button>';
     }).join('') + '</div>';
   }
 
   if (gen) {
     var prov = gen.provider ? ((gen.provider.name || '') + (gen.provider.model ? ' · ' + gen.provider.model : '') + (gen.provider.formato ? ' · ' + gen.provider.formato : '')) : '';
-    if (gen.metodo === 'ia') prov = 'compuesto con IA' + (prov ? ' · ' + prov : '');
-    else if (gen.metodo === 'sintetizado') prov = 'sintetizado en el servidor';
     var dur = gen.file && gen.file.durationSec ? ' · ' + Number(gen.file.durationSec).toFixed(1) + ' s' : '';
     var peso = gen.file && gen.file.bytes ? ' · ' + fmtBytes(gen.file.bytes) : '';
     var tardo = gen.elapsedMs ? ' · tardó ' + Math.round(gen.elapsedMs / 1000) + ' s' : '';
@@ -2075,24 +2068,9 @@ function htmlRevision(p){
   html += '<div class="acciones">' +
     '<button class="btn ok" data-accion="aprobar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen ? gen.id : '') + '"' +
       (esperaDecision && !estado.trabajando ? '' : ' disabled') + '>Aprobar</button>' +
-    // El ambiente se puede hacer de dos maneras y el usuario compara. Los demás
-    // activos tienen un solo camino, así que un botón basta.
-    (a.kind === 'ambient'
-      ? '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '" data-metodo="ia"' +
-        (puedePulsarGenerar ? '' : ' disabled') + '>Generar con IA</button>'
-      : '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '"' +
-        (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>') +
+    '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '"' +
+      (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>' +
   '</div>';
-
-  if (a.kind === 'ambient') {
-    html += '<button class="btn ancho" style="margin-top:9px" data-accion="generar" data-activo="' + esc(a.id) + '" data-metodo="sintetizado"' +
-        (puedePulsarGenerar ? '' : ' disabled') + '>Generar sintetizado</button>' +
-      '<p class="tenue mini" style="margin-top:8px">' +
-        '<b>Con IA</b> entiende tu escena —viento entre ruinas, metal chirriando— pero cuesta y tarda. ' +
-        '<b>Sintetizado</b> es instantáneo y gratis, pero sólo sabe hacer ocho sonidos: viento, hojas, agua, ' +
-        'pájaros, insectos, murmullo, tráfico y zumbido.<br>' +
-        'Genera con las dos y aprueba la que mejor suene: cada intento se guarda y puedes compararlos arriba.</p>';
-  }
 
   if (esperaDecision) {
     html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="rechazar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen.id) + '">Descartar esta generación</button>';
@@ -2148,8 +2126,8 @@ function htmlRevision(p){
         : '');
   }
 
-  // EL MISMO ENCARGO EN ESPAÑOL, para leerlo. La música y el ambiente se le
-  // piden a Google en inglés, y ése es el que se edita porque es el que viaja;
+  // EL MISMO ENCARGO EN ESPAÑOL, para leerlo. La música se le pide a Google en
+  // inglés, y ése es el que se edita porque es el que viaja;
   // pero el producto está en español y el usuario tiene derecho a ver qué se ha
   // encargado en su idioma sin traducir un párrafo de cabeza (PRD §19).
   if (campo === 'promptEn' && spec.prompt) {
@@ -2286,16 +2264,15 @@ function panelPlan(p){
       }).join('') + '</ul></div>';
   }
 
-  if (plan.music || plan.ambient) {
-    var mu = plan.music || {}, am = plan.ambient || {};
-    html += '<div class="tarjeta"><h3>Música y ambiente</h3>' +
+  if (plan.music) {
+    var mu = plan.music || {};
+    html += '<div class="tarjeta"><h3>Música</h3>' +
       htmlDatos([
         ['Título', mu.title], ['Estilo', mu.style], ['Carácter', mu.mood],
         ['Tonalidad', [mu.key, mu.scale, mu.tempoBpm ? mu.tempoBpm + ' BPM' : ''].filter(Boolean).join(' · ')],
         ['Estructura', mu.structure],
         ['Instrumentación', (mu.instrumentation || []).join(', ')],
-        ['Capas de ambiente', (am.layers || []).join(', ')],
-        ['Ambiente', am.description], ['Acústica', am.acoustics]
+        ['Género', mu.genre && mu.genre.label]
       ]) +
       '<p class="tenue mini" style="margin-top:8px">El corto es instrumental: sin voz, sin coros y sin narración.</p>' +
     '</div>';
@@ -2507,7 +2484,7 @@ function vistaPerfil(){
     '<div class="tarjeta"><h3>Cómo funciona</h3>' +
       '<ul class="reglas">' +
         '<li>La IA propone y genera; tú apruebas. Una generación correcta nunca queda aprobada sola.</li>' +
-        '<li>Las etapas van en orden: imágenes → vídeos → música → ambiente → montaje.</li>' +
+        '<li>Las etapas van en orden: imágenes → vídeos → música → montaje.</li>' +
         '<li>Cada intento se conserva: puedes comparar generaciones antes de decidir.</li>' +
         '<li>Los cortos son instrumentales: sin voz, sin diálogo y sin narración.</li>' +
       '</ul>' +
@@ -2663,7 +2640,7 @@ async function accionRestaurarPrompt(activoId){
   });
 }
 
-async function accionGenerar(activoId, comoSeHace){
+async function accionGenerar(activoId){
   var p = estado.proyecto;
   if (!p) return;
   var a = activos(p).find(function(x){ return x.id === activoId; });
@@ -2680,7 +2657,7 @@ async function accionGenerar(activoId, comoSeHace){
 
   await ejecutar(async function(){
     if (a.locked) await api.desbloquear(p.id, a.id);
-    await api.generar(p.id, a.id, comoSeHace);
+    await api.generar(p.id, a.id);
     estado.genVista = null;
     await cargarProyecto(p.id);
     latir(true);
@@ -2846,7 +2823,7 @@ document.addEventListener('click', function(ev){
   if (accion === 'restaurar-prompt') { accionRestaurarPrompt(el.getAttribute('data-activo')); return; }
   if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
   if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
-  if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo'), el.getAttribute('data-metodo')); return; }
+  if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo')); return; }
   if (accion === 'aprobar') { accionAprobar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'montar') { accionMontar(); return; }
@@ -3101,9 +3078,7 @@ async function colaTic(){
   c.aviso = '';
   pintar();
   try {
-    // En la cola, el ambiente va sintetizado: es instantáneo y gratis, y el
-    // usuario puede pedir después la versión con IA y comparar las dos.
-    await api.generar(p.id, siguiente.id, siguiente.kind === 'ambient' ? 'sintetizado' : '');
+    await api.generar(p.id, siguiente.id);
     c.hechos += 1;
     // Ha ido bien: se afloja el freno poco a poco por si la cuota se abrió.
     if (c.freno) c.freno = Math.max(0, Math.round(c.freno * 0.6));

@@ -53,11 +53,12 @@ function paso(nombre, fn) {
 function cierto(c, q) { if (!c) throw new Error(q || 'no se cumple'); }
 
 /**
- * El encargo de ambiente que un paso reescribe a mano y otro, mucho más abajo,
- * comprueba que llegó al modelo. Vive aquí porque lo usan los dos.
+ * El encargo de música que un paso reescribe a mano y otros dos, mucho más
+ * abajo, comprueban: que llegó tal cual al modelo, y que «actualizar las
+ * instrucciones» no se lo pisó. Vive aquí porque lo usan los tres.
  */
-const AMBIENTE_A_MANO =
-  'Only the sound of rain on a metal roof, written by hand by the user.';
+const MUSICA_A_MANO =
+  'Instruments: erhu. Mood: calm. Tempo: around 70 BPM. Written by hand by the user.';
 
 async function principal() {
   console.log('\nDE PRINCIPIO A FIN, CON GOOGLE CLOUD SIMULADO\n');
@@ -210,25 +211,17 @@ async function principal() {
     // el español, que es sólo lo que se le enseña al usuario, no cambiaría nada.
     const m = await pedir(promptEp, {
       metodo: 'POST',
-      cuerpo: { id, activo: 'music', prompt: 'Instruments: erhu. Mood: calm. Tempo: around 70 BPM.' },
+      cuerpo: { id, activo: 'music', prompt: MUSICA_A_MANO },
     });
     if (m.codigo !== 200) throw new Error('prompt de música: ' + JSON.stringify(m.cuerpo).slice(0, 200));
     cierto(m.cuerpo.campo === 'promptEn',
       'la música no se editó sobre el campo en inglés, sino sobre ' + m.cuerpo.campo);
     const musica = m.cuerpo.proyecto.assets.find((x) => x.id === 'music');
-    cierto(/Mood: calm/.test(musica.spec.promptEn), 'no se guardó el encargo en inglés');
+    cierto(musica.spec.promptEn === MUSICA_A_MANO, 'no se guardó el encargo en inglés');
     cierto(/[áéíóúñ]/i.test(musica.spec.prompt), 'se pisó el encargo en español, que es el que ve el usuario');
-    await pedir(promptEp, { metodo: 'POST', cuerpo: { id, activo: 'music', restaurar: true } });
+    // NO se restaura a propósito: más abajo se comprueba que esto es lo que
+    // llegó a Lyria y que «actualizar las instrucciones» no se lo pisó.
 
-    // El ambiente se deja EDITADO A PROPÓSITO y no se restaura: más abajo, tras
-    // producir el corto entero, se comprueba que lo que llegó al modelo fue
-    // esto y no el encargo del plan. Sin una diferencia real entre los dos, esa
-    // comprobación pasaría igual aunque se mandara el que no toca.
-    const a = await pedir(promptEp, {
-      metodo: 'POST',
-      cuerpo: { id, activo: 'ambient', prompt: AMBIENTE_A_MANO },
-    });
-    if (a.codigo !== 200) throw new Error('prompt de ambiente: ' + JSON.stringify(a.cuerpo).slice(0, 200));
   });
 
   await paso('el montaje se niega mientras falte material, y dice cuál', async () => {
@@ -240,7 +233,7 @@ async function principal() {
 
   // ── Producir el corto entero ──
   await paso('se produce y aprueba el corto entero, etapa por etapa', async () => {
-    for (const etapa of ['images', 'videos', 'music', 'ambient']) {
+    for (const etapa of ['images', 'videos', 'music']) {
       for (let vuelta = 0; vuelta < 40; vuelta++) {
         const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
         const pendientes = p.cuerpo.proyecto.assets.filter(
@@ -249,12 +242,9 @@ async function principal() {
         if (!pendientes.length) break;
         for (const a of pendientes) {
           if (a.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: a.id } });
-          // El ambiente se genera CON IA en esta prueba. Es el camino nuevo y el
-          // que puede romperse sin que nadie se entere: el sintetizado no llama
-          // a Google, así que un fallo en la llamada al modelo no aparecería.
           const g = await pedir(generar, {
             metodo: 'POST',
-            cuerpo: a.kind === 'ambient' ? { id, activo: a.id, metodo: 'ia' } : { id, activo: a.id },
+            cuerpo: { id, activo: a.id },
           });
           if (g.codigo >= 400) throw new Error(a.id + ': ' + JSON.stringify(g.cuerpo).slice(0, 200));
           let gen = g.cuerpo.gen;
@@ -323,7 +313,7 @@ async function principal() {
     // ESTA COMPROBACIÓN FALTABA Y POR ESO LA ESTÁTICA PASÓ TRES VECES. Se
     // miraba que el archivo existiera, no que se pudiera abrir. Un MP3 envuelto
     // en una cabecera WAV existe perfectamente y suena a ruido blanco.
-    const musica = [...objetos.keys()].filter((k) => /\/(musica|ambiente)\//.test(k));
+    const musica = [...objetos.keys()].filter((k) => /\/musica\//.test(k));
     cierto(musica.length, 'no hay ninguna pista de música en el bucket');
 
     const firmaDe = (b) => {
@@ -383,35 +373,42 @@ async function principal() {
     }
   });
 
-  await paso('el ambiente se generó con IA y lo dice', async () => {
+  await paso('el corto se monta con una sola pista de audio: la música', async () => {
+    // EL SONIDO AMBIENTAL SE QUITÓ DEL PRODUCTO. En palabras del usuario: los
+    // de IA «la generación falla mucho y, cuando por fin los hace, vienen con
+    // música»; los sintéticos, «solamente escucho un ruido horrible, que lo que
+    // hace es dañar la calidad de la música».
+    //
+    // Quitarlo a medias sería peor que dejarlo: un activo que ya no se puede
+    // generar bloquearía su etapa y el montaje no se abriría nunca. Este paso
+    // comprueba que el corto llegó hasta el MP4 sin él.
     const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
-    const a = p.cuerpo.proyecto.assets.find((x) => x.kind === 'ambient');
-    cierto(a, 'no hay activo de ambiente');
-    const aprobada = (a.generations || []).find((g) => g.id === a.approvedGenerationId);
-    cierto(aprobada, 'el ambiente no tiene generación aprobada');
-    cierto(aprobada.metodo === 'ia', 'el ambiente no recuerda que se hizo con IA: ' + aprobada.metodo);
-    // Y su archivo existe de verdad en el bucket, con firma de audio.
-    cierto(aprobada.file && aprobada.file.path, 'el ambiente no dejó archivo');
-    const bytes = objetos.get(aprobada.file.path);
-    cierto(bytes && bytes.length > 100, 'el archivo del ambiente está vacío');
+    const assets = p.cuerpo.proyecto.assets;
+    cierto(!assets.some((a) => a.kind === 'ambient'), 'el corto todavía tiene un activo de ambiente');
+    cierto(!p.cuerpo.proyecto.plan.ambient, 'el plan todavía lleva encargo de ambiente');
 
-    // Y lo que se le mandó al modelo es el encargo QUE LLEVA EL ACTIVO —el que
-    // se reescribió a mano unos pasos más arriba— y no el del plan, que sigue
-    // diciendo otra cosa. Es el único de los dos que el usuario puede tocar: si
-    // se mandara el otro, editarlo no cambiaría ni un sonido y no habría ningún
-    // error que se lo explicase.
-    cierto(a.spec.promptEn === AMBIENTE_A_MANO,
-      'el activo no conserva el encargo escrito a mano: ' + a.spec.promptEn);
-    const delPlan = (p.cuerpo.proyecto.plan.ambient || {}).promptEn || '';
-    cierto(delPlan && delPlan !== AMBIENTE_A_MANO, 'el plan y el activo dicen lo mismo: la prueba no distingue nada');
+    // Y aun así se montó y se exportó: la etapa de ambiente no dejó nada colgado.
+    cierto(p.cuerpo.proyecto.finalCut && p.cuerpo.proyecto.finalCut['export'],
+      'el corto no llegó a exportarse');
 
+    // Lo que se le mandó a ffmpeg lleva una sola entrada de audio.
+    const encargos = [...objetos.keys()].filter((k) => /montajes\/.*\/(script\.sh|montaje\.sh|.*\.sh)$/.test(k));
+    cierto(encargos.length, 'no se guardó el script del montaje en el bucket');
+    const script = objetos.get(encargos[encargos.length - 1]).toString('utf8');
+    cierto(script.indexOf('amix') === -1, 'el montaje sigue mezclando dos pistas');
+    cierto(script.indexOf('ambiente') === -1, 'el montaje sigue bajando una pista de ambiente');
+    cierto(/musica\./.test(script), 'el montaje no usa la pista de música');
+
+    // Y de paso: el encargo de música que el usuario reescribió a mano mucho
+    // antes es EXACTAMENTE lo que se le mandó a Lyria. Guardarlo y seguir
+    // mandando el del Director sería peor que no dejarlo editar, porque
+    // regeneraría igual y sin ningún error que se lo explicase.
     const textoDe = (q) => ((q.cuerpo.contents || [])
       .flatMap((c) => c.parts || []).map((x) => x.text || '').join('\n'));
-    const mandado = google.pedidos.filter((q) => textoDe(q).indexOf('NOT MUSIC') !== -1);
-    cierto(mandado.length, 'no se encuentra la petición de ambiente que se le hizo al modelo');
-    const ultimo = textoDe(mandado[mandado.length - 1]);
-    cierto(ultimo.indexOf(AMBIENTE_A_MANO) !== -1,
-      'al modelo no le llegó el encargo escrito a mano, sino: ' + ultimo.slice(0, 200));
+    const aLyria = google.pedidos.filter((q) => /lyria/i.test(q.url));
+    cierto(aLyria.length, 'no se encuentra ninguna petición a Lyria');
+    cierto(aLyria.some((q) => textoDe(q).indexOf(MUSICA_A_MANO) !== -1),
+      'a Lyria no le llegó el encargo escrito a mano');
   });
 
   await paso('un corto viejo puede actualizar sus instrucciones sin perder nada', async () => {
@@ -446,14 +443,14 @@ async function principal() {
     cierto(!/bateria/.test(despues.plan.music.promptEn || ''),
       'el encargo de música sigue siendo el viejo: ' + despues.plan.music.promptEn);
 
-    // 1 bis. LO QUE EL USUARIO ESCRIBIÓ A MANO NO SE PISA. El ambiente se
-    // reescribió a mano unos pasos más arriba —normalmente se hace para rodear
-    // un filtro de contenido que bloqueaba la generación—, así que ponerle
-    // encima el texto del Director le devolvería justo el que ya sabe que no
-    // pasa. Se respeta y se le avisa de cuáles se han quedado fuera.
-    const ambiente = despues.assets.find((a) => a.kind === 'ambient');
-    cierto(ambiente.spec.promptEn === AMBIENTE_A_MANO,
-      'se pisó el encargo que el usuario escribió a mano: ' + ambiente.spec.promptEn);
+    // 1 bis. LO QUE EL USUARIO ESCRIBIÓ A MANO NO SE PISA. El encargo de música
+    // se reescribió a mano unos pasos más arriba —normalmente se hace para
+    // rodear un filtro que bloqueaba la generación—, así que ponerle encima el
+    // texto del Director le devolvería justo el que ya sabe que no pasa. Se
+    // respeta y se le avisa de cuáles se han quedado fuera.
+    const musicaDespues = despues.assets.find((a) => a.kind === 'music');
+    cierto(musicaDespues.spec.promptEn === MUSICA_A_MANO,
+      'se pisó el encargo que el usuario escribió a mano: ' + musicaDespues.spec.promptEn);
     cierto((r.cuerpo.respetados || []).length > 0, 'no se dice qué encargos a mano se han respetado');
     cierto((r.cuerpo.avisos || []).some((t) => /a mano/i.test(t)),
       'el usuario no recibe ningún aviso de que hay encargos suyos sin actualizar');

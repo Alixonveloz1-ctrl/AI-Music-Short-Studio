@@ -109,6 +109,14 @@ const TIPOS_IRREPETIBLES = new Set([
   'low_angle',
 ]);
 
+/**
+ * El tipo de plano con el que TERMINA todo corto: el intérprete ya no toca.
+ *
+ * No está en `SHOT_GRAMMAR` a propósito: no es una opción que el reparto de
+ * planos pueda elegir, es una regla. Siempre hay uno y siempre va el último.
+ */
+const PLANO_DE_CIERRE = 'closing_still';
+
 const CLIP_SUFFIXES = 'ABCDEFGH';
 
 /**
@@ -130,16 +138,23 @@ const CLIP_SUFFIXES = 'ABCDEFGH';
  * vea en pantalla.
  *
  * EL SOBRANTE. Sesenta y ciento ochenta no son múltiplos de ocho: sobran cuatro
- * segundos en los dos casos. Ese hueco corto se pone el ÚLTIMO y se obliga a
+ * segundos en los dos casos. Ese hueco corto se pone el PENÚLTIMO y se obliga a
  * que lo ocupe un plano REPETIDO — uno que ya se vio entero antes. Así los
  * cuatro segundos que no caben no son metraje perdido: son la segunda
  * aparición, más corta, de un clip que ya se aprovechó completo.
+ *
+ * Penúltimo y no último porque el último hueco es del plano de cierre, que se
+ * genera aposta para terminar el corto y necesita sus ocho segundos enteros.
  */
 function repartirHuecos(runtimeSec) {
   const enteros = Math.floor(runtimeSec / MAX_CLIP_SECONDS);
   const sobra = runtimeSec - enteros * MAX_CLIP_SECONDS;
   const huecos = new Array(enteros).fill(MAX_CLIP_SECONDS);
-  if (sobra > 0) huecos.push(sobra);
+  // EL SOBRANTE VA EL PENÚLTIMO, no el último. El último hueco es ahora del
+  // plano de cierre —el único del corto en el que nadie está tocando— y ése no
+  // se puede quedar en cuatro segundos: es un plano que se genera entero y a
+  // propósito, así que se le dan los ocho.
+  if (sobra > 0) huecos.splice(Math.max(0, huecos.length - 1), 0, sobra);
   return huecos;
 }
 
@@ -241,19 +256,69 @@ function planStructure(runtimeSec) {
   let lastShotType = null;
   let ultimaTomaId = null;
 
+  // EL ÚLTIMO HUECO ES SIEMPRE DEL PLANO DE CIERRE, y se decide aquí, antes que
+  // nada. Ver `PLANO_DE_CIERRE` más abajo: es el plano en el que el intérprete
+  // ya NO está tocando.
+  const huecoDeCierre = beatSlots.length - 1;
+
   // La mitad del corto se rellena con material ya generado, y se sabe cuáles
   // ANTES de escribir ningún plano.
-  const huecosRepetidos = planificarRepeticiones(beatSlots.length);
+  const huecosRepetidos = planificarRepeticiones(beatSlots.length, huecoDeCierre - 1);
   // Si hay un hueco más corto que una generación, tiene que ocuparlo un plano
   // que YA se vio entero: es la única forma de que esos segundos que no caben
-  // no sean metraje pagado y tirado. Siempre es el último.
-  const ultimo = beatSlots.length - 1;
-  if (ultimo >= 0 && beatSlots[ultimo].durationSec < MAX_CLIP_SECONDS) huecosRepetidos.add(ultimo);
+  // no sean metraje pagado y tirado. Es el penúltimo, justo antes del cierre.
+  const corto = beatSlots.findIndex((s) => s.durationSec < MAX_CLIP_SECONDS);
+  if (corto !== -1 && corto !== huecoDeCierre) huecosRepetidos.add(corto);
   // Cuántos planos distintos hacen falta. El Director los diseña sabiendo que
   // casi todos van a volver, así que casi todos tienen que aguantar volver.
   const tomasNecesarias = beatSlots.length - huecosRepetidos.size;
 
   beatSlots.forEach((slot, slotIndex) => {
+    // ─── EL PLANO DE CIERRE ───
+    //
+    // Es un plano propio, con su imagen y su clip, y no se parece a ningún otro
+    // del corto: es el único en el que el intérprete NO está tocando. Está de
+    // pie o sentado en el mismo escenario, con el instrumento bajado.
+    //
+    // POR QUÉ EXISTE. La pieza que compone Lyria termina resolviendo y deja dos
+    // o tres segundos de silencio al final, y hasta ahora el corto acababa con
+    // un plano REUTILIZADO de la apertura — «el hueco de cierre rima con la
+    // imagen de apertura», decía el código— donde el intérprete estaba tocando
+    // a pleno pulmón. El resultado lo describió el usuario: «ya termina la
+    // música y quedan unos dos, tres segundos de silencio, pero el personaje
+    // sigue tocando el instrumento, como si estuviera sonando».
+    //
+    // Se intentó arreglar pidiéndole al último clip que dejara de tocar, y no
+    // servía de nada: ese clip era material repetido de otro momento del corto,
+    // escrito para el minuto uno. Un clip no puede estar tocando y no tocando a
+    // la vez.
+    //
+    // La solución es de la propia idea del usuario: que el corto termine SIEMPRE
+    // con un plano suyo, hecho para eso. Cuesta una imagen y un clip más, y
+    // resuelve el final de raíz en vez de negociarlo con el modelo.
+    if (slotIndex === huecoDeCierre) {
+      const cierre = {
+        id: 'shot_final',
+        index: shots.length + 1,
+        label: 'Plano final',
+        beat: 'closing',
+        shotType: PLANO_DE_CIERRE,
+        // Cámara fija: el corto termina quieto, y además así no se pelea con el
+        // fundido a negro que entra justo encima.
+        cameraMove: 'static',
+        durationSec: slot.durationSec,
+        // No se reutiliza en ningún otro sitio: un plano sin nadie tocando en
+        // mitad de la película contradiría la música que sigue sonando.
+        reusable: false,
+        esCierre: true,
+        clips: [],
+      };
+      shots.push(cierre);
+      ultimaTomaId = cierre.id;
+      slotAssignments.push({ shot: cierre, durationSec: slot.durationSec, reused: false, beat: 'closing' });
+      return;
+    }
+
     const reuseCandidate = huecosRepetidos.has(slotIndex)
       ? pickReuseCandidate(shots, reuseCounts, slotIndex, beatSlots.length, ultimaTomaId)
       : null;
@@ -346,13 +411,19 @@ function planStructure(runtimeSec) {
       // repetido pasa por material nuevo. Los estrenos siguen entrando a
       // corte, que es lo que da ritmo.
       const vuelveUnPlano = firstOfSlot && assignment.reused;
+      // EL PLANO DE CIERRE ENTRA ENCADENADO. Es el salto más brusco del corto
+      // —se pasa de alguien tocando a alguien que ya no toca— y a corte seco se
+      // leería como un error de montaje. Medio segundo de superposición lo
+      // convierte en lo que es: el final.
       const transitionIn = isFirstEntry
         ? 'fade_in'
-        : firstOfSlot && beatChanged
-          ? 'dip_to_black'
-          : vuelveUnPlano
-            ? 'dissolve'
-            : 'cut';
+        : firstOfSlot && assignment.shot.esCierre
+          ? 'dissolve'
+          : firstOfSlot && beatChanged
+            ? 'dip_to_black'
+            : vuelveUnPlano
+              ? 'dissolve'
+              : 'cut';
       timeline.push({
         index: timeline.length,
         shotId: assignment.shot.id,
@@ -399,20 +470,26 @@ function planStructure(runtimeSec) {
  * distintos: lo que canta no es que vuelva material, es que vuelva el MISMO
  * material dos veces seguidas. De eso se encarga `pickReuseCandidate`.
  */
-function planificarRepeticiones(totalSlots) {
+function planificarRepeticiones(totalSlots, ultimoDisponible) {
   const huecos = new Set();
   const primero = 2;
+  // La cuenta se hace sobre el corto ENTERO, pero las posiciones se eligen sólo
+  // entre los huecos disponibles. El último no lo está: es del plano de cierre,
+  // que se genera aposta. Si el objetivo se calculara sobre los disponibles, el
+  // corto de un minuto bajaría del 50 % al 38 % de reutilización — un clip de
+  // Veo más por corto, pagado, sin que nadie lo hubiera decidido.
+  const tope = Math.min(ultimoDisponible === undefined ? totalSlots - 1 : ultimoDisponible, totalSlots - 1);
   const objetivo = Math.floor(totalSlots * PROPORCION_REPETIDA);
-  const disponibles = totalSlots - primero;
+  const disponibles = tope - primero + 1;
   if (objetivo <= 0 || disponibles <= 0) return huecos;
 
   for (let k = 0; k < objetivo; k += 1) {
     const pos = primero + Math.round(((k + 0.5) * disponibles) / objetivo);
-    huecos.add(Math.min(totalSlots - 1, Math.max(primero, pos)));
+    huecos.add(Math.min(tope, Math.max(primero, pos)));
   }
   // El redondeo puede hacer que dos posiciones caigan en el mismo hueco. Se
   // rellena con los que queden libres para que la mitad se cumpla de verdad.
-  for (let i = primero; i < totalSlots && huecos.size < objetivo; i += 1) {
+  for (let i = primero; i <= tope && huecos.size < objetivo; i += 1) {
     huecos.add(i);
   }
   return huecos;
@@ -423,15 +500,13 @@ function pickReuseCandidate(shots, reuseCounts, slotIndex, totalSlots, ultimaTom
   // Con un solo plano disponible, repetirlo sería ponerlo dos veces seguidas.
   if (!candidates.length) return null;
 
-  const isFinalSlot = slotIndex === totalSlots - 1;
+  // Aquí ya no se trata el último hueco de forma especial. Lo hacía: el cierre
+  // «rimaba» con la imagen de apertura repitiendo aquel plano. Es una idea
+  // bonita de montaje y era justo la causa de que el corto acabara con el
+  // intérprete tocando sobre el silencio — el plano de apertura está tocando.
+  // El último hueco ya no llega hasta aquí: lo ocupa el plano de cierre.
 
-  // El hueco de cierre rima a propósito con la imagen de apertura.
-  if (isFinalSlot) {
-    const opener = candidates.find((shot) => shot.beat === 'opening');
-    if (opener) return opener;
-  }
-
-  // Si no, repartir los recuerdos entre el material disponible: primero el menos
+  // Repartir los recuerdos entre el material disponible: primero el menos
   // usado y, entre iguales, el introducido más recientemente, para que un solo
   // plano general no acabe cargando con toda la película.
   let best = null;
@@ -448,6 +523,7 @@ function pickReuseCandidate(shots, reuseCounts, slotIndex, totalSlots, ultimaTom
 }
 
 module.exports = {
+  PLANO_DE_CIERRE,
   splitShotIntoClips,
   clipAssetId,
   shotImageAssetId,

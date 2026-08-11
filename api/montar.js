@@ -98,8 +98,9 @@ async function lanzar(res, id) {
   comprobarTodoAprobado(proyecto);
 
   const entradas = armarEntradas(proyecto);
+  // Sólo la música. El corto llevaba también un lecho de sonido ambiental y se
+  // ha quitado del producto: ensuciaba la única pista que importa.
   const musica = pistaAprobada(proyecto, dominio.MUSIC_ASSET_ID, 'la música');
-  const ambiente = pistaAprobada(proyecto, dominio.AMBIENT_ASSET_ID, 'el sonido ambiental');
 
   const { token, projectId } = await auth();
 
@@ -119,7 +120,6 @@ async function lanzar(res, id) {
     carpeta,
     entradas,
     musica,
-    ambiente,
     salida,
   });
 
@@ -369,7 +369,7 @@ function armarEntradas(proyecto) {
   return entradas;
 }
 
-/** El objeto del bucket de una pista aprobada (música o ambiente). */
+/** El objeto del bucket de la pista de música aprobada. */
 function pistaAprobada(proyecto, idActivo, comoSeLlama) {
   const activo = (proyecto.assets || []).find((a) => a.id === idActivo);
   if (!activo) {

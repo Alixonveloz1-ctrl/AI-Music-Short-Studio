@@ -155,7 +155,7 @@ function startGeneration(project, asset, args) {
     provider: args.provider,
     seed: args.seed,
   };
-  // CÓMO se generó. Hoy sólo lo usa el ambiente, que se puede hacer de dos
+  // CÓMO se generó. Lo usaba el ambiente, que podía hacerse de dos
   // maneras —sintetizado aquí mismo o compuesto por la IA— y el usuario compara
   // las dos y aprueba la que mejor suene. Va en la generación y no en el activo
   // porque el activo tiene varias, cada una hecha a su manera.
@@ -381,7 +381,6 @@ const MAX_PERSONAJES_MAESTROS = 4;
 const MASTER_ENVIRONMENT_ID = 'master_environment';
 const MASTER_SCENE_ID = 'master_scene';
 const MUSIC_ASSET_ID = 'music';
-const AMBIENT_ASSET_ID = 'ambient';
 
 // Rellena los campos de estado que NUNCA los define quien crea el activo:
 // así es imposible construir un activo que nazca aprobado o bloqueado.
@@ -602,28 +601,16 @@ function buildAssets(config, plan) {
     }),
   );
 
-  assets.push(
-    asset({
-      id: AMBIENT_ASSET_ID,
-      kind: 'ambient',
-      stage: ASSET_KIND_STAGE.ambient,
-      label: 'Sonido ambiental',
-      order: next(),
-      spec: {
-        objective: 'Crear el lecho ambiental coherente con el escenario.',
-        prompt: plan.ambient.prompt,
-        // El de arriba, en español, es el que ve el usuario. Éste es el que se
-        // le manda al modelo cuando el ambiente se compone con IA, que sólo
-        // entiende inglés — y es también el que se puede reescribir a mano.
-        promptEn: plan.ambient.promptEn || '',
-        negativePrompt: 'voces, palabras, música',
-        referenceAssetIds: [],
-        continuityNotes: [`Capas: ${plan.ambient.layers.join(', ')}`],
-        durationSec: plan.ambient.durationSec,
-      },
-      dependsOn: [],
-    }),
-  );
+  // AQUÍ HABÍA UN LECHO DE SONIDO AMBIENTAL, y se ha quitado del producto.
+  //
+  // Se ofrecía de dos maneras y las dos salieron mal. El sintetizado dice hacer
+  // viento, hojas, pájaros e insectos, pero lo que se oye es un ruido plano que
+  // ensucia la música. Y el de IA fallaba una y otra vez y, cuando por fin
+  // salía, venía con música dentro — dos piezas sonando a la vez.
+  //
+  // No se ha arreglado: se ha quitado. Un corto instrumental no necesita una
+  // segunda capa de audio compitiendo con la única que importa, y mantener dos
+  // caminos rotos «por si acaso» sólo garantiza que alguien los use.
 
   return assets;
 }
@@ -697,7 +684,6 @@ module.exports = {
   MASTER_ENVIRONMENT_ID,
   MASTER_SCENE_ID,
   MUSIC_ASSET_ID,
-  AMBIENT_ASSET_ID,
   buildAssets,
   createProject,
   makeEvent,

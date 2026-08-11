@@ -27,7 +27,6 @@
  *     continuityRules: [],
  *     shots: [ { index, purpose, description } ],
  *     music: { style, mood, tempoBpm, key, scale, structure },
- *     ambient: { layers: [], description },
  *     delivery: { description, hashtags: [] },
  *     notes: { director, producer, artDirector, cinematographer, screenwriter, editor }
  *   }
@@ -121,10 +120,6 @@ function creativeBriefJsonSchema() {
       scale: texto('Escala o modo.'),
       structure: texto('Estructura por secciones con marcas de tiempo.'),
     }),
-    ambient: objeto({
-      layers: listaDeTextos('Capas de sonido ambiental, sin voces.'),
-      description: texto('Cómo debe sonar el lecho ambiental.'),
-    }),
     delivery: objeto({
       description: texto('Descripción corta para publicar.'),
       hashtags: listaDeTextos('De 5 a 10 hashtags, cada uno empezando por #.'),
@@ -172,7 +167,6 @@ function normalizeCreativeBrief(candidate, fallback, shotCount) {
   const rawEnvironment = raw.environment ?? {};
   const rawLighting = raw.lighting ?? {};
   const rawMusic = raw.music ?? {};
-  const rawAmbient = raw.ambient ?? {};
   const rawDelivery = raw.delivery ?? {};
   const rawNotes = raw.notes ?? {};
 
@@ -284,10 +278,6 @@ function normalizeCreativeBrief(candidate, fallback, shotCount) {
       key: clamp(rawMusic.key, 40, fallback.music.key),
       scale: clamp(rawMusic.scale, 60, fallback.music.scale),
       structure: clamp(rawMusic.structure, 390, fallback.music.structure),
-    },
-    ambient: {
-      layers: clampList(rawAmbient.layers, 6, 60, fallback.ambient.layers),
-      description: clamp(rawAmbient.description, 390, fallback.ambient.description),
     },
     delivery: {
       description: clamp(rawDelivery.description, 390, fallback.delivery.description),

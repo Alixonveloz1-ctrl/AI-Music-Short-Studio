@@ -100,12 +100,9 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Los encargos de música y ambiente viven también en el plan, que es de
-      // donde los lee la generación.
-      if (p.plan) {
-        p.plan.music = planNuevo.music;
-        p.plan.ambient = planNuevo.ambient;
-      }
+      // El encargo de música vive también en el plan, que es de donde lo lee la
+      // generación.
+      if (p.plan) p.plan.music = planNuevo.music;
 
       makeEventAndPush(
         p,

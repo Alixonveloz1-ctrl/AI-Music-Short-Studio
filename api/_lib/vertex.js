@@ -597,10 +597,8 @@ function lineaDeTiempo(total, instrumentos) {
  */
 const AL_INGLES = [
   [/\bpieza instrumental\b/gi, 'instrumental piece'],
-  [/\binstrumental\b/gi, 'instrumental'],
   [/\bsin voz\b/gi, 'no vocals'],
   [/\bsin letra\b/gi, 'no lyrics'],
-  [/\btempo\b/gi, 'tempo'],
   [/\bcompás\b/gi, 'time signature'],
   [/\btonalidad\b/gi, 'key'],
   [/\bescala\b/gi, 'scale'],
@@ -622,7 +620,7 @@ const AL_INGLES = [
   [/\bluminos[oa]\b/gi, 'luminous'], [/\btens[oa]\b/gi, 'tense'],
   [/\bmisterios[oa]\b/gi, 'mysterious'], [/\bcontenid[oa]\b/gi, 'restrained'],
   [/\bviolonchelo\b/gi, 'cello'], [/\bviolín\b/gi, 'violin'],
-  [/\bpiano\b/gi, 'piano'], [/\bguitarra\b/gi, 'guitar'],
+  [/\bguitarra\b/gi, 'guitar'],
   [/\bflauta\b/gi, 'flute'], [/\barpa\b/gi, 'harp'],
   [/\btambor(es)?\b/gi, 'drums'], [/\bpercusión\b/gi, 'percussion'],
   [/\bcuerdas\b/gi, 'strings'], [/\bviento\b/gi, 'winds'],
@@ -635,10 +633,27 @@ const AL_INGLES = [
   [/\bde inspiración\b/gi, 'inspired by'],
 ];
 
+/**
+ * Marcas de que un texto está en español y hay que traducirlo.
+ *
+ * POR QUÉ NO SE TRADUCE SIEMPRE. Esta tabla es el respaldo para los cortos
+ * creados antes de que el encargo se escribiera en inglés: aquéllos guardan el
+ * prompt en español y sin esto Lyria los rechazaría enteros. Pero pasarla por
+ * encima de un texto que YA está en inglés no es inofensivo — las reglas van con
+ * la marca `i`, así que «Tempo:» salía convertido en «tempo:».
+ *
+ * Daba igual para el modelo, pero no da igual como comportamiento: desde que el
+ * usuario puede reescribir el prompt a mano, lo que escribe tiene que llegar tal
+ * cual. Un texto que ya está en inglés se manda sin tocar.
+ */
+const MARCAS_DE_ESPANOL = /[áéíóúüñ¿¡]|\b(pieza|sin voz|sin letra|tonalidad|escala|menor|mayor|violonchelo|guitarra|flauta|arpa|tambores?|percusion|cuerdas|viento|carácter|caracter)\b/i;
+
 function aIngles(texto) {
-  let t = String(texto || '');
-  for (const [de, a] of AL_INGLES) t = t.replace(de, a);
-  return t;
+  const t = String(texto || '');
+  if (!MARCAS_DE_ESPANOL.test(t)) return t;
+  let salida = t;
+  for (const [de, a] of AL_INGLES) salida = salida.replace(de, a);
+  return salida;
 }
 
 /** La orden de que no cante nadie, en inglés, delante y detrás. */
@@ -710,79 +725,14 @@ async function generarMusica(opciones) {
   };
 }
 
-/**
- * EL AMBIENTE, compuesto por el mismo modelo que la música.
- *
- * Por qué hace falta: el sintetizador de casa tiene ocho capas fijas —viento,
- * hojas, agua, pájaros, insectos, murmullo, tráfico y zumbido— y no sabe hacer
- * nada más. Una calle en ruinas con metal chirriando le sale igual que una
- * plaza cualquiera, porque lo único que puede fabricar es lo que hay en esa
- * lista. El usuario lo notó enseguida: «no importa el vídeo que genere, el
- * sonido de ambiente siempre es ruido de ciudad».
- *
- * LA DIFERENCIA CON LA MÚSICA, que es todo el asunto: aquí hay que pedirle a un
- * modelo de MÚSICA que NO haga música. Sin insistir mucho devuelve una pieza
- * con su melodía y su pulso, y entonces hay dos músicas sonando a la vez y el
- * corto se vuelve ruido. Así que la orden de «esto no es música» va delante y
- * detrás, igual que la de «sin voces» en la música.
- *
- * Y no lleva línea de tiempo con arco emocional: un ambiente que crece y tiene
- * clímax es exactamente lo que no se quiere debajo de una pieza que ya lo tiene.
- * Se le pide plano y continuo, y la duración se pide igual, con marcas [MM:SS].
- */
-const NO_ES_MUSICA =
-  'THIS IS SOUND DESIGN, NOT MUSIC. No melody, no chords, no harmony, no beat, no drums, ' +
-  'no rhythm, no instruments being played, no singing and no words. It is only the sound ' +
-  'of a place — the background layer under a film. If a listener could hum it, it is wrong.';
-
-function lineaDeTiempoAmbiente(total) {
-  return (
-    'LENGTH — this lasts the FULL ' + Math.round(total) + ' seconds and stays even all the way ' +
-    'through. Same density and same level from the first second to the last: no build-up, no ' +
-    'climax, no sudden events, no fade-in and no fade-out. It has to sit UNDER music without ' +
-    'ever pulling attention.\n' +
-    mmss(0) + ' Already at the full texture of the place.\n' +
-    mmss(total * 0.5) + ' Exactly the same. Nothing new enters.\n' +
-    mmss(total) + ' Still going, at the same level. Do not stop early.'
-  );
-}
-
-async function generarAmbiente(opciones) {
-  const { token, projectId, prompt } = opciones;
-  const total = Math.min(SEGUNDOS_MAX_PIEZA, Math.max(20, Number(opciones.segundos) || 60));
-
-  const cuerpo =
-    NO_ES_MUSICA + '\n\n' +
-    String(prompt || '').slice(0, 1500) + '\n\n' +
-    lineaDeTiempoAmbiente(total) + '\n\n' +
-    NO_ES_MUSICA;
-
-  const d = await llamar(
-    vertexUrl(projectId, REGION_MUSICA, MODELO_MUSICA_PRO, 'generateContent'),
-    token, projectId,
-    {
-      contents: [{ role: 'user', parts: [{ text: cuerpo }] }],
-      generationConfig: { responseModalities: ['AUDIO', 'TEXT'] },
-    },
-    { timeoutMs: Number(opciones.presupuestoMs) || 45000 },
-  );
-
-  const audio = juntarAudio(d, total);
-  if (!audio) {
-    const cand = d && d.candidates && d.candidates[0];
-    const razon = (cand && cand.finishReason) || 'sin finishReason';
-    throw new ProveedorError('Lyria no devolvió audio para el ambiente (' + razon + ').');
-  }
-
-  return {
-    base64: audio.base64,
-    mimeType: audio.mimeType,
-    extension: audio.extension,
-    modelo: MODELO_MUSICA_PRO,
-    segundos: total,
-    formato: audio.formato,
-  };
-}
+// AQUÍ ESTABA `generarAmbiente`, que le pedía a Lyria un lecho de sonido de
+// lugar en vez de una pieza musical, con la orden «esto no es música» delante y
+// detrás para que no compusiera.
+//
+// Se ha borrado con el resto del ambiente. No funcionaba: la generación fallaba
+// una y otra vez y, las veces que salía, venía con música dentro — que es
+// exactamente lo que esas dos órdenes intentaban evitar. Pedirle a un modelo de
+// música que no haga música resultó no ser una batalla ganable.
 
 /**
  * Saca el audio de la respuesta SIN REINTERPRETARLO.
@@ -1019,8 +969,8 @@ module.exports = {
   iniciarVideo,
   consultarVideo,
   duracionValida,
+  aIngles,
   generarMusica,
-  generarAmbiente,
   fragmentosNecesarios,
   SEGUNDOS_POR_FRAGMENTO,
   SEGUNDOS_MAX_PIEZA,

@@ -34,6 +34,7 @@ const {
   generoSugerido,
 } = require('./catalogo.js');
 const { shotTypeLabel, cameraMoveLabel } = require('./arte.js');
+const { PLANO_DE_CIERRE } = require('./productor.js');
 const { creativeBriefJsonSchema, normalizeCreativeBrief } = require('./brief.js');
 const rasgos = require('./rasgos.js');
 
@@ -791,6 +792,7 @@ function buildHeuristicBrief(input) {
         describeShot({
           shotTypeLabel: shotTypeLabel(shot.shotType),
           beat: shot.beat,
+          esCierre: shot.shotType === PLANO_DE_CIERRE,
           performer: performerType?.descriptor ?? 'el intérprete',
           instrument: leadName,
           place: placeName,
@@ -820,13 +822,6 @@ function buildHeuristicBrief(input) {
       ]),
       structure: truncate(
         `0:00 introducción con el instrumento solo; ${Math.round(runtimeSec * 0.25)}s entra el acompañamiento sostenido; ${Math.round(runtimeSec * 0.6)}s clímax con el registro más agudo y mayor densidad; ${Math.round(runtimeSec * 0.85)}s descenso y resolución en silencio.`,
-        390,
-      ),
-    },
-    ambient: {
-      layers: (scenario?.ambience.length ? scenario.ambience : ['ambiente neutro']).slice(0, 6),
-      description: truncate(
-        `Lecho ambiental discreto de ${placeName}, siempre por debajo de la música, sin voces ni palabras. Acústica ${scenario?.acoustics ?? 'natural'}.`,
         390,
       ),
     },
@@ -883,9 +878,7 @@ function purposeFor(beat, index, total) {
     case 'climax':
       return 'Sostener el punto de máxima intensidad emocional de la pieza';
     case 'closing':
-      return index === total
-        ? 'Cerrar el círculo devolviendo la escena al plano de apertura'
-        : 'Iniciar el descenso emocional y abrir el encuadre';
+      return 'Iniciar el descenso emocional y abrir el encuadre';
     default:
       return 'Sostener la continuidad narrativa del corto';
   }
@@ -908,6 +901,18 @@ function describeShot(args) {
       quien = `EL INTÉRPRETE ${args.subject} DEL GRUPO Y NADIE MÁS (${suyo.instrument || args.instrument})`;
       instrumento = suyo.instrument || args.instrument;
     }
+  }
+
+  // EL PLANO DE CIERRE NO SE DESCRIBE COMO LOS DEMÁS. Todos los otros dicen «de
+  // X interpretando Y», que es exactamente lo que aquí NO pasa: es el plano en
+  // el que la música ya terminó y el instrumento está bajado. Si la descripción
+  // dijera «interpretando», el modelo de imagen se quedaría con esa palabra por
+  // muchos avisos que llevara debajo.
+  if (args.esCierre) {
+    return `${capitalize(args.shotTypeLabel)}: ${quien} en ${args.place}${anchor}, ` +
+      `YA NO TOCA. ${instrumento} bajado y en reposo, las manos quietas y fuera del ` +
+      `instrumento. La pieza ha terminado y queda la calma: respiración, la mirada ` +
+      `sostenida y la luz de ${args.timeOfDay}.`;
   }
 
   const base = `${capitalize(args.shotTypeLabel)} de ${quien} interpretando ${instrumento} en ${args.place}${anchor}.`;
@@ -1015,9 +1020,17 @@ function buildUserPrompt(input) {
       const veces = Number(shot.apariciones) || 1;
       // La marca va al final y en mayúsculas para que no se pierda entre el
       // resto de la línea: es la que decide cómo hay que escribir la toma.
-      const marca = shot.reusable
-        ? `REPETIBLE — se ve ${veces} ${veces === 1 ? 'vez' : 'veces'} en el corto`
-        : 'ÚNICA — se ve una sola vez';
+      // El plano de cierre lleva su propia marca y no la de repetible/única: lo
+      // que hay que saber de él no es cuántas veces sale, es que en él nadie
+      // toca. Sin decírselo, Claude lo describe como los otros trece y escribe
+      // «tocando», que es la palabra con la que se queda el modelo de imagen.
+      const marca = shot.shotType === PLANO_DE_CIERRE
+        ? 'PLANO FINAL — la pieza YA TERMINÓ. Aquí NADIE TOCA: el instrumento está ' +
+          'bajado y en reposo, las manos quietas. Descríbelo como el momento de ' +
+          'después, no como una interpretación'
+        : shot.reusable
+          ? `REPETIBLE — se ve ${veces} ${veces === 1 ? 'vez' : 'veces'} en el corto`
+          : 'ÚNICA — se ve una sola vez';
       return `${shot.index}. ${shot.label} — ${shotTypeLabel(shot.shotType)}, ${cameraMoveLabel(shot.cameraMove)}, ${shot.durationSec} s, bloque "${shot.beat}" · ${marca}`;
     })
     .join('\n');
@@ -1045,7 +1058,7 @@ PLAN DE TOMAS YA DECIDIDO POR EL PRODUCTOR (no lo cambies, solo descríbelo):
 ${shotLines}
 
 TAREA
-Escribe la capa creativa completa: concepto, biblia visual (personaje, instrumento, escenario, luz), una descripción por toma, el brief musical instrumental, las capas de sonido ambiental, los metadatos de publicación y una nota breve por cada rol del equipo.`;
+Escribe la capa creativa completa: concepto, biblia visual (personaje, instrumento, escenario, luz), una descripción por toma, el brief musical instrumental, los metadatos de publicación y una nota breve por cada rol del equipo.`;
 }
 
 /** Modelo por defecto si no se configura ANTHROPIC_MODEL. */
