@@ -342,8 +342,10 @@ async function principal() {
     cierto(/Do NOT add a melodic instrument/.test(zombi), 'no se prohíbe meter un instrumento melódico');
     cierto(!/carries the melody/.test(zombi), 'a la batería se le sigue pidiendo la melodía');
     cierto(/No key and no scale/.test(zombi), 'a una batería se le está pidiendo tonalidad');
-    // 5. Y lo que escribió el usuario llega como contexto.
-    cierto(/postapocal/.test(zombi), 'su texto no llega a la música');
+    // 5. Y su escena llega como contexto, pero TRADUCIDA: pegar su español
+    //    tumbaría la llamada entera con «Unsupported language detected».
+    cierto(/post-apocalyptic wasteland/.test(zombi), 'su escena no llega traducida: ' + zombi);
+    cierto(!/[áéíóúñ¿¡]/i.test(zombi), 'queda español en el encargo: ' + zombi);
 
     // Lo de siempre sigue funcionando: un violín es un violín y lleva melodía.
     const violin = await armar({ instrumentIds: ['violin'], scenarioId: 'forest' });
@@ -441,6 +443,31 @@ async function principal() {
     cierto(armado.plan.ambient.layers.length, 'el sintetizador se quedo sin capas');
   });
 
+  comprobar('la musica arranca con el instrumento que se ve en pantalla', () => {
+    // El usuario puso un solista de bateria y los veinte primeros segundos
+    // fueron un chelo: el personaje aporreaba en silencio. La culpa era de la
+    // linea de tiempo, que pedia «open sparse and quiet, the main instrument
+    // almost alone» — y a una pieza de un solo instrumento, «escaso» solo se le
+    // puede obedecer metiendo otro.
+    const linea = vertex.lineaDeTiempo(60, ['drum kit']);
+    cierto(/THE FIRST SECOND: drum kit is already playing at \[00:00\]/.test(linea),
+      'no se exige el instrumento en el primer segundo: ' + linea.slice(0, 120));
+    cierto(/ONLY THESE INSTRUMENTS: drum kit/.test(linea), 'no se prohiben los instrumentos de fuera');
+    cierto(/Do not add any instrument that is not in that list/.test(linea),
+      'no se prohibe explicitamente colar otro instrumento');
+    // «Escaso» ya no puede leerse como «otro instrumento».
+    cierto(!/main instrument almost alone/.test(linea), 'sigue la frase que causaba el chelo');
+    cierto(/drum kit enters immediately, playing sparsely/.test(linea),
+      'escaso deberia significar menos de ESE instrumento');
+    // Y sigue habiendo arco: apertura, subida, pico y cierre.
+    for (const marca of ['[00:00]', '[00:15]', '[00:33]', '[00:45]', '[00:54]', '[01:00]']) {
+      cierto(linea.indexOf(marca) !== -1, 'falta la marca ' + marca + ' de la linea de tiempo');
+    }
+    // Con varios instrumentos se nombran todos.
+    const duo = vertex.lineaDeTiempo(60, ['violin', 'cello']);
+    cierto(/ONLY THESE INSTRUMENTS: violin and cello/.test(duo), 'no se listan los dos instrumentos');
+  });
+
   comprobar('los 89 instrumentos tienen nombre inglés', () => {
     // El primer alias de la batería era «bateria», el nombre español sin tilde.
     // Los ids del catálogo SÍ están en inglés por construcción, así que son
@@ -470,11 +497,26 @@ async function principal() {
     // compone aparte, en inglés, desde los mismos datos.
     const enEspanol = (t) => /[áéíóúñ¿¡]/i.test(String(t || ''));
 
+    // Las configuraciones llevan TILDES A PROPÓSITO. Esta comprobación existía
+    // ya y se le escapó que el encargo pegaba el texto del usuario tal cual,
+    // porque su configuración de prueba no tenía ni una tilde. Una prueba de
+    // idioma con datos sin acentos no comprueba nada.
     for (const cfg of [
       { instrumentIds: ['erhu'], formationId: 'solo', scenarioId: 'forest' },
       { instrumentIds: ['violin', 'cello'], formationId: 'duo', scenarioId: 'rooftop' },
       { instrumentIds: ['guitar'], formationId: 'quartet', scenarioId: 'beach' },
       { instrumentIds: ['piano', 'flute'], formationId: 'orchestra', scenarioId: 'theatre' },
+      {
+        instrumentIds: ['drum_kit'], formationId: 'solo', scenarioId: 'street',
+        creativeDirection: 'un zombie tocando la batería, rock alternativo',
+        scenarioCustom: 'vía pública abandonada, mundo postapocalíptico',
+        visualStyleCustom: 'ilustración muy oscura con niebla',
+      },
+      {
+        instrumentIds: ['harp'], formationId: 'solo', scenarioId: 'church',
+        creativeDirection: 'una despedida melancólica al amanecer',
+        scenarioCustom: 'una capilla de piedra con vidrieras rotas',
+      },
     ]) {
       const c = Object.assign({}, CONFIG, cfg);
       const armado = await construirPlan(c);
@@ -484,9 +526,13 @@ async function principal() {
         'queda español con ' + cfg.instrumentIds.join('+') + ': ' +
         (en.match(/[^\s]*[áéíóúñ][^\s]*/gi) || []).join(', '));
       // Y lleva lo que un modelo de música necesita para componer.
-      for (const campo of ['Instruments:', 'Mood:', 'Key:', 'Scale:', 'Tempo:']) {
+      for (const campo of ['Instruments:', 'Mood:', 'Tempo:']) {
         cierto(en.indexOf(campo) !== -1, 'al encargo le falta ' + campo);
       }
+      // La tonalidad sólo cuando el instrumento la tiene: una batería no.
+      const percusion = /drum kit|cajon|congas|bongos|djembe|taiko|tabla|timpani|gong/.test(en);
+      cierto(percusion ? /No key and no scale/.test(en) : /Key: /.test(en),
+        'la tonalidad no encaja con el instrumento: ' + en);
       // El nombre del instrumento también en inglés: «Violonchelo» no le dice nada.
       cierto(!/Violonchelo|Guitarra|Flauta/.test(en), 'un instrumento se quedó en español: ' + en);
     }

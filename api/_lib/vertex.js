@@ -547,17 +547,37 @@ function mmss(segundos) {
  * música ES la pieza (PRD §3), así que se le pide justo lo contrario: el arco
  * emocional completo, que es lo que el montaje va a acompañar plano a plano.
  */
-function lineaDeTiempo(total) {
+function lineaDeTiempo(total, instrumentos) {
+  const lista = (instrumentos || []).filter(Boolean);
+  const suena = lista.length ? lista.join(' and ') : 'the instrument';
+
   return (
+    // LO PRIMERO, PORQUE ES LO QUE FALLABA. El usuario puso un solista de
+    // batería y los veinte primeros segundos fueron un chelo: la música
+    // arrancaba sin el instrumento que se ve tocando en pantalla, y el
+    // personaje aporreaba en silencio. La culpa era de esta misma línea de
+    // tiempo, que pedía «open sparse and quiet, the main instrument almost
+    // alone» — y a una pieza de un solo instrumento, «escaso» sólo se le puede
+    // obedecer metiendo otro.
+    //
+    // Así que ahora «escaso» significa MENOS DE ESE MISMO INSTRUMENTO, nunca
+    // otro distinto, y el primer segundo lo tiene que ocupar él.
+    'THE FIRST SECOND: ' + suena + ' is already playing at ' + mmss(0) + '. ' +
+    'The very first sound of the piece is ' + suena + ' — not silence, not an intro, ' +
+    'not another instrument warming up. Someone is filmed playing ' + suena + ' from ' +
+    'frame one, so if it is not audible from the start the film is out of sync.\n' +
+    'ONLY THESE INSTRUMENTS: ' + suena + '. Do not add any instrument that is not in ' +
+    'that list, not even quietly underneath and not even as an intro.\n\n' +
     'STRUCTURE — the piece lasts the FULL ' + Math.round(total) + ' seconds, from the first ' +
     'second to the last. Follow this timeline exactly:\n' +
-    mmss(0) + ' Open sparse and quiet: the main instrument almost alone, room to breathe.\n' +
-    mmss(total * 0.25) + ' The arrangement starts to fill out. Add depth underneath, still restrained.\n' +
-    mmss(total * 0.55) + ' Build steadily toward the emotional peak. More body, more movement.\n' +
-    mmss(total * 0.75) + ' The peak of the piece: fullest texture and strongest emotion, but never noisy.\n' +
-    mmss(total * 0.9) + ' Come back down. Strip the arrangement away.\n' +
-    mmss(total) + ' End on the main instrument alone, resolved and calm. Do not fade out abruptly ' +
-    'and do not stop early: the music must still be playing at ' + mmss(total) + '.'
+    mmss(0) + ' ' + suena + ' enters immediately, playing sparsely: fewer notes and less ' +
+    'force, but clearly present and clearly ' + suena + '.\n' +
+    mmss(total * 0.25) + ' It fills out. More movement and more body, same instruments.\n' +
+    mmss(total * 0.55) + ' Build steadily toward the emotional peak.\n' +
+    mmss(total * 0.75) + ' The peak of the piece: fullest and strongest, but never noisy.\n' +
+    mmss(total * 0.9) + ' Come back down. Strip it away.\n' +
+    mmss(total) + ' End resolved and calm. Do not fade out abruptly and do not stop early: ' +
+    'the music must still be playing at ' + mmss(total) + '.'
   );
 }
 
@@ -643,7 +663,7 @@ async function generarMusica(opciones) {
     // una vez en lugar de traducirse a trompicones.
     'AVOID: any voice, singing, humming, choir, spoken word, applause, crowd noise, ' +
     'sound effects and silence. Only played instruments, from the first second to the last.\n\n' +
-    lineaDeTiempo(total) + '\n\n' +
+    lineaDeTiempo(total, opciones.instrumentos) + '\n\n' +
     SOLO_INSTRUMENTAL;
 
   // Componer tres minutos de música es lo más lento que hace esta herramienta

@@ -703,6 +703,7 @@ var api = {
   },
   aprobar: function(id, activo, gen){ return pedir('aprobar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
+  actualizarPlan: function(id){ return pedir('actualizar', { metodo:'POST', cuerpo:{ id:id } }); },
   desbloquear: function(id, activo){ return pedir('desbloquear', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
   montar: function(id){ return pedir('montar', { metodo:'POST', cuerpo:{ id:id } }); },
   estadoMontaje: function(id, job){
@@ -1851,6 +1852,18 @@ function panelProduccion(p, sit){
         : '')) +
   '</div>';
 
+  // Actualizar las instrucciones de un corto empezado. Va aquí arriba y no
+  // escondido: mientras el equipo de dirección siga mejorando, un corto de hace
+  // dos semanas lleva dentro las instrucciones de hace dos semanas.
+  html += '<div class="tarjeta">' +
+    '<h3>Instrucciones del corto</h3>' +
+    '<p class="tenue mini" style="margin-bottom:10px">Los encargos que lee la IA se escribieron cuando creaste este corto. ' +
+      'Si desde entonces se ha mejorado el equipo de dirección, aquí los pones al día ' +
+      '<b>sin tocar tus tomas ni tus aprobaciones</b>: lo que cambie se marcará como desactualizado y decides tú si lo regeneras.</p>' +
+    '<button class="btn ancho" data-accion="actualizar-plan" data-id="' + esc(p.id) + '"' +
+      (estado.trabajando ? ' disabled' : '') + '>Actualizar las instrucciones a la versión de hoy</button>' +
+  '</div>';
+
   html += htmlCola(p);
 
   html += '<div class="tarjeta" id="caja-revision">' + htmlRevision(p) + '</div>';
@@ -2471,6 +2484,28 @@ async function crearProyecto(){
   });
 }
 
+/**
+ * Pone al día los encargos de un corto ya empezado.
+ *
+ * Se avisa de cuántos cambian y de que lo aprobado no se toca, porque «voy a
+ * reescribir las instrucciones de tu corto» suena a que se pierde el trabajo, y
+ * no se pierde nada.
+ */
+async function accionActualizarPlan(id){
+  if (!id) return;
+  if (!window.confirm(
+    'Se van a reescribir los encargos que lee la IA con la versión de hoy.\n\n' +
+    'NO se tocan tus tomas, ni sus duraciones, ni lo que ya aprobaste. Lo que cambie ' +
+    'quedará marcado como desactualizado y tú decides si lo regeneras.\n\n¿Continuar?'
+  )) return;
+  await ejecutar(async function(){
+    var r = await api.actualizarPlan(id);
+    await cargarProyecto(id);
+    var n = (r && r.cambiados) ? r.cambiados.length : 0;
+    avisar(n ? n + ' elemento(s) con instrucciones nuevas.' : 'Ya estaban al día.', 'ok');
+  });
+}
+
 async function accionGenerar(activoId, comoSeHace){
   var p = estado.proyecto;
   if (!p) return;
@@ -2646,6 +2681,7 @@ document.addEventListener('click', function(ev){
   }
 
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
+  if (accion === 'actualizar-plan') { accionActualizarPlan(el.getAttribute('data-id')); return; }
   if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
   if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
   if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo'), el.getAttribute('data-metodo')); return; }

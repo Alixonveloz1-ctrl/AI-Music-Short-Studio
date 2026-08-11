@@ -310,6 +310,56 @@ async function principal() {
     }
   });
 
+  await paso('un corto viejo puede actualizar sus instrucciones sin perder nada', async () => {
+    // EL PROBLEMA QUE RESUELVE. Los encargos se escriben al crear el corto y se
+    // guardan dentro. El usuario tuvo un corto de un zombie con batería cuya
+    // música salía sin batería; se arregló el Director y siguió saliendo igual,
+    // porque SU corto llevaba dentro las instrucciones viejas. Cada mejora
+    // servía sólo para cortos nuevos.
+    const actualizar = require('../api/actualizar.js');
+
+    // Se ensucia el proyecto como si viniera de una versión anterior: encargos
+    // viejos en un activo aprobado y en otro sin aprobar.
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const aprobadosAntes = antes.assets.filter((a) => a.approvedGenerationId).length;
+    const tomasAntes = antes.plan.shots.length;
+    const lineaAntes = JSON.stringify(antes.plan.timeline.map((t) => [t.clipId, t.durationSec]));
+
+    const { modificarProyecto } = require('../api/_lib/almacen.js');
+    await modificarProyecto(id, (p) => {
+      for (const a of p.assets) a.spec = Object.assign({}, a.spec, { prompt: 'ENCARGO VIEJO' });
+      p.plan.music = Object.assign({}, p.plan.music, { promptEn: 'Instruments: bateria.' });
+    });
+
+    const r = await pedir(actualizar, { metodo: 'POST', cuerpo: { id } });
+    if (r.codigo !== 200) throw new Error('actualizar: ' + JSON.stringify(r.cuerpo).slice(0, 200));
+    const despues = r.cuerpo.proyecto;
+
+    // 1. Los encargos se reescribieron.
+    cierto(r.cuerpo.cambiados.length > 0, 'no se actualizó ningún encargo');
+    cierto(!despues.assets.some((a) => a.spec && a.spec.prompt === 'ENCARGO VIEJO'),
+      'quedan encargos viejos sin actualizar');
+    cierto(!/bateria/.test(despues.plan.music.promptEn || ''),
+      'el encargo de música sigue siendo el viejo: ' + despues.plan.music.promptEn);
+
+    // 2. LA ESTRUCTURA NO SE TOCA. Ni una toma más, ni una menos, ni un segundo.
+    cierto(despues.plan.shots.length === tomasAntes,
+      'cambió el número de tomas: ' + tomasAntes + ' → ' + despues.plan.shots.length);
+    cierto(JSON.stringify(despues.plan.timeline.map((t) => [t.clipId, t.durationSec])) === lineaAntes,
+      'cambió la línea de tiempo, que el usuario ya había aprobado');
+
+    // 3. NADA SE DESAPRUEBA. Lo aprobado sigue aprobado.
+    const aprobadosDespues = despues.assets.filter((a) => a.approvedGenerationId).length;
+    cierto(aprobadosDespues === aprobadosAntes,
+      'se perdieron aprobaciones: ' + aprobadosAntes + ' → ' + aprobadosDespues);
+    // 4. Pero sí se avisa de lo que cambió.
+    cierto(despues.assets.some((a) => a.stale),
+      'no se marcó como desactualizado nada de lo que cambió de instrucciones');
+    // 5. Y el MP4 exportado sigue en su sitio.
+    cierto(despues.finalCut && despues.finalCut['export'] && despues.finalCut['export'].path,
+      'se perdió el MP4 exportado');
+  });
+
   await paso('el ambiente se generó con IA y lo dice', async () => {
     const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
     const a = p.cuerpo.proyecto.assets.find((x) => x.kind === 'ambient');

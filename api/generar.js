@@ -617,6 +617,9 @@ async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
       // prompt a partir de este número. Sin él, el modelo entrega treinta
       // segundos y el corto se queda sin música a los treinta segundos.
       segundos: (trabajoDe(gen) || {}).durationSec,
+      // Los instrumentos que se VEN tocando: la línea de tiempo los necesita
+      // para exigir que suenen desde el primer segundo.
+      instrumentos: (proyecto.plan && proyecto.plan.music && proyecto.plan.music.instrumentationEn) || [],
       presupuestoMs: presupuestoRestante(inicio),
     });
   } catch (e) {

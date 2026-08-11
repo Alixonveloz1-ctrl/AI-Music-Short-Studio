@@ -4,6 +4,7 @@
     "api/proyectos.js": { "maxDuration": 60 },
     "api/proyecto.js": { "maxDuration": 30 },
     "api/generar.js": { "maxDuration": 60 },
+    "api/actualizar.js": { "maxDuration": 60 },
     "api/aprobar.js": { "maxDuration": 30 },
     "api/rechazar.js": { "maxDuration": 30 },
     "api/desbloquear.js": { "maxDuration": 30 },

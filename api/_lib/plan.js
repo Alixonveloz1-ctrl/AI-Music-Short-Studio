@@ -282,24 +282,56 @@ function enLista(texto, tabla) {
 }
 
 /**
- * Lo que el usuario escribió, en una línea, para dárselo a Lyria como contexto.
+ * El mundo en el que ocurre la pieza, en inglés.
  *
  * Su petición fue clara: «no es que lo pongas literal en el prompt, sólo te
  * digo qué esperaba: el director debería poder interpretar, darle contexto a la
- * situación». Esto es justo eso — no se le manda como una orden de género, se le
- * manda como el mundo en el que ocurre la pieza, que es lo que un compositor
- * necesita saber antes de escribir la primera nota.
+ * situación». Eso es esto — el compositor necesita saber dónde pasa la escena
+ * antes de escribir la primera nota.
  *
- * Va en inglés a trompicones si el usuario escribió en español, y da igual:
- * Lyria entiende «postapocaliptico» perfectamente en un texto por lo demás
- * inglés, y traducirlo a mano sería inventarse lo que quiso decir.
+ * Y NO SE PEGA SU TEXTO TAL CUAL, aunque lo intenté. Lyria rechaza la llamada
+ * entera con «Unsupported language detected» en cuanto ve otro idioma, así que
+ * «vía pública abandonada» dejaría el corto sin música. Se lee y se convierte
+ * en una frase inglesa, igual que se hace con el ambiente y con el carácter.
+ *
+ * Lo que no reconoce, se calla: una palabra en español dentro del encargo vale
+ * menos que nada, porque tumba la llamada entera.
  */
+const CONTEXTO_EN = [
+  { palabras: ['postapocalip', 'post-apocalip', 'apocalip', 'ruinas', 'zombi', 'zombie', 'devastad'],
+    frase: 'a post-apocalyptic wasteland' },
+  { palabras: ['abandonad', 'desierta', 'vacio', 'vacío', 'solitari', 'nadie'], frase: 'an abandoned, empty place' },
+  { palabras: ['guerra', 'batalla', 'bombard'], frase: 'a war zone' },
+  { palabras: ['terror', 'miedo', 'siniestr', 'macabr', 'pesadilla'], frase: 'a horror scene' },
+  { palabras: ['funeral', 'duelo', 'luto', 'despedida'], frase: 'a farewell' },
+  { palabras: ['fiesta', 'celebra', 'bail'], frase: 'a celebration' },
+  { palabras: ['lluvia', 'tormenta'], frase: 'rain and storm' },
+  { palabras: ['nieve', 'invierno', 'hielo'], frase: 'deep winter' },
+  { palabras: ['noche', 'nocturn', 'madrugada'], frase: 'the middle of the night' },
+  { palabras: ['amanecer', 'alba'], frase: 'first light' },
+  { palabras: ['atardecer', 'ocaso', 'puesta de sol'], frase: 'sunset' },
+  { palabras: ['niebla', 'bruma'], frase: 'thick fog' },
+  { palabras: ['mar', 'playa', 'oceano', 'océano'], frase: 'the sea' },
+  { palabras: ['bosque', 'selva'], frase: 'deep forest' },
+  { palabras: ['desierto', 'arena'], frase: 'a desert' },
+  { palabras: ['ciudad', 'urban', 'calle'], frase: 'a city' },
+  { palabras: ['espacio', 'galax', 'planeta', 'estrellas'], frase: 'outer space' },
+  { palabras: ['sueno', 'sueño', 'onirico', 'onírico', 'irreal'], frase: 'a dream' },
+];
+
 function contextoDelUsuario(config) {
-  const partes = [config.creativeDirection, config.scenarioCustom, config.visualStyleCustom]
-    .map((t) => String(t || '').trim())
-    .filter(Boolean);
-  if (!partes.length) return '';
-  return partes.join('. ').replace(/\s+/g, ' ').slice(0, 300);
+  const texto = sinTildes(
+    [config.creativeDirection, config.scenarioCustom, config.visualStyleCustom]
+      .map((t) => String(t || '').trim())
+      .filter(Boolean)
+      .join('. '),
+  );
+  if (!texto) return '';
+  const frases = [];
+  for (const entrada of CONTEXTO_EN) {
+    if (entrada.palabras.some((pal) => texto.indexOf(sinTildes(pal)) !== -1)) frases.push(entrada.frase);
+  }
+  return frases.slice(0, 3).join(', ');
 }
 
 function promptMusicalEn(config, brief, instrumentos, formacion, escenario, contexto) {
@@ -323,7 +355,7 @@ function promptMusicalEn(config, brief, instrumentos, formacion, escenario, cont
     // LO QUE ESCRIBIÓ EL USUARIO, tal cual. No es lo mismo que el carácter
     // deducido: aquel son cuatro adjetivos, esto es su frase entera, y Lyria
     // entiende «post-apocalyptic wasteland» mucho mejor que «desolate, raw».
-    contexto ? 'Context for the piece: ' + contexto : null,
+    contexto ? 'This piece plays over: ' + contexto + '.' : null,
   ].filter(Boolean).join('\n');
 }
 
@@ -377,6 +409,8 @@ function briefMusical(config, brief, bible) {
   return {
     title: brief.title,
     instrumentation: instrumentacion,
+    // Los mismos, en inglés, que es lo que entiende Lyria.
+    instrumentationEn: instrumentos.map(instrumentoEn),
     style: brief.music.style,
     mood: brief.music.mood,
     tempoBpm: brief.music.tempoBpm,
