@@ -52,10 +52,16 @@ const RASGOS = [
     id: 'hairStyle',
     etiqueta: 'Peinado',
     frase: (v) => v.toLowerCase(),
-    opciones: [
-      'Melena larga y lisa', 'Melena larga ondulada', 'Media melena', 'Corto',
-      'Coleta alta', 'Coleta baja', 'Trenza', 'Moño', 'Recogido con lazo', 'Rizado',
-    ],
+    porGenero: {
+      femenino: [
+        'Melena larga y lisa', 'Melena larga ondulada', 'Media melena', 'Corto',
+        'Coleta alta', 'Coleta baja', 'Trenza', 'Moño', 'Recogido con lazo', 'Rizado',
+      ],
+      masculino: [
+        'Corto y revuelto', 'Corto y peinado', 'Rapado a los lados', 'Media melena',
+        'Peinado hacia atrás', 'Con flequillo', 'Coleta baja', 'Rizado', 'Ondulado'
+      ],
+    },
   },
   {
     id: 'eyes',
@@ -73,10 +79,16 @@ const RASGOS = [
     id: 'build',
     etiqueta: 'Cuerpo',
     frase: (v) => v.toLowerCase(),
-    opciones: [
-      'Esbelta y estilizada', 'Atlética', 'Curvilínea', 'Menuda',
-      'Alta y de piernas largas', 'Fuerte y de hombros anchos',
-    ],
+    porGenero: {
+      femenino: [
+        'Esbelta y estilizada', 'Atlética', 'Curvilínea', 'Menuda',
+        'Alta y de piernas largas', 'Grácil y de cuello largo',
+      ],
+      masculino: [
+        'Atlético y de hombros anchos', 'Esbelto y fibrado', 'Alto y de línea limpia',
+        'Fuerte y corpulento', 'Delgado', 'Complexión media',
+      ],
+    },
   },
   {
     id: 'age',
@@ -88,11 +100,18 @@ const RASGOS = [
     id: 'wardrobe',
     etiqueta: 'Vestuario',
     frase: (v) => v.toLowerCase(),
-    opciones: [
-      'Minifalda', 'Falda corta', 'Falda larga', 'Vestido corto', 'Vestido largo',
-      'Pantalón elegante', 'Vaqueros', 'Shorts', 'Traje de concierto',
-      'Blusa y falda', 'Camisa y pantalón', 'Chaqueta de cuero',
-    ],
+    porGenero: {
+      femenino: [
+        'Minifalda', 'Falda corta', 'Falda larga', 'Vestido corto', 'Vestido largo',
+        'Blusa y falda', 'Pantalón elegante', 'Vaqueros', 'Shorts',
+        'Traje de concierto', 'Chaqueta de cuero', 'Vestido de gala',
+      ],
+      masculino: [
+        'Camisa y pantalón', 'Camisa remangada', 'Traje completo', 'Esmoquin',
+        'Chaleco y camisa', 'Jersey fino', 'Camiseta y vaqueros',
+        'Chaqueta de cuero', 'Abrigo largo', 'Traje de concierto',
+      ],
+    },
   },
   {
     id: 'mood',
@@ -171,9 +190,31 @@ function frasesDe(ficha) {
 function catalogoDeRasgos() {
   return {
     max: MAX_FICHAS,
-    rasgos: RASGOS.map((r) => ({ id: r.id, etiqueta: r.etiqueta, opciones: r.opciones })),
+    // Los rasgos que cambian según el género viajan con SUS DOS LISTAS, y la
+    // pantalla enseña la que toca. Antes había una sola lista para todo el
+    // mundo, así que al elegir «masculino» seguían saliendo minifalda y melena
+    // ondulada: la pantalla decía una cosa y el Director hacía otra.
+    rasgos: RASGOS.map((r) => ({
+      id: r.id,
+      etiqueta: r.etiqueta,
+      opciones: r.opciones || null,
+      porGenero: r.porGenero || null,
+    })),
     notasMax: NOTAS_MAX,
   };
+}
+
+/**
+ * Las opciones de un rasgo para un banco concreto ('femenino' | 'masculino').
+ *
+ * Un rasgo sin `porGenero` vale igual para todos: un color de ojos es un color
+ * de ojos. Sólo el peinado, el cuerpo y el vestuario se separan.
+ */
+function opcionesDe(rasgo, banco) {
+  if (!rasgo) return [];
+  if (rasgo.opciones) return rasgo.opciones;
+  const dos = rasgo.porGenero || {};
+  return dos[banco] || dos.femenino || [];
 }
 
 module.exports = {
@@ -186,4 +227,5 @@ module.exports = {
   fichaDe,
   frasesDe,
   catalogoDeRasgos,
+  opcionesDe,
 };

@@ -1063,6 +1063,78 @@ async function principal() {
       'sin ficha ninguna el prompt se queda sin pelo');
   });
 
+  comprobar('a un hombre no se le ofrecen minifaldas', () => {
+    // El fallo: «elegí masculino y solo me salen opciones femeninas, cabello
+    // largo ondulado, minifalda». Las fichas tenían una sola lista para todo
+    // el mundo, así que la pantalla ofrecía una cosa y el Director repartía
+    // otra.
+    const soloDe = (banco) => {
+      const salida = {};
+      for (const r of rasgos.RASGOS) salida[r.id] = rasgos.opcionesDe(r, banco);
+      return salida;
+    };
+    const ellas = soloDe('femenino');
+    const ellos = soloDe('masculino');
+
+    // Lo que no puede aparecer en el banco masculino, con todas las letras.
+    for (const prenda of ['Minifalda', 'Falda corta', 'Falda larga', 'Vestido corto', 'Vestido largo']) {
+      cierto(ellas.wardrobe.indexOf(prenda) !== -1, 'falta ' + prenda + ' en el vestuario femenino');
+      cierto(ellos.wardrobe.indexOf(prenda) === -1, 'a un hombre se le ofrece ' + prenda);
+    }
+    cierto(ellos.wardrobe.indexOf('Traje completo') !== -1, 'al vestuario masculino le falta el traje');
+    cierto(ellos.hairStyle.indexOf('Melena larga ondulada') === -1, 'a un hombre se le ofrece melena ondulada');
+    cierto(ellos.build.indexOf('Curvilínea') === -1, 'a un hombre se le ofrece una complexión curvilínea');
+    cierto(ellas.build.indexOf('Curvilínea') !== -1, 'al cuerpo femenino le falta una opción suya');
+
+    // Y lo que SÍ es común: un color de ojos es un color de ojos.
+    for (const comun of ['hairColor', 'eyes', 'skin', 'age', 'mood']) {
+      igual(ellos[comun], ellas[comun], 'el rasgo ' + comun + ' no debería cambiar con el género');
+      cierto(ellos[comun].length > 0, 'el rasgo ' + comun + ' se quedó sin opciones');
+    }
+
+    // Todos los rasgos tienen opciones en los dos bancos: uno vacío dejaría una
+    // fila de la ficha sin ningún botón.
+    for (const r of rasgos.RASGOS) {
+      for (const banco of ['femenino', 'masculino']) {
+        cierto(rasgos.opcionesDe(r, banco).length >= 4,
+          'el rasgo ' + r.id + ' tiene muy pocas opciones en ' + banco);
+      }
+    }
+  });
+
+  comprobar('la pantalla y el Director reparten el género IGUAL', () => {
+    // Aquí nació el fallo: dos copias de la misma regla. Si la pantalla enseña
+    // minifaldas y el Director reparte trajes, el usuario elige una cosa y
+    // recibe otra, y no hay forma de que se entere hasta ver la imagen.
+    cierto(typeof ui.bancoDeInterprete === 'function', 'falta bancoDeInterprete en index.html');
+    cierto(typeof ui.opcionesDelRasgo === 'function', 'falta opcionesDelRasgo en index.html');
+
+    for (const tipo of catalogo.PERFORMER_TYPES) {
+      const config = Object.assign({}, CONFIG, { performerTypeId: tipo.id, formationId: 'quartet' });
+      const b = planificador.buildHeuristicBrief({
+        config, runtimeSec: 60, shots: productor.planStructure(60).shots,
+      });
+      // La pantalla, con el mismo tipo de intérprete seleccionado.
+      ui.estado.catalogo = { performerTypes: catalogo.PERFORMER_TYPES };
+      ui.estado.form = { tipo: tipo.id, genero: tipo.genderIds[0], fichas: [] };
+
+      for (let n = 1; n <= b.cast.length; n += 1) {
+        igual(ui.bancoDeInterprete(n), b.cast[n - 1].banco,
+          'con «' + tipo.label + '», al intérprete ' + n + ' la pantalla le da un banco y el Director otro');
+      }
+    }
+
+    // Y las listas que dibuja la pantalla son las mismas que valida el servidor.
+    const delCatalogo = catalogo.buildCatalog().characterTraits.rasgos;
+    for (const r of delCatalogo) {
+      for (const banco of ['femenino', 'masculino']) {
+        const enPantalla = ui.opcionesDelRasgo(r, banco);
+        const enServidor = rasgos.opcionesDe(rasgos.RASGOS_POR_ID.get(r.id), banco);
+        igual(enPantalla, enServidor, 'las opciones de ' + r.id + ' (' + banco + ') no coinciden');
+      }
+    }
+  });
+
   comprobar('la ficha se valida y se guarda sin basura', () => {
     igual(rasgos.normalizarFichas(null), null, 'sin fichas debería quedar en nulo');
     igual(rasgos.normalizarFichas([{}, {}]), null, 'fichas vacías deberían quedar en nulo');
@@ -1079,7 +1151,12 @@ async function principal() {
     // Y la pantalla puede dibujarlas: el catálogo las lleva.
     const cat = catalogo.buildCatalog().characterTraits;
     cierto(cat && cat.rasgos.length >= 6, 'el catálogo no lleva los rasgos para la pantalla');
-    cierto(cat.rasgos.every((r) => r.id && r.etiqueta && r.opciones.length), 'hay un rasgo incompleto');
+    // Un rasgo trae O una lista para todos, O una por género. Nunca ninguna.
+    cierto(
+      cat.rasgos.every((r) => r.id && r.etiqueta &&
+        ((r.opciones && r.opciones.length) || (r.porGenero && r.porGenero.femenino.length))),
+      'hay un rasgo sin opciones que dibujar',
+    );
   });
 
   comprobar('a cada referencia se le dice PARA QUÉ es', () => {

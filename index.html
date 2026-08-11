@@ -1653,6 +1653,29 @@ function cuantosInterpretes(){
   return Math.max(1, Math.min(cuantos, tope));
 }
 
+/**
+ * Qué banco de opciones le toca al intérprete `n` (contando desde 1).
+ *
+ * Tiene que dar EXACTAMENTE lo mismo que `bancoDe` en api/_lib/planificador.js:
+ * si la pantalla enseña minifaldas y el Director reparte trajes, el usuario
+ * elige una cosa y recibe otra. En un grupo mixto se alternan empezando por el
+ * femenino, igual que allí.
+ */
+function bancoDeInterprete(n){
+  var c = estado.catalogo, f = estado.form;
+  var tipo = (c && (c.performerTypes || []).find(function(x){ return x.id === f.tipo; })) || null;
+  var generos = (tipo && tipo.genderIds) || [f.genero || 'female'];
+  if (generos.indexOf('mixed') !== -1) return (n - 1) % 2 === 0 ? 'femenino' : 'masculino';
+  return generos.indexOf('male') !== -1 ? 'masculino' : 'femenino';
+}
+
+/** Las opciones de un rasgo para ese banco. Un rasgo sin listas separadas vale igual para todos. */
+function opcionesDelRasgo(rasgo, banco){
+  if (rasgo.opciones && rasgo.opciones.length) return rasgo.opciones;
+  var dos = rasgo.porGenero || {};
+  return dos[banco] || dos.femenino || [];
+}
+
 function fichaEn(n){
   var f = estado.form;
   if (!f.fichas[n - 1]) f.fichas[n - 1] = {};
@@ -1666,6 +1689,33 @@ function rellenosDe(n){
   var total = 0;
   for (var k in ficha) if (ficha[k] && String(ficha[k]).trim()) total += 1;
   return total;
+}
+
+/**
+ * Borra de las fichas lo que ya no existe en el banco nuevo.
+ *
+ * Si alguien elige «mujer», pone minifalda, y luego cambia a «hombre», esa
+ * minifalda seguiría guardada y llegaría al prompt aunque el botón ya no se vea.
+ * Un valor invisible que manda sobre la imagen es peor que ninguno. Lo escrito
+ * a mano se respeta: si lo tecleó, lo quiere.
+ */
+function limpiarFichasDeOtroGenero(){
+  var cat = estado.catalogo && estado.catalogo.characterTraits;
+  if (!cat || !estado.form) return;
+  (estado.form.fichas || []).forEach(function(ficha, i){
+    if (!ficha) return;
+    var banco = bancoDeInterprete(i + 1);
+    (cat.rasgos || []).forEach(function(rasgo){
+      if (!rasgo.porGenero || !ficha[rasgo.id]) return;
+      var valido = opcionesDelRasgo(rasgo, banco);
+      var otras = Object.keys(rasgo.porGenero).reduce(function(a, k){ return a.concat(rasgo.porGenero[k]); }, []);
+      // Sólo se borra si el valor venía del banco del OTRO género. Un texto
+      // libre no está en ninguna de las dos listas y se queda.
+      if (valido.indexOf(ficha[rasgo.id]) === -1 && otras.indexOf(ficha[rasgo.id]) !== -1) {
+        ficha[rasgo.id] = '';
+      }
+    });
+  });
 }
 
 function htmlFichasPersonaje(){
@@ -1685,8 +1735,12 @@ function htmlFichasPersonaje(){
     html += '<div class="chips" style="margin-bottom:12px">';
     for (var n = 1; n <= cuantos; n += 1) {
       var puestos = rellenosDe(n);
+      // En un grupo mixto hace falta decir cuál es cuál: las opciones que se
+      // ven debajo cambian, y sin la etiqueta parecería un error.
+      var mixto = bancoDeInterprete(1) !== bancoDeInterprete(2);
+      var quien = 'Intérprete ' + n + (mixto ? (bancoDeInterprete(n) === 'masculino' ? ' ♂' : ' ♀') : '');
       html += '<button class="chip' + (f.fichaAbierta === n ? ' on' : '') + (puestos ? ' completa' : '') + '" ' +
-        'data-accion="ficha-abrir" data-n="' + n + '">Intérprete ' + n +
+        'data-accion="ficha-abrir" data-n="' + n + '">' + quien +
         (puestos ? ' <span class="cuenta">' + puestos + '</span>' : '') + '</button>';
     }
     html += '</div>';
@@ -1694,12 +1748,14 @@ function htmlFichasPersonaje(){
 
   var abierta = f.fichaAbierta;
   var ficha = f.fichas[abierta - 1] || {};
+  var banco = bancoDeInterprete(abierta);
 
   (cat.rasgos || []).forEach(function(rasgo){
     var valor = ficha[rasgo.id] || '';
+    var opciones = opcionesDelRasgo(rasgo, banco);
     // Un valor escrito a mano no coincide con ningún botón: entonces ninguno
     // sale marcado y el texto se ve en su casilla, que es lo correcto.
-    var enLista = (rasgo.opciones || []).indexOf(valor) !== -1;
+    var enLista = opciones.indexOf(valor) !== -1;
     html += '<div style="margin-bottom:14px">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
         '<span style="font-size:12.5px;font-weight:700;color:var(--tenue)">' + esc(rasgo.etiqueta) + '</span>' +
@@ -1708,7 +1764,7 @@ function htmlFichasPersonaje(){
           : '<span class="mini tenue">lo decide el director</span>') +
       '</div>' +
       '<div class="chips">';
-    (rasgo.opciones || []).forEach(function(op){
+    opciones.forEach(function(op){
       html += '<button class="chip' + (valor === op ? ' on' : '') + '" data-accion="ficha-rasgo" ' +
         'data-rasgo="' + rasgo.id + '" data-valor="' + esc(op) + '">' + esc(op) + '</button>';
     });
@@ -2661,7 +2717,8 @@ document.addEventListener('change', function(ev){
   var campo = el.getAttribute && el.getAttribute('data-campo');
   if (!campo || !estado.form) return;
   estado.form[campo] = el.value;
-  if (campo === 'genero') { ajustarTipos(); pintarEn('tipos-interprete', htmlTipos()); }
+  if (campo === 'genero') { ajustarTipos(); limpiarFichasDeOtroGenero(); pintar(); }
+  if (campo === 'tipo') { limpiarFichasDeOtroGenero(); pintar(); }
   if (campo === 'escenario' || campo === 'estilo') pintar();
 });
 
