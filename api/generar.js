@@ -87,7 +87,12 @@ module.exports = async function handler(req, res) {
   try {
     if (req.method === 'POST') {
       const datos = await cuerpo(req);
-      return await lanzar(res, texto(requerido(datos, 'id')), texto(requerido(datos, 'activo')));
+      return await lanzar(
+        res,
+        texto(requerido(datos, 'id')),
+        texto(requerido(datos, 'activo')),
+        datos.metodo ? texto(datos.metodo) : '',
+      );
     }
     const q = consulta(req);
     return await empujar(
@@ -120,7 +125,7 @@ function consulta(req) {
 // POST — lanzar
 // ---------------------------------------------------------------------------
 
-async function lanzar(res, id, activoId) {
+async function lanzar(res, id, activoId, metodo) {
   const inicio = Date.now();
 
   // FASE 1 — dejar constancia. Es lo único que va dentro del candado: mientras
@@ -133,7 +138,7 @@ async function lanzar(res, id, activoId) {
     // El motivo va tal cual como lo da progreso.js: ya está redactado para el
     // usuario y dice exactamente qué falta aprobar.
     if (!puerta.ok) throw new dominio.DomainError(puerta.reason, 409);
-    const gen = dominio.startGeneration(p, activo, argumentosDe(p, activo));
+    const gen = dominio.startGeneration(p, activo, argumentosDe(p, activo, metodo));
     return { genId: gen.id };
   });
 
@@ -183,7 +188,7 @@ async function lanzar(res, id, activoId) {
  * que es donde el director artístico dejó la continuidad. Lo único que se
  * decide en este momento es la semilla y qué referencias aprobadas hay.
  */
-function argumentosDe(proyecto, activo) {
+function argumentosDe(proyecto, activo, metodo) {
   const spec = activo.spec || {};
   const referenceAssetIds = (spec.referenceAssetIds || []).filter((rid) => {
     const dep = proyecto.assets.find((a) => a.id === rid);
@@ -200,7 +205,15 @@ function argumentosDe(proyecto, activo) {
     // Semilla nueva en cada intento: regenerar tiene que dar algo distinto, o el
     // botón «Regenerar» no serviría de nada. Se guarda para poder repetirlo.
     seed: crypto.randomInt(1, 2147483646),
+    // Cómo generarlo. Sólo el ambiente ofrece dos caminos; el resto lo ignora.
+    metodo: activo.kind === 'ambient' ? metodoDeAmbiente(metodo) : '',
   };
+}
+
+/** Los dos caminos del ambiente. Sintetizado es el de siempre y el de por defecto. */
+const AMBIENTE_METODOS = ['sintetizado', 'ia'];
+function metodoDeAmbiente(metodo) {
+  return AMBIENTE_METODOS.indexOf(String(metodo || '')) !== -1 ? String(metodo) : 'sintetizado';
 }
 
 /**
@@ -345,6 +358,19 @@ async function hacerAmbiente(proyecto, activo, gen, inicio) {
   const spec = activo.spec || {};
   const brief = (proyecto.plan && proyecto.plan.ambient) || {};
   const durationSec = Number(brief.durationSec || spec.durationSec || 60);
+
+  // DOS CAMINOS, Y LOS DOS SE GUARDAN.
+  //
+  // El sintetizador de casa monta el ambiente con ocho capas fijas —viento,
+  // agua, pájaros, tráfico— y no sabe hacer nada más: una calle en ruinas le
+  // sale igual que una plaza. La IA sí entiende el escenario, pero cuesta y a
+  // veces se pasa de músico.
+  //
+  // El usuario pidió las dos: «generaré una con cada una y la que suene mejor,
+  // yo decidiré cuál utilizar». Y eso ya sabe hacerlo la herramienta sin
+  // inventar nada: cada activo guarda TODAS sus generaciones y se aprueba una.
+  // Lo único que faltaba era poder elegir el método de cada intento.
+  if (gen.metodo === 'ia') return ambienteConIA(proyecto, activo, gen, inicio, durationSec);
 
   let wav;
   try {
@@ -503,6 +529,49 @@ async function arrancarMusica(proyecto, activo, gen, inicio) {
   });
 
   return hacerFragmento(registrado, activo.id, gen.id, 1, inicio);
+}
+
+/**
+ * El ambiente compuesto por la IA, en una sola llamada.
+ *
+ * Cabe entera en la petición igual que el sintetizado: es un solo archivo y no
+ * hace falta el ir y venir de la música, que compone tres minutos.
+ */
+async function ambienteConIA(proyecto, activo, gen, inicio, durationSec) {
+  const brief = (proyecto.plan && proyecto.plan.ambient) || {};
+  const { token, projectId } = await auth();
+
+  let r;
+  try {
+    r = await vertex.generarAmbiente({
+      token,
+      projectId,
+      prompt: brief.promptEn || (activo.spec && activo.spec.promptEn) || brief.prompt,
+      segundos: durationSec,
+      presupuestoMs: presupuestoRestante(inicio),
+    });
+  } catch (e) {
+    throw prefijar(e, 'No se pudo componer el ambiente con la IA');
+  }
+
+  const bytes = Buffer.from(r.base64, 'base64');
+  const ruta = almacen.rutaGeneracion(proyecto.id, activo, gen.index, r.extension || '.wav');
+  await almacen.subirMedio(ruta, bytes, r.mimeType || 'audio/wav');
+
+  if (r.formato) {
+    await anotar(proyecto.id, (p) => {
+      const a = dominio.getAsset(p, activo.id);
+      const g = generacionDe(a, gen.id);
+      if (g && g.provider) g.provider.formato = r.formato;
+    });
+  }
+
+  return cerrar(proyecto.id, activo.id, gen.id, {
+    path: ruta,
+    bytes: bytes.length,
+    mimeType: r.mimeType || 'audio/wav',
+    durationSec,
+  }, Date.now() - (inicio || Date.now()));
 }
 
 /** El trabajo apuntado en una generación, si lo tiene. */

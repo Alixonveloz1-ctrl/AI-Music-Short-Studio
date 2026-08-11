@@ -155,6 +155,11 @@ function startGeneration(project, asset, args) {
     provider: args.provider,
     seed: args.seed,
   };
+  // CÓMO se generó. Hoy sólo lo usa el ambiente, que se puede hacer de dos
+  // maneras —sintetizado aquí mismo o compuesto por la IA— y el usuario compara
+  // las dos y aprueba la que mejor suene. Va en la generación y no en el activo
+  // porque el activo tiene varias, cada una hecha a su manera.
+  if (args.metodo) generation.metodo = args.metodo;
   asset.generations.push(generation);
   asset.status = 'generating';
   asset.locked = false;

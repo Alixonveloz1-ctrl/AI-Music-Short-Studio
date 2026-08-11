@@ -361,6 +361,86 @@ async function principal() {
       'la caja de ritmos en la calle debería ir más rápida que el arpa en la iglesia');
   });
 
+  await comprobarAsync('el ambiente se puede hacer de dos maneras y las dos se guardan', async () => {
+    // «Generaré una música de ambiente como la estás haciendo ahora, generaré
+    // otra con la IA, y la que suena mejor, yo decidiré utilizarla. Debe haber
+    // un botón para poder seleccionar cuál utilizar.»
+    //
+    // La comparación y la aprobación ya existían: cada activo guarda TODAS sus
+    // generaciones. Lo que faltaba era poder elegir el método de cada intento.
+    const p = nuevo();
+    const a = dominio.getAsset(p, 'ambient');
+    cierto(a, 'no hay activo de ambiente');
+
+    const uno = dominio.startGeneration(p, a, {
+      prompt: 'x', negativePrompt: '', referenceAssetIds: [], provider: { name: 'local' },
+      seed: 1, metodo: 'sintetizado',
+    });
+    dominio.completeGeneration(p, a, uno, { path: 'a.wav', bytes: 10, mimeType: 'audio/wav' });
+    const dos = dominio.startGeneration(p, a, {
+      prompt: 'x', negativePrompt: '', referenceAssetIds: [], provider: { name: 'Lyria' },
+      seed: 2, metodo: 'ia',
+    });
+    dominio.completeGeneration(p, a, dos, { path: 'b.mp3', bytes: 20, mimeType: 'audio/mpeg' });
+
+    igual(a.generations.length, 2, 'no se guardaron las dos versiones');
+    igual(a.generations[0].metodo, 'sintetizado', 'la primera no recuerda su metodo');
+    igual(a.generations[1].metodo, 'ia', 'la segunda no recuerda su metodo');
+    // Ninguna queda aprobada sola: la eleccion es del usuario (PRD 4).
+    igual(a.status, 'review', 'una de las dos se aprobo sola');
+    dominio.approveGeneration(p, 'ambient', dos.id);
+    igual(a.approvedGenerationId, dos.id, 'no se pudo elegir la de IA');
+    cierto(a.generations.some((g) => g.id === uno.id), 'se perdio la version sintetizada');
+  });
+
+  await comprobarAsync('al ambiente con IA se le prohibe hacer musica', async () => {
+    // Se le pide a un modelo de MUSICA que no haga musica. Sin insistir, devuelve
+    // una pieza con melodia y pulso, y entonces suenan dos musicas a la vez.
+    const c = Object.assign({}, CONFIG, {
+      scenarioId: 'street',
+      scenarioCustom: 'via publica abandonada, mundo postapocaliptico lleno de zombis',
+    });
+    const armado = await construirPlan(c);
+    const en = armado.plan.ambient.promptEn;
+    cierto(en, 'el plan no lleva encargo de ambiente en ingles');
+
+    // Lo que el usuario escribio manda, y las capas del catalogo NO aparecen:
+    // para «Via publica» el catalogo pide «trafico lejano, pasos, voces», que es
+    // justo lo contrario de una calle abandonada sin nadie.
+    cierto(/ruined concrete|metal groaning/.test(en),
+      'su escena no se convirtio en sonidos concretos: ' + en);
+    cierto(!/distant traffic|footsteps/.test(en),
+      'las capas del catalogo contradicen lo que escribio: ' + en);
+
+    // NI UNA PALABRA EN ESPAÑOL. Lyria rechaza el encargo entero con
+    // «Unsupported language detected» en cuanto detecta otro idioma, asi que el
+    // texto del usuario se LEE y se traduce a sonidos, nunca se pega tal cual.
+    cierto(!/[áéíóúñ¿¡]/i.test(en), 'queda español en el encargo del ambiente: ' + en);
+
+    // Sin escenario propio, las capas del catalogo si valen, y en ingles.
+    const sinTexto = await construirPlan(Object.assign({}, CONFIG, {
+      scenarioId: 'forest', creativeDirection: '',
+    }));
+    const bosque = sinTexto.plan.ambient.promptEn;
+    cierto(/wind through leaves|birds/.test(bosque), 'sin descripcion propia faltan las capas del escenario');
+    cierto(!/[áéíóúñ¿¡]/i.test(bosque), 'las capas del catalogo llegan en español: ' + bosque);
+
+    // Y las 47 frases del catalogo estan traducidas: si mañana se añade un
+    // escenario con una frase nueva sin traducir, se caeria en silencio.
+    const catalogoMod = require(path.join(RAIZ, 'api/_lib/catalogo.js'));
+    for (const esc of catalogoMod.SCENARIOS) {
+      const suyo = await construirPlan(Object.assign({}, CONFIG, {
+        scenarioId: esc.id, creativeDirection: '', scenarioCustom: '',
+      }));
+      const t = suyo.plan.ambient.promptEn;
+      cierto(!/[áéíóúñ¿¡]/i.test(t), 'el escenario «' + esc.label + '» mete español: ' + t);
+      cierto(/What is heard:/.test(t), 'el escenario «' + esc.label + '» se queda sin sonidos');
+    }
+
+    // Y el sintetizador sigue teniendo su lista, que es lo unico que entiende.
+    cierto(armado.plan.ambient.layers.length, 'el sintetizador se quedo sin capas');
+  });
+
   comprobar('los 89 instrumentos tienen nombre inglés', () => {
     // El primer alias de la batería era «bateria», el nombre español sin tilde.
     // Los ids del catálogo SÍ están en inglés por construcción, así que son

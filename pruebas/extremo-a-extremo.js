@@ -176,7 +176,13 @@ async function principal() {
         if (!pendientes.length) break;
         for (const a of pendientes) {
           if (a.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: a.id } });
-          const g = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: a.id } });
+          // El ambiente se genera CON IA en esta prueba. Es el camino nuevo y el
+          // que puede romperse sin que nadie se entere: el sintetizado no llama
+          // a Google, así que un fallo en la llamada al modelo no aparecería.
+          const g = await pedir(generar, {
+            metodo: 'POST',
+            cuerpo: a.kind === 'ambient' ? { id, activo: a.id, metodo: 'ia' } : { id, activo: a.id },
+          });
           if (g.codigo >= 400) throw new Error(a.id + ': ' + JSON.stringify(g.cuerpo).slice(0, 200));
           let gen = g.cuerpo.gen;
           // Empujar el modelo por pasos hasta que la generación cierre.
@@ -302,6 +308,19 @@ async function principal() {
         'Google mandó ' + enviado.length + ' bytes de ' + google.audioMime + ' y se guardaron ' +
         pista.length + '. El audio empaquetado NO se toca: reinterpretarlo es lo que suena a ruido');
     }
+  });
+
+  await paso('el ambiente se generó con IA y lo dice', async () => {
+    const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
+    const a = p.cuerpo.proyecto.assets.find((x) => x.kind === 'ambient');
+    cierto(a, 'no hay activo de ambiente');
+    const aprobada = (a.generations || []).find((g) => g.id === a.approvedGenerationId);
+    cierto(aprobada, 'el ambiente no tiene generación aprobada');
+    cierto(aprobada.metodo === 'ia', 'el ambiente no recuerda que se hizo con IA: ' + aprobada.metodo);
+    // Y su archivo existe de verdad en el bucket, con firma de audio.
+    cierto(aprobada.file && aprobada.file.path, 'el ambiente no dejó archivo');
+    const bytes = objetos.get(aprobada.file.path);
+    cierto(bytes && bytes.length > 100, 'el archivo del ambiente está vacío');
   });
 
   await paso('el paquete .zip existe, se abre y trae el vídeo y el texto', async () => {

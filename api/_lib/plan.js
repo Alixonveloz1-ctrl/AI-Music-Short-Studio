@@ -395,9 +395,14 @@ function briefMusical(config, brief, bible) {
 /** El encargo para el lecho ambiental, que siempre va por debajo de la música. */
 function briefAmbiental(config, brief) {
   const escenario = SCENARIOS_BY_ID.get(config.scenarioId);
-  const capas = brief.ambient.layers.length
+  // Las capas que intentará montar el sintetizador. Se le añade lo que escribió
+  // el usuario: sus ocho capas se eligen por palabras sueltas, así que si él
+  // escribió «viento» al menos esa la va a acertar. No arregla el sintetizador
+  // —no sabe hacer metal chirriando— pero le da lo poco que puede aprovechar.
+  const capas = (brief.ambient.layers.length
     ? brief.ambient.layers
-    : (escenario && escenario.ambience) || ['ambiente neutro'];
+    : (escenario && escenario.ambience) || ['ambiente neutro']
+  ).concat(String(config.scenarioCustom || '').trim() ? [config.scenarioCustom.trim()] : []);
 
   const prompt = [
     'Lecho de sonido ambiental de ' + config.durationSec + ' segundos para ' +
@@ -414,7 +419,134 @@ function briefAmbiental(config, brief) {
     acoustics: (escenario && escenario.acoustics) || 'natural',
     durationSec: config.durationSec,
     prompt,
+    // El mismo encargo en inglés, para cuando el ambiente se genera con la IA.
+    // El sintetizador usa `layers`; la IA usa esto.
+    promptEn: promptAmbienteEn(config, escenario, capas),
   };
+}
+
+/**
+ * EL ENCARGO DEL AMBIENTE EN INGLÉS.
+ *
+ * Lo que el sintetizador no puede hacer y esto sí: entender dónde ocurre la
+ * escena. El usuario lo pidió con su propio ejemplo — «un mundo postapocalíptico
+ * lleno de zombis: viento, metal chirriando, gruñidos a lo lejos» — y el
+ * sintetizador, con sus ocho capas de viento, agua y pájaros, no tiene con qué.
+ *
+ * PERO SU TEXTO NO SE PUEDE PEGAR TAL CUAL. Lyria sólo entiende inglés y
+ * rechaza el encargo entero con «Unsupported language detected» en cuanto
+ * detecta otro idioma; meterle «vía pública abandonada llena de zombis» sería
+ * dejar el ambiente sin generar. Así que su texto se LEE y se convierte en
+ * sonidos concretos en inglés, igual que se hace con el carácter de la música.
+ *
+ * Sobre las voces: la pieza musical no lleva ninguna y eso no se toca. Pero un
+ * ambiente sí puede llevar presencia humana —una multitud lejana ya existe en el
+ * sintetizador— y el ejemplo del usuario la necesita. Se prohíbe lo que es
+ * narración —palabras, canto, diálogo— y se deja pasar la textura.
+ */
+
+/**
+ * Lo que el usuario escribe, convertido en sonidos.
+ *
+ * No es un traductor: es la lista de sitios y situaciones que cambian por
+ * completo a qué suena una escena. Se acumulan todas las que aparezcan, porque
+ * «ruinas de noche bajo la lluvia» son las tres cosas a la vez.
+ */
+const AMBIENTE_ESCRITO = [
+  { palabras: ['postapocalip', 'post-apocalip', 'apocalip', 'ruinas', 'ruina', 'zombi', 'zombie', 'devastad'],
+    suena: 'wind moving through ruined concrete and broken windows, distant metal groaning and creaking, ' +
+      'loose debris shifting, a low ominous rumble underneath, and far-off non-verbal groans' },
+  { palabras: ['abandonad', 'desierta', 'desierto', 'vacio', 'vacío', 'solitari', 'nadie'],
+    suena: 'an empty place with no people in it: thin wind, hollow distant echoes, long silences' },
+  { palabras: ['lluvia', 'lloviendo', 'llueve'], suena: 'steady rain and water dripping off edges' },
+  { palabras: ['tormenta', 'truen'], suena: 'gusting wind and distant thunder' },
+  { palabras: ['nieve', 'nevad', 'hielo', 'frio', 'frío'], suena: 'the muffled quiet of snow, cold thin wind' },
+  { palabras: ['fuego', 'incendi', 'llamas', 'hogera', 'hoguera'], suena: 'crackling fire and settling embers' },
+  { palabras: ['guerra', 'batalla', 'bombard'], suena: 'far-off explosions, falling debris, wind over rubble' },
+  { palabras: ['fabrica', 'fábrica', 'industrial', 'almacen', 'almacén'],
+    suena: 'a low machinery hum, metal ticking as it cools, wide concrete reverb' },
+  { palabras: ['cueva', 'tunel', 'túnel', 'subterran', 'subterrán', 'metro'],
+    suena: 'water dripping in a deep enclosed space with a long echo' },
+  { palabras: ['mar', 'playa', 'oceano', 'océano', 'costa'], suena: 'waves, sea wind and distant gulls' },
+  { palabras: ['bosque', 'selva', 'arbol', 'árbol'], suena: 'leaves moving, birds, branches creaking' },
+  { palabras: ['ciudad', 'urban', 'calle'], suena: 'distant traffic and the low hum of a city' },
+  { palabras: ['multitud', 'gente', 'publico', 'público'], suena: 'a distant crowd murmur, no words audible' },
+  { palabras: ['noche', 'nocturn'], suena: 'the stillness of night air, faint distant insects' },
+  { palabras: ['viento'], suena: 'wind' },
+  { palabras: ['metal', 'chirri', 'oxid'], suena: 'metal creaking and groaning' },
+];
+
+/**
+ * Las frases de ambiente del catálogo, en inglés.
+ *
+ * Son 47 en total y todas están aquí: es un vocabulario cerrado, así que se
+ * traduce entero en vez de intentar adivinarlo. Lo que no esté se descarta —
+ * mejor una capa de menos que una palabra en español que tumbe la llamada.
+ */
+const AMBIENTE_CATALOGO_EN = {
+  'agua corriente': 'running water', 'agua suave': 'gentle water',
+  'ambiente de sala': 'room tone of a hall', 'ambiente del público': 'audience presence',
+  'ambiente neutro': 'neutral room tone', 'aves acuáticas': 'water birds',
+  'brisa': 'a light breeze', 'campanillas lejanas': 'distant small bells',
+  'ciudad lejana': 'a distant city', 'crujido de ramas': 'branches creaking',
+  'eco abierto': 'open-air echo', 'eco del recinto': 'the echo of a large venue',
+  'eco lejano': 'a distant echo', 'gaviotas': 'gulls', 'grillos': 'crickets',
+  'hojas': 'leaves', 'insectos': 'insects', 'olas': 'waves', 'palomas': 'pigeons',
+  'pasos': 'footsteps', 'pájaros': 'birds', 'pájaros lejanos': 'distant birds',
+  'público': 'an audience', 'público en silencio': 'a silent audience',
+  'reverberación': 'reverb', 'reverberación cálida': 'warm reverb',
+  'reverberación larga': 'long reverb', 'reverberación suave': 'soft reverb',
+  'ruido de casa muy leve': 'the very faint noise of a house',
+  'rumor urbano': 'an urban murmur', 'sala en silencio': 'a silent hall',
+  'silencio amplio': 'wide silence', 'silencio denso': 'dense silence',
+  'silencio interior': 'indoor silence', 'silencio tratado': 'treated silence',
+  'tráfico lejano': 'distant traffic', 'viento': 'wind',
+  'viento de altura': 'high-altitude wind', 'viento de arena': 'wind carrying sand',
+  'viento en altura': 'high wind', 'viento entre las hojas': 'wind through leaves',
+  'viento marino': 'sea wind', 'viento sobre la hierba': 'wind over grass',
+  'viento suave': 'a soft wind', 'voces': 'distant voices', 'voces lejanas': 'far-off voices',
+};
+
+const ACUSTICA_AMBIENTE_EN = {
+  dry: 'dry and close, almost no reverb',
+  natural: 'a natural outdoor space with some distance',
+  hall: 'a large reverberant hall',
+};
+
+function sonidosEscritos(...textos) {
+  const texto = textos.map(sinTildes).filter(Boolean).join(' . ');
+  if (!texto) return [];
+  const salida = [];
+  for (const entrada of AMBIENTE_ESCRITO) {
+    if (entrada.palabras.some((pal) => texto.indexOf(sinTildes(pal)) !== -1)) salida.push(entrada.suena);
+  }
+  return salida;
+}
+
+function promptAmbienteEn(config, escenario, capas) {
+  // Lo que el usuario describió del LUGAR manda sobre las capas del catálogo:
+  // para «Vía pública» el catálogo pide «tráfico lejano, pasos, voces», y eso es
+  // justo lo contrario de una calle abandonada en un mundo sin nadie.
+  const suyos = sonidosEscritos(config.scenarioCustom, config.creativeDirection);
+  const delCatalogo = capas
+    .map((c) => AMBIENTE_CATALOGO_EN[String(c).trim().toLowerCase()])
+    .filter(Boolean);
+  const lista = suyos.length ? suyos : delCatalogo;
+
+  return [
+    'The background sound of a place, for a short film.',
+    'Setting: ' + ((escenario && escenario.label ? escenarioEn(escenario) : 'an open space')) + '.',
+    lista.length ? 'What is heard: ' + lista.join('; ') + '.' : '',
+    'Space: ' + (ACUSTICA_AMBIENTE_EN[(escenario && escenario.acoustics)] || ACUSTICA_AMBIENTE_EN.natural) + '.',
+    'Whatever this place would really sound like: weather, materials, distance, room tone. ' +
+      'Distant non-verbal human or creature presence is allowed if the scene calls for it, ' +
+      'but NO words, NO speech, NO singing and NO narration.',
+  ].filter(Boolean).join('\n');
+}
+
+/** El id del escenario ya está en inglés, igual que el de los instrumentos. */
+function escenarioEn(escenario) {
+  return String(escenario.id).replace(/_/g, ' ');
 }
 
 module.exports = { construirPlan, briefMusical, briefAmbiental };

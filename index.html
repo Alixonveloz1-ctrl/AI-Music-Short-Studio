@@ -692,7 +692,12 @@ var api = {
   },
   proyecto: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id)); },
   borrar: function(id){ return pedir('proyecto?id=' + encodeURIComponent(id), { metodo:'DELETE' }); },
-  generar: function(id, activo){ return pedir('generar', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
+  generar: function(id, activo, comoSeHace){
+    var cuerpo = { id:id, activo:activo };
+    // `comoSeHace` sólo lo usa el ambiente: 'sintetizado' o 'ia'.
+    if (comoSeHace) cuerpo.metodo = comoSeHace;
+    return pedir('generar', { metodo:'POST', cuerpo:cuerpo });
+  },
   estadoGeneracion: function(id, activo, gen){
     return pedir('generar?id=' + encodeURIComponent(id) + '&activo=' + encodeURIComponent(activo) + '&gen=' + encodeURIComponent(gen));
   },
@@ -1952,12 +1957,17 @@ function htmlRevision(p){
         : g.status === 'rejected' ? ' ✕'
         : g.status === 'failed' ? ' !'
         : g.status === 'generating' ? ' …' : '';
+      // Con qué se hizo, para poder comparar sintetizado contra IA de un vistazo.
+      if (g.metodo === 'ia') marca = ' IA' + marca;
+      else if (g.metodo === 'sintetizado') marca = ' ~' + marca;
       return '<button class="chip' + (gen && gen.id === g.id ? ' on' : '') + '" data-accion="ver-gen" data-gen="' + esc(g.id) + '">#' + esc(g.index) + marca + '</button>';
     }).join('') + '</div>';
   }
 
   if (gen) {
     var prov = gen.provider ? ((gen.provider.name || '') + (gen.provider.model ? ' · ' + gen.provider.model : '') + (gen.provider.formato ? ' · ' + gen.provider.formato : '')) : '';
+    if (gen.metodo === 'ia') prov = 'compuesto con IA' + (prov ? ' · ' + prov : '');
+    else if (gen.metodo === 'sintetizado') prov = 'sintetizado en el servidor';
     var dur = gen.file && gen.file.durationSec ? ' · ' + Number(gen.file.durationSec).toFixed(1) + ' s' : '';
     var peso = gen.file && gen.file.bytes ? ' · ' + fmtBytes(gen.file.bytes) : '';
     var tardo = gen.elapsedMs ? ' · tardó ' + Math.round(gen.elapsedMs / 1000) + ' s' : '';
@@ -1977,8 +1987,24 @@ function htmlRevision(p){
   html += '<div class="acciones">' +
     '<button class="btn ok" data-accion="aprobar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen ? gen.id : '') + '"' +
       (esperaDecision && !estado.trabajando ? '' : ' disabled') + '>Aprobar</button>' +
-    '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '"' + (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>' +
+    // El ambiente se puede hacer de dos maneras y el usuario compara. Los demás
+    // activos tienen un solo camino, así que un botón basta.
+    (a.kind === 'ambient'
+      ? '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '" data-metodo="ia"' +
+        (puedePulsarGenerar ? '' : ' disabled') + '>Generar con IA</button>'
+      : '<button class="btn" data-accion="generar" data-activo="' + esc(a.id) + '"' +
+        (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>') +
   '</div>';
+
+  if (a.kind === 'ambient') {
+    html += '<button class="btn ancho" style="margin-top:9px" data-accion="generar" data-activo="' + esc(a.id) + '" data-metodo="sintetizado"' +
+        (puedePulsarGenerar ? '' : ' disabled') + '>Generar sintetizado</button>' +
+      '<p class="tenue mini" style="margin-top:8px">' +
+        '<b>Con IA</b> entiende tu escena —viento entre ruinas, metal chirriando— pero cuesta y tarda. ' +
+        '<b>Sintetizado</b> es instantáneo y gratis, pero sólo sabe hacer ocho sonidos: viento, hojas, agua, ' +
+        'pájaros, insectos, murmullo, tráfico y zumbido.<br>' +
+        'Genera con las dos y aprueba la que mejor suene: cada intento se guarda y puedes compararlos arriba.</p>';
+  }
 
   if (esperaDecision) {
     html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="rechazar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen.id) + '">Descartar esta generación</button>';
@@ -2445,7 +2471,7 @@ async function crearProyecto(){
   });
 }
 
-async function accionGenerar(activoId){
+async function accionGenerar(activoId, comoSeHace){
   var p = estado.proyecto;
   if (!p) return;
   var a = activos(p).find(function(x){ return x.id === activoId; });
@@ -2462,7 +2488,7 @@ async function accionGenerar(activoId){
 
   await ejecutar(async function(){
     if (a.locked) await api.desbloquear(p.id, a.id);
-    await api.generar(p.id, a.id);
+    await api.generar(p.id, a.id, comoSeHace);
     estado.genVista = null;
     await cargarProyecto(p.id);
     latir(true);
@@ -2622,7 +2648,7 @@ document.addEventListener('click', function(ev){
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
   if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
   if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
-  if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo')); return; }
+  if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo'), el.getAttribute('data-metodo')); return; }
   if (accion === 'aprobar') { accionAprobar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'montar') { accionMontar(); return; }
@@ -2877,7 +2903,9 @@ async function colaTic(){
   c.aviso = '';
   pintar();
   try {
-    await api.generar(p.id, siguiente.id);
+    // En la cola, el ambiente va sintetizado: es instantáneo y gratis, y el
+    // usuario puede pedir después la versión con IA y comparar las dos.
+    await api.generar(p.id, siguiente.id, siguiente.kind === 'ambient' ? 'sintetizado' : '');
     c.hechos += 1;
     // Ha ido bien: se afloja el freno poco a poco por si la cuota se abrió.
     if (c.freno) c.freno = Math.max(0, Math.round(c.freno * 0.6));
