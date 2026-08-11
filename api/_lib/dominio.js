@@ -612,6 +612,10 @@ function buildAssets(config, plan) {
       spec: {
         objective: 'Crear el lecho ambiental coherente con el escenario.',
         prompt: plan.ambient.prompt,
+        // El de arriba, en español, es el que ve el usuario. Éste es el que se
+        // le manda al modelo cuando el ambiente se compone con IA, que sólo
+        // entiende inglés — y es también el que se puede reescribir a mano.
+        promptEn: plan.ambient.promptEn || '',
         negativePrompt: 'voces, palabras, música',
         referenceAssetIds: [],
         continuityNotes: [`Capas: ${plan.ambient.layers.join(', ')}`],

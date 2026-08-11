@@ -17,7 +17,9 @@
 const { planStructure } = require('./productor');
 const { buildVisualBible } = require('./arte');
 const { plan: planificar } = require('./planificador');
-const { INSTRUMENTS_BY_ID, FORMATIONS_BY_ID, SCENARIOS_BY_ID } = require('./catalogo');
+const {
+  INSTRUMENTS_BY_ID, FORMATIONS_BY_ID, SCENARIOS_BY_ID, generoDe,
+} = require('./catalogo');
 
 /**
  * Construye el plan completo a partir de la configuración del usuario.
@@ -237,6 +239,12 @@ const CARACTER_EN = {
   'tierno': 'tender', 'rítmico': 'rhythm-driven', 'contundente': 'hard-hitting',
   'rotundo': 'bold', 'lírico': 'lyrical', 'expresivo': 'expressive',
   'claro': 'clear', 'articulado': 'articulate', 'brillante': 'bright',
+  // Los que trae cada género musical.
+  'cinematográfico': 'cinematic', 'elegante': 'elegant', 'flotante': 'floating',
+  'sencillo': 'simple', 'festivo': 'festive', 'virtuoso': 'virtuosic',
+  'intenso': 'intense', 'pasional': 'passionate', 'romántico': 'romantic',
+  'bailable': 'danceable', 'suave': 'soft', 'sofisticado': 'sophisticated',
+  'urgente': 'urgent', 'relajado': 'laid-back',
 };
 
 const ACUSTICA_EN = { dry: 'dry, close and intimate', natural: 'natural room reverb', hall: 'large hall reverb' };
@@ -334,12 +342,54 @@ function contextoDelUsuario(config) {
   return frases.slice(0, 3).join(', ');
 }
 
+/**
+ * CÓMO SE TOCA EL INSTRUMENTO, en inglés.
+ *
+ * El catálogo guarda la técnica en español —«rasgueo rápido de cuatro
+ * cuerdas», «arco sobre cuerdas», «baquetas y pedales»— y esa palabra cambia la
+ * música entera: un cuatro rasgueado y un cuatro punteado no se parecen en
+ * nada. El vídeo SÍ usaba ese dato y la música no, y por eso el personaje
+ * rasgueaba joropo mientras sonaba una pieza melancólica de cuerdas pulsadas
+ * una a una.
+ *
+ * No hace falta traducir las 89 técnicas: basta reconocer el gesto, que es un
+ * puñado y es lo único que le importa a un compositor.
+ */
+const GESTOS = [
+  { palabras: ['rasgue', 'rasgu'], en: 'strummed hard and fast' },
+  { palabras: ['arco'], en: 'bowed' },
+  { palabras: ['baqueta', 'pedal', 'golpe', 'maza', 'percut'], en: 'struck' },
+  { palabras: ['punteo', 'pulsad', 'pua', 'púa', 'dedos sobre las cuerdas', 'pellizc'], en: 'plucked' },
+  { palabras: ['soplo', 'embocadura', 'boquilla', 'aire', 'lengueta', 'lengüeta'], en: 'blown' },
+  { palabras: ['tecla'], en: 'played on keys' },
+  { palabras: ['fuelle'], en: 'played with bellows' },
+  { palabras: ['secuenciad', 'pads'], en: 'sequenced' },
+];
+
+function gestoEn(instrumentos) {
+  const texto = sinTildes(instrumentos.map((i) => i.technique || '').join(' . '));
+  for (const g of GESTOS) {
+    if (g.palabras.some((pal) => texto.indexOf(sinTildes(pal)) !== -1)) return g.en;
+  }
+  return '';
+}
+
+// El género —el elegido, el escrito a mano o el que le pega al instrumento— se
+// resuelve en el catálogo, no aquí, porque lo lee también la parte visual y un
+// require cruzado entre el plan y la dirección de arte sería circular.
+
 function promptMusicalEn(config, brief, instrumentos, formacion, escenario, contexto) {
+  const genero = generoDe(config, instrumentos);
+  const gesto = gestoEn(instrumentos);
   const nombres = instrumentos.map(instrumentoEn);
   return [
     'Instrumental music for a short film. ' + config.durationSec + ' seconds long.',
     'Instruments: ' + (nombres.join(', ') || 'a single solo instrument') +
       '. Ensemble: ' + String((formacion && formacion.id) || 'solo').replace(/_/g, ' ') + '.',
+    // EL GÉNERO VA ARRIBA. Es lo que más define lo que va a componer, más que
+    // cualquier adjetivo: «joropo venezolano» dice más que «vivo, festivo».
+    genero && genero.en ? 'Genre: ' + genero.en + '.' : '',
+    gesto ? 'How it is physically played: ' + gesto + '. Keep that gesture, at whatever intensity the genre calls for.' : '',
     'Mood: ' + (enLista(brief.music.mood, CARACTER_EN) || 'contemplative') + '.',
     // Una batería no tiene tonalidad ni escala. Pedírselas es darle al modelo
     // una instrucción que sólo puede cumplir metiendo un instrumento afinado
@@ -411,6 +461,10 @@ function briefMusical(config, brief, bible) {
     instrumentation: instrumentacion,
     // Los mismos, en inglés, que es lo que entiende Lyria.
     instrumentationEn: instrumentos.map(instrumentoEn),
+    // El género ya resuelto —el elegido o el que le pega al instrumento— y con
+    // cuánta energía se toca. El VÍDEO lee esto: es lo que evita que el
+    // personaje rasguee joropo mientras suena una balada.
+    genre: generoDe(config, instrumentos),
     style: brief.music.style,
     mood: brief.music.mood,
     tempoBpm: brief.music.tempoBpm,

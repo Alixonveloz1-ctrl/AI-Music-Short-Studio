@@ -30,6 +30,8 @@ const {
   PERFORMER_TYPES_BY_ID,
   SCENARIOS_BY_ID,
   VISUAL_STYLES_BY_ID,
+  MUSIC_GENRES_BY_ID,
+  generoSugerido,
 } = require('./catalogo.js');
 const { shotTypeLabel, cameraMoveLabel } = require('./arte.js');
 const { creativeBriefJsonSchema, normalizeCreativeBrief } = require('./brief.js');
@@ -198,13 +200,40 @@ function caracterEscritoPorElUsuario(...textos) {
  * escenario y la familia del instrumento. El empuje —y con él el tempo— lo fija
  * la fuente de más rango que diga algo.
  */
+/**
+ * Un género convertido en una fuente de carácter, como las demás.
+ *
+ * `energia` es la palabra del catálogo y `empuje` la de aquí; son la misma idea
+ * contada dos veces porque el catálogo describe la música y esto describe el
+ * tempo. Devuelve null si el género no dice nada —«Otro», escrito a mano— para
+ * que la lista de fuentes lo descarte sola.
+ */
+const EMPUJE_POR_ENERGIA = { alta: 'duro', media: 'medio', suave: 'suave' };
+
+function fuenteDeGenero(genero) {
+  if (!genero || !genero.mood || !genero.mood.length) return null;
+  return { mood: genero.mood, empuje: EMPUJE_POR_ENERGIA[genero.energia] || 'medio' };
+}
+
 function caracterMusical(config, scenario, style, instruments, rng) {
+  // EL GÉNERO VA PRIMERO cuando el usuario lo eligió a mano: es la señal más
+  // clara que puede dar sobre la música, más que cualquier adjetivo. Y si dejó
+  // «que lo decida el director», el que le pega al instrumento entra al final,
+  // por detrás de todo lo demás, como una sugerencia y no como una orden.
+  const elegido = MUSIC_GENRES_BY_ID.get(config.musicGenreId || 'auto');
+  const aMano = elegido && elegido.id !== 'auto' && elegido.id !== 'other'
+    ? fuenteDeGenero(elegido)
+    : null;
+  const porInstrumento = !aMano && instruments.length
+    ? fuenteDeGenero(MUSIC_GENRES_BY_ID.get(generoSugerido(instruments[0])))
+    : null;
+
   const escrito = caracterEscritoPorElUsuario(config.creativeDirection, config.scenarioCustom, config.visualStyleCustom);
   const porEstilo = CARACTER_POR_ESTILO[config.visualStyleId] || null;
   const porEscenario = CARACTER_POR_ESCENARIO[config.scenarioId] || null;
   const familia = instruments.length ? CARACTER_POR_FAMILIA[instruments[0].categoryId] : null;
 
-  const fuentes = [escrito, porEstilo, porEscenario, familia].filter(Boolean);
+  const fuentes = [aMano, escrito, porEstilo, porEscenario, porInstrumento, familia].filter(Boolean);
   if (!fuentes.length) {
     const sorteado = pickFrom(rng, MOOD_SETS);
     return { mood: sorteado, tempoBpm: tempoFor(sorteado[0]) };

@@ -26,6 +26,8 @@ function instalarGoogleSimulado() {
   // a la segunda consulta.
   const objetos = new Map();
   const llamadas = [];
+  /** Cada petición a un modelo, con su cuerpo ya interpretado. */
+  const pedidos = [];
   let buildsLanzados = 0;
   const consultasBuild = new Map();
 
@@ -67,6 +69,15 @@ function instalarGoogleSimulado() {
     const u = String(url);
     const o = opciones || {};
     llamadas.push(o.method || 'GET');
+
+    // TODO LO QUE SE LE PIDE A UN MODELO SE APUNTA. Sin esto no hay forma de
+    // comprobar que lo que el usuario escribió a mano en el prompt es lo que
+    // acaba llegando a Google: se vería un 200 y una imagen, exactamente igual
+    // que si su corrección se hubiera perdido por el camino.
+    if (/aiplatform\.googleapis\.com/.test(u) && o.body) {
+      try { pedidos.push({ url: u, cuerpo: JSON.parse(String(o.body)) }); }
+      catch (e) { /* un cuerpo que no es JSON no interesa aquí */ }
+    }
 
     const ok = (cuerpo, cabeceras) => ({
       ok: true, status: 200,
@@ -318,7 +329,7 @@ function instalarGoogleSimulado() {
   // Lo que este simulacro dio por audio, para que la prueba pueda exigir que
   // llegue al bucket SIN QUE NADIE LO TOQUE, que es la regla que se saltó tres
   // veces: envolver audio comprimido en una cabecera WAV produce ruido blanco.
-  return { objetos, llamadas, audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
+  return { objetos, llamadas, pedidos, audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
 }
 
 /** Credenciales de mentira, con una clave RSA de verdad para poder firmar. */

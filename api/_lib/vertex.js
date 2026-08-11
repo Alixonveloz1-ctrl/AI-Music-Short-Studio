@@ -238,7 +238,8 @@ async function imagenConImagen(opciones) {
   if (p.raiFilteredReason) {
     throw new ProveedorError(
       'los filtros de contenido bloquearon esta imagen: ' + p.raiFilteredReason +
-      '. Cambia la descripción de la toma y vuelve a generar.',
+      '. Abre «Ver y editar el prompt» aquí abajo, cambia la palabra que lo dispara ' +
+      'y vuelve a generar.',
     );
   }
   const base64 = p.bytesBase64Encoded || p.imageBytes;
@@ -307,7 +308,8 @@ async function imagenConGemini(opciones) {
     if (/SAFETY|BLOCK|PROHIBITED|RECITATION/i.test(motivo)) {
       throw new ProveedorError(
         'los filtros de contenido bloquearon esta imagen (' + motivo +
-        '). Cambia la descripción de la toma y vuelve a generar.',
+        '). Abre «Ver y editar el prompt» aquí abajo, cambia la palabra que lo dispara ' +
+        'y vuelve a generar.',
       );
     }
     throw new ProveedorError(modelo.etiqueta + ' respondió sin imagen (' + motivo + ').');
@@ -467,7 +469,8 @@ async function consultarVideo(opciones) {
   if (resp.raiMediaFilteredCount > 0 && !(resp.videos || []).length) {
     return {
       listo: true,
-      error: 'los filtros de contenido bloquearon este clip. Cambia la descripción de la toma.',
+      error: 'los filtros de contenido bloquearon este clip. Abre «Ver y editar el prompt» ' +
+        'aquí abajo, cambia la palabra que lo dispara y vuelve a generar.',
     };
   }
   const video = (resp.videos || [])[0];

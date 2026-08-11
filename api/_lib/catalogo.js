@@ -279,6 +279,195 @@ const SCENARIOS_BY_ID = new Map(SCENARIOS.map((s) => [s.id, s]));
 // photography = lenguaje de óptica y grano que se le pasa al modelo de vídeo.
 // palette     = dirección de color de partida.
 
+// --- Género musical -----------------------------------------------------------
+//
+// POR QUÉ HACE FALTA ELEGIRLO. El usuario puso un CUATRO —instrumento de la
+// música llanera venezolana, que en el catálogo se toca con «rasgueo rápido»— y
+// la herramienta le compuso una pieza melancólica de cuerdas pulsadas una a
+// una, mientras el vídeo mostraba al personaje rasgueando joropo a toda
+// velocidad. La música y la imagen salieron de datos distintos y no pegaban.
+//
+// El género lo arregla por los dos lados: le dice a Lyria qué escribir y le dice
+// al vídeo con cuánta energía se toca.
+//
+// `en` es lo que se le manda al modelo de música, que sólo entiende inglés.
+// `energia` es cuánto se mueve el intérprete en el vídeo: 'suave', 'media' o
+// 'alta'. Y `bpm` es el pulso típico, que manda sobre la deducción del contexto
+// cuando el usuario elige el género a mano.
+
+const MUSIC_GENRES = [
+  // «auto» y «other» no llevan carácter ni pulso propios a propósito: el primero
+  // deja que el Director lo deduzca del contexto y el segundo, de lo que escriba
+  // el usuario. Poner aquí un mood de relleno sería inventarle un género.
+  { id: 'auto', label: 'Que lo decida el director', en: '', mood: [], energia: '', bpm: 0 },
+  { id: 'cinematic', label: 'Cinematográfico', en: 'cinematic orchestral score', mood: ['cinematográfico','amplio'], energia: 'media', bpm: 80 },
+  { id: 'classical', label: 'Clásico', en: 'classical chamber music', mood: ['clásico','elegante'], energia: 'media', bpm: 76 },
+  { id: 'ambient', label: 'Ambiental', en: 'slow ambient, long sustained textures', mood: ['sereno','flotante'], energia: 'suave', bpm: 60 },
+  { id: 'folk', label: 'Folk / tradicional', en: 'traditional acoustic folk', mood: ['cálido','sencillo'], energia: 'media', bpm: 96 },
+  { id: 'joropo', label: 'Joropo / música llanera', en: 'Venezuelan joropo: fast strummed cuatro, driving 3/4 and 6/8 cross-rhythm, bright and festive', mood: ['festivo','vivo','virtuoso'], energia: 'alta', bpm: 150 },
+  // OJO CON LOS ACENTOS. Este texto viaja tal cual al modelo de música, que
+  // rechaza la petición entera si detecta que no está en inglés. «compás» y
+  // «palmas» tumbaban la generación: van escritos como los diría un músico
+  // anglosajón.
+  { id: 'flamenco', label: 'Flamenco', en: 'flamenco: rasgueado guitar, twelve-beat compas rhythm, handclaps', mood: ['intenso','pasional'], energia: 'alta', bpm: 120 },
+  { id: 'tango', label: 'Tango', en: 'tango: marcato bandoneon, dramatic and precise', mood: ['dramático','elegante'], energia: 'media', bpm: 112 },
+  { id: 'bolero', label: 'Bolero', en: 'bolero: slow romantic latin ballad', mood: ['romántico','íntimo'], energia: 'suave', bpm: 72 },
+  { id: 'salsa', label: 'Salsa', en: 'salsa: montuno, clave, brass hits', mood: ['festivo','bailable'], energia: 'alta', bpm: 180 },
+  { id: 'bossa', label: 'Bossa nova', en: 'bossa nova: soft syncopated guitar, brushed drums', mood: ['suave','sofisticado'], energia: 'suave', bpm: 130 },
+  { id: 'jazz', label: 'Jazz', en: 'jazz: swung, walking bass, improvised feel', mood: ['jazzístico','libre'], energia: 'media', bpm: 120 },
+  { id: 'blues', label: 'Blues', en: 'blues: twelve-bar, bent notes, smoky', mood: ['humeante','doliente'], energia: 'media', bpm: 88 },
+  { id: 'rock', label: 'Rock', en: 'rock: driving drums, distorted guitars', mood: ['crudo','con garra'], energia: 'alta', bpm: 128 },
+  { id: 'alt_rock', label: 'Rock alternativo', en: 'alternative rock: raw, gritty, loud-quiet dynamics', mood: ['crudo','eléctrico'], energia: 'alta', bpm: 132 },
+  { id: 'metal', label: 'Metal', en: 'metal: heavy distorted riffs, double kick, relentless', mood: ['agresivo','implacable'], energia: 'alta', bpm: 150 },
+  { id: 'punk', label: 'Punk', en: 'punk: fast, raw, three chords, no polish', mood: ['crudo','urgente'], energia: 'alta', bpm: 170 },
+  { id: 'electronic', label: 'Electrónica', en: 'electronic: synth layers, steady pulse', mood: ['pulsante','sintético'], energia: 'alta', bpm: 124 },
+  { id: 'synthwave', label: 'Synthwave', en: 'synthwave: retro analog synths, neon, arpeggios', mood: ['nocturno','sintético'], energia: 'media', bpm: 110 },
+  { id: 'lofi', label: 'Lo-fi', en: 'lo-fi: dusty loops, laid-back, warm', mood: ['cálido','relajado'], energia: 'suave', bpm: 82 },
+  { id: 'hiphop', label: 'Hip-hop', en: 'hip-hop: hard boom-bap drums, heavy groove', mood: ['contundente','rítmico'], energia: 'alta', bpm: 92 },
+  { id: 'epic', label: 'Épico', en: 'epic trailer music: huge percussion, soaring strings', mood: ['épico','poderoso'], energia: 'alta', bpm: 100 },
+  { id: 'horror', label: 'Terror', en: 'horror score: dissonant, unsettling, sparse', mood: ['siniestro','inquietante'], energia: 'suave', bpm: 66 },
+  { id: 'other', label: 'Otro', en: '', mood: [], energia: '', bpm: 0 },
+];
+const MUSIC_GENRES_BY_ID = new Map(MUSIC_GENRES.map((g) => [g.id, g]));
+
+/**
+ * El género que le pega a un instrumento, cuando el usuario deja «que lo decida
+ * el director». Se mira el ORIGEN, que es lo que el catálogo sabe de él.
+ */
+const GENERO_POR_ORIGEN = {
+  venezolano: 'joropo',
+  'peruano/flamenco': 'flamenco',
+  español: 'flamenco',
+  argentino: 'tango',
+  caribeño: 'salsa',
+  afrocubano: 'salsa',
+  moderno: 'rock',
+  orquestal: 'cinematic',
+  barroco: 'classical',
+  europeo: 'classical',
+  italiano: 'classical',
+  estadounidense: 'blues',
+};
+
+/** El género por defecto para estos instrumentos, por encima de su origen. */
+const GENERO_POR_INSTRUMENTO = {
+  drum_kit: 'rock', electric_guitar: 'rock', bass_guitar: 'rock',
+  synthesizer: 'electronic', modular_synth: 'electronic', drum_machine: 'electronic',
+  sampler: 'hiphop', bandoneon: 'tango', cuatro: 'joropo',
+  flamenco_guitar: 'flamenco', saxophone: 'jazz', full_orchestra: 'cinematic',
+  string_section: 'cinematic', brass_section: 'epic',
+};
+
+function generoSugerido(instrumento) {
+  if (!instrumento) return 'cinematic';
+  return GENERO_POR_INSTRUMENTO[instrumento.id] ||
+    GENERO_POR_ORIGEN[instrumento.origin] ||
+    'cinematic';
+}
+
+/**
+ * Cómo se llama en inglés un género escrito a mano.
+ *
+ * El cuadro «Otro» es texto libre y el usuario escribe en español, pero al
+ * modelo de música no le puede llegar ni una palabra que no sea inglesa: si
+ * detecta otro idioma rechaza la petición entera y no compone nada. Aquí están
+ * los géneros que se escriben a mano y no están en la lista de arriba, con su
+ * descripción en inglés, para que escribir «cumbia» funcione igual de bien que
+ * elegir «Salsa» en el desplegable.
+ */
+const GENEROS_ESCRITOS = [
+  { palabras: ['cumbia'], en: 'cumbia: swaying two-step groove, accordion and guiro' },
+  { palabras: ['vallenato'], en: 'vallenato: accordion, caja drum and guacharaca' },
+  { palabras: ['merengue'], en: 'merengue: fast two-step, tambora and saxophone' },
+  { palabras: ['bachata'], en: 'bachata: syncopated guitar with bongo and guira' },
+  { palabras: ['reggaeton', 'reguetón', 'reguet'], en: 'reggaeton: dembow beat, heavy low end' },
+  { palabras: ['reggae', 'ska'], en: 'reggae: offbeat skank guitar, deep bass' },
+  { palabras: ['mariachi', 'ranchera'], en: 'mariachi ranchera: trumpets, violins and rhythmic guitar' },
+  { palabras: ['nortena', 'norteño', 'norten', 'corrido'], en: 'norteno: accordion and bajo sexto, marching two-step' },
+  { palabras: ['samba', 'pagode'], en: 'samba: brazilian percussion, fast swinging groove' },
+  { palabras: ['gospel', 'soul'], en: 'soul gospel: warm chords, organ and choir-like harmony' },
+  { palabras: ['funk'], en: 'funk: tight syncopated groove, slap bass' },
+  { palabras: ['country', 'bluegrass'], en: 'country bluegrass: acoustic picking, fiddle and banjo' },
+  { palabras: ['tarantela', 'tarantel', 'polka', 'vals', 'waltz'], en: 'european folk dance in lilting triple time' },
+  { palabras: ['celta', 'irland', 'celtic'], en: 'celtic folk: jig and reel, fiddle and whistle' },
+  { palabras: ['arabe', 'árabe', 'oriental'], en: 'middle eastern: maqam scales, frame drum' },
+  { palabras: ['india', 'indi', 'raga'], en: 'indian classical: raga, drone and tabla' },
+  { palabras: ['china', 'chino', 'japon', 'oriental asiat'], en: 'east asian traditional: pentatonic, sparse and airy' },
+  { palabras: ['africa', 'afro'], en: 'west african: interlocking polyrhythm, hand drums' },
+  { palabras: ['tecno', 'techno', 'house', 'trance'], en: 'techno: four on the floor, hypnotic and repetitive' },
+  { palabras: ['drum and bass', 'dnb', 'jungle'], en: 'drum and bass: fast breakbeats, deep sub bass' },
+  { palabras: ['dubstep', 'trap'], en: 'trap: halftime drums, sparse and heavy' },
+  { palabras: ['balada', 'ballad'], en: 'slow ballad: sparse, emotional, unhurried' },
+  { palabras: ['marcha', 'march', 'himno', 'hymn'], en: 'march: steady processional pulse, brass and drums' },
+  { palabras: ['circo', 'circus', 'carnaval'], en: 'circus carnival music: bouncy, playful, brassy' },
+  { palabras: ['navid', 'christmas'], en: 'christmas music: bells, warm and festive' },
+  { palabras: ['infantil', 'nana', 'lullaby'], en: 'lullaby: simple, gentle, music-box like' },
+];
+
+/**
+ * Traduce a inglés lo que el usuario escribió en el cuadro «Otro».
+ *
+ * Primero se busca en la lista de géneros y en la tabla de arriba, que es lo que
+ * da una descripción completa. Si no se reconoce, se manda el texto SIN TILDES:
+ * un nombre de género es casi siempre un nombre propio que el modelo entiende
+ * igual —«joropo» es «joropo» en cualquier idioma—, y la tilde es justo lo que
+ * dispara el rechazo por idioma.
+ */
+function generoEscritoEn(texto, catalogo) {
+  const limpio = sinTildes(String(texto || '').trim().toLowerCase());
+  if (!limpio) return '';
+
+  for (const g of catalogo) {
+    if (!g.en) continue;
+    if (limpio === g.id || limpio === sinTildes(g.label.toLowerCase())) return g.en;
+  }
+  for (const entrada of GENEROS_ESCRITOS) {
+    if (entrada.palabras.some((pal) => limpio.indexOf(sinTildes(pal)) !== -1)) return entrada.en;
+  }
+  // Reconocer un género por dentro de una frase larga es lo último que se
+  // intenta, porque «no quiero rock» contiene «rock».
+  for (const g of catalogo) {
+    if (!g.en) continue;
+    const nombre = sinTildes(g.label.toLowerCase()).split(' /')[0];
+    if (nombre.length > 3 && limpio.indexOf(nombre) !== -1) return g.en;
+  }
+  return sinTildes(String(texto || '').trim());
+}
+
+function sinTildes(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/**
+ * EL GÉNERO DE LA PIEZA, resuelto.
+ *
+ * Vive aquí y no en el plan musical porque lo leen los dos lados: la música,
+ * para saber qué componer, y el VÍDEO, para saber con cuánta fuerza se toca. Ese
+ * era el fallo que lo trajo: el personaje rasgueaba joropo a toda velocidad
+ * mientras sonaba una pieza melancólica de cuerdas pulsadas una a una.
+ */
+function generoDe(config, instrumentos) {
+  const lista = instrumentos || [];
+  const elegido = MUSIC_GENRES_BY_ID.get((config && config.musicGenreId) || 'auto');
+  if (elegido && elegido.id === 'other') {
+    const escrito = String((config && config.musicGenreCustom) || '').trim();
+    return {
+      id: 'other',
+      label: escrito || 'Otro',
+      en: generoEscritoEn(escrito, MUSIC_GENRES),
+      mood: [],
+      // Sin energía declarada: un género escrito a mano puede ser cualquier
+      // cosa, así que el vídeo se queda con lo que diga el resto del contexto en
+      // vez de inventarse una intensidad.
+      energia: '',
+      bpm: 0,
+    };
+  }
+  if (elegido && elegido.en) return elegido;
+  // 'auto' o desconocido: lo decide el instrumento.
+  return MUSIC_GENRES_BY_ID.get(generoSugerido(lista[0])) || MUSIC_GENRES_BY_ID.get('cinematic');
+}
+
 const VISUAL_STYLES = [
   { id: 'anime_2d', label: 'Anime 2D', treatment: 'anime 2D tradicional: PERSONAS dibujadas en anime, línea limpia y sombreado plano por celdas, rostros de ojos grandes y expresivos, piel lisa sin textura fotográfica', photography: 'composición de animación clásica, movimiento de cámara suave', palette: ['azul cielo', 'blanco cálido', 'rojo suave'] },
   { id: 'anime_cinematic', label: 'Anime cinematográfico', treatment: 'ilustración de anime cinematográfico de gama alta: PERSONAS dibujadas en anime, con línea limpia y fina, sombreado suave con degradados pintados, piel luminosa, ojos grandes y expresivos con iris detallado y brillos, pestañas marcadas y rubor suave; fondos pintados con mucho detalle e iluminación volumétrica', photography: 'profundidad de campo marcada con fondo muy desenfocado, resplandor suave en cada luz, destellos y grano fino', palette: ['ámbar', 'verde profundo', 'azul crepuscular'] },
@@ -301,12 +490,17 @@ const VISUAL_STYLES_BY_ID = new Map(VISUAL_STYLES.map((s) => [s.id, s]));
 function buildCatalog() {
   return {
     instrumentCategories: INSTRUMENT_CATEGORIES,
-    instruments: INSTRUMENTS,
+    // Cada instrumento viaja con el género que le pegaría si el usuario deja
+    // «que lo decida el director». Lo calcula el servidor y no la pantalla,
+    // para que lo que se anuncia antes de crear el corto sea exactamente lo
+    // que se va a componer después.
+    instruments: INSTRUMENTS.map((i) => Object.assign({}, i, { suggestedGenreId: generoSugerido(i) })),
     formations: FORMATIONS,
     performerGenders: PERFORMER_GENDERS,
     performerTypes: PERFORMER_TYPES,
     scenarios: SCENARIOS,
     visualStyles: VISUAL_STYLES,
+    musicGenres: MUSIC_GENRES,
     durations: DURATION_OPTIONS,
     characterTraits: require('./rasgos.js').catalogoDeRasgos(),
   };
@@ -334,6 +528,11 @@ module.exports = {
   SCENARIOS_BY_ID,
   VISUAL_STYLES,
   VISUAL_STYLES_BY_ID,
+  MUSIC_GENRES,
+  MUSIC_GENRES_BY_ID,
+  generoSugerido,
+  generoDe,
+  generoEscritoEn,
   buildCatalog,
   DURATION_OPTIONS,
 };

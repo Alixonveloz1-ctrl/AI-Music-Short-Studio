@@ -538,6 +538,156 @@ async function principal() {
     }
   });
 
+  await comprobarAsync('ningún género del catálogo le cuela español a Lyria', async () => {
+    // El fallo que se cazó aquí: el género «Flamenco» se describía como
+    // «rasgueado guitar, compás, palmas». Esa tilde de «compás» tumba la
+    // petición entera con «Unsupported language detected» — y el usuario no ve
+    // una música rara, ve que no se genera nada.
+    const enEspanol = (t) => /[áéíóúñ¿¡]/i.test(String(t || ''));
+    for (const g of catalogo.MUSIC_GENRES) {
+      cierto(!enEspanol(g.en),
+        'el género ' + g.id + ' lleva español en lo que se le manda al modelo: ' + g.en);
+      // Y el que se le ENSEÑA al usuario sigue siendo español (PRD §19), así
+      // que la etiqueta no se puede haber «arreglado» quitándole las tildes.
+      cierto(g.label, 'el género ' + g.id + ' no tiene etiqueta para la pantalla');
+    }
+
+    // Y con el género puesto, el encargo entero sigue limpio.
+    for (const id of catalogo.MUSIC_GENRES.map((g) => g.id)) {
+      const armado = await construirPlan(Object.assign({}, CONFIG, {
+        musicGenreId: id,
+        musicGenreCustom: id === 'other' ? 'música norteña' : '',
+      }));
+      const en = armado.plan.music.promptEn;
+      cierto(!enEspanol(en),
+        'con el género ' + id + ' queda español: ' +
+        (en.match(/[^\s]*[áéíóúñ][^\s]*/gi) || []).join(', '));
+    }
+  });
+
+  comprobar('lo que el usuario escribe en «Otro» llega en inglés, o al menos sin tildes', () => {
+    // El cuadro es texto libre y el usuario escribe en español. Los géneros que
+    // se conocen se traducen enteros; los que no, van sin tildes, que es lo que
+    // dispara el rechazo por idioma.
+    const conocidos = {
+      'cumbia': /cumbia/,
+      'norteño': /norteno/,
+      'Joropo': /joropo/i,
+      'música de circo': /circus/,
+      'rock alternativo': /alternative rock/,
+    };
+    for (const escrito of Object.keys(conocidos)) {
+      const g = catalogo.generoDe({ musicGenreId: 'other', musicGenreCustom: escrito }, []);
+      cierto(conocidos[escrito].test(g.en), '«' + escrito + '» no se reconoció: ' + g.en);
+      cierto(!/[áéíóúñ]/i.test(g.en), '«' + escrito + '» conserva tildes: ' + g.en);
+    }
+    // Uno que no está en ninguna lista: se manda igual, pero sin tildes.
+    const raro = catalogo.generoDe({ musicGenreId: 'other', musicGenreCustom: 'ñangaré tropical' }, []);
+    cierto(!/[áéíóúñ]/i.test(raro.en), 'un género desconocido le cuela tildes al modelo: ' + raro.en);
+    // Y la ETIQUETA guarda lo que él escribió, tildes incluidas: es lo que ve.
+    igual(raro.label, 'ñangaré tropical', 'la pantalla ya no enseña lo que escribió el usuario');
+  });
+
+  await comprobarAsync('el vídeo se toca con la energía de la música que va a sonar', async () => {
+    // EL FALLO: el usuario eligió un cuatro —instrumento de música llanera— y
+    // el vídeo salió con el personaje rasgueando joropo a toda velocidad
+    // mientras la música era una pieza melancólica de cuerdas pulsadas una a
+    // una. «La música suena muy bien, pero no pega.» Imagen y música salían de
+    // datos distintos; ahora el prompt de vídeo lleva dentro cómo suena.
+    const casos = [
+      { genero: 'metal', instrumento: 'drum_kit', espera: /RÁPIDO y FUERTE/ },
+      { genero: 'joropo', instrumento: 'cuatro', espera: /RÁPIDO y FUERTE/ },
+      { genero: 'bolero', instrumento: 'guitar', espera: /DESPACIO y SUAVE/ },
+      { genero: 'ambient', instrumento: 'harp', espera: /DESPACIO y SUAVE/ },
+      { genero: 'jazz', instrumento: 'saxophone', espera: /energía sostenida/ },
+    ];
+    for (const caso of casos) {
+      const config = Object.assign({}, CONFIG, {
+        musicGenreId: caso.genero,
+        instrumentIds: [caso.instrumento],
+        formationId: 'solo',
+      });
+      const armado = await construirPlan(config);
+      const proyecto = dominio.createProject(config, armado.plan);
+
+      // En los clips, que es donde se vio el fallo — menos en el que cierra la
+      // película, que ahí lo que toca es DEJAR de tocar. Cuál es ese clip lo
+      // dice el montaje, no el orden de la lista: el último hueco de la línea
+      // de tiempo suele ser un plano reutilizado de más arriba.
+      const clips = proyecto.assets.filter((a) => a.kind === 'clip');
+      const cierra = clips.filter((c) => /CÓMO TERMINA EL CORTO/.test(c.spec.prompt));
+      igual(cierra.length, 1, 'debería haber exactamente un clip que cierre la película');
+      const salvoElUltimo = clips.filter((c) => c.id !== cierra[0].id);
+      cierto(salvoElUltimo.length, 'el corto de prueba no tiene clips');
+      for (const c of salvoElUltimo) {
+        cierto(caso.espera.test(c.spec.prompt),
+          'con ' + caso.genero + ', el clip ' + c.id + ' no pide ' + caso.espera);
+      }
+      cierto(!/RÁPIDO y FUERTE|DESPACIO y SUAVE|energía sostenida y constante/.test(cierra[0].spec.prompt),
+        'el clip final sigue pidiendo que toque, y ahí la pieza ya terminó');
+
+      // Y en las imágenes de cada toma, que son el primer fotograma del clip:
+      // si la postura de partida no pega, el vídeo arranca ya descolocado.
+      const imagenes = proyecto.assets.filter((a) => a.kind === 'shot_image');
+      cierto(imagenes.some((i) => /LA MÚSICA Y LA IMAGEN TIENEN QUE PEGAR/.test(i.spec.prompt)),
+        'ninguna imagen de toma sabe cómo va a sonar la música');
+    }
+  });
+
+  await comprobarAsync('el género que anuncia la pantalla es el que se compone', async () => {
+    // La pantalla dice «con lo que llevas elegido saldrá algo en la línea de X»
+    // usando `suggestedGenreId` del catálogo. Si eso no fuera exactamente lo
+    // que el servidor acaba usando, sería una promesa falsa.
+    const delCatalogo = catalogo.buildCatalog().instruments;
+    for (const id of ['cuatro', 'drum_kit', 'bandoneon', 'saxophone', 'violin']) {
+      const anunciado = delCatalogo.find((i) => i.id === id).suggestedGenreId;
+      const compuesto = catalogo.generoDe(
+        { musicGenreId: 'auto' },
+        [catalogo.INSTRUMENTS_BY_ID.get(id)],
+      );
+      igual(compuesto.id, anunciado, 'con ' + id + ', lo anunciado y lo compuesto no coinciden');
+    }
+    // Y sin tocar nada, un corto sale con el género que le pega al instrumento.
+    const armado = await construirPlan(Object.assign({}, CONFIG, { instrumentIds: ['cuatro'] }));
+    igual(armado.plan.music.genre.id, 'joropo', 'un cuatro sin más indicaciones no sale joropo');
+  });
+
+  comprobar('la interfaz y el servidor editan EL MISMO campo del prompt', () => {
+    // La música y el ambiente se le piden a Google en inglés y guardan además
+    // una versión en español para enseñársela al usuario. Si la pantalla
+    // editara una y el servidor guardara la otra, el usuario cambiaría el
+    // prompt, volvería a generar y saldría exactamente lo mismo — sin ningún
+    // error que se lo explicase.
+    const enServidor = fs.readFileSync(path.join(RAIZ, 'api/prompt.js'), 'utf8');
+    const listaServidor = /const CAMPO_EN_INGLES = \[([^\]]*)\]/.exec(enServidor);
+    cierto(listaServidor, 'api/prompt.js ya no declara CAMPO_EN_INGLES');
+
+    const iu = reglasDeLaInterfaz();
+    cierto(Array.isArray(iu.PROMPT_EN_INGLES), 'la interfaz no declara PROMPT_EN_INGLES');
+
+    const delServidor = listaServidor[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
+    igual(iu.PROMPT_EN_INGLES.slice().sort(), delServidor.slice().sort(),
+      'las dos listas de tipos que se encargan en inglés se han separado');
+
+    // Y la regla se aplica igual sobre un activo de verdad.
+    for (const kind of ['music', 'ambient', 'clip', 'shot_image', 'master_character']) {
+      const esperado = delServidor.indexOf(kind) !== -1 ? 'promptEn' : 'prompt';
+      igual(iu.campoDePrompt({ kind }), esperado, 'la interfaz elige mal el campo de ' + kind);
+    }
+  });
+
+  comprobar('todo lo que se puede editar existe en el activo desde el principio', () => {
+    // Si un activo se editara sobre un campo que no tiene, el cuadro saldría
+    // vacío y guardar borraría el encargo del Director en vez de cambiarlo.
+    const iu = reglasDeLaInterfaz();
+    const proyecto = dominio.createProject(CONFIG, plan);
+    for (const a of proyecto.assets) {
+      const campo = iu.campoDePrompt(a);
+      cierto(a.spec && typeof a.spec[campo] === 'string' && a.spec[campo].length,
+        'el activo ' + a.id + ' (' + a.kind + ') no trae texto en ' + campo);
+    }
+  });
+
   comprobar('el encargo de música va en inglés y con su línea de tiempo', () => {
     const enEspanol = (t) => /[áéíóúñ¿¡]/i.test(String(t || ''));
     // El plan completo, que es de donde sale el prompt que viaja a Google.

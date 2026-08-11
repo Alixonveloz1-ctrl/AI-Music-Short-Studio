@@ -52,6 +52,13 @@ function paso(nombre, fn) {
 }
 function cierto(c, q) { if (!c) throw new Error(q || 'no se cumple'); }
 
+/**
+ * El encargo de ambiente que un paso reescribe a mano y otro, mucho más abajo,
+ * comprueba que llegó al modelo. Vive aquí porque lo usan los dos.
+ */
+const AMBIENTE_A_MANO =
+  'Only the sound of rain on a metal roof, written by hand by the user.';
+
 async function principal() {
   console.log('\nDE PRINCIPIO A FIN, CON GOOGLE CLOUD SIMULADO\n');
 
@@ -156,6 +163,72 @@ async function principal() {
     cierto(d.codigo === 200, 'desbloquear dio ' + d.codigo);
     const a = d.cuerpo.proyecto.assets.find((x) => x.id === 'master_character');
     cierto(a.locked === false, 'sigue bloqueado');
+  });
+
+  await paso('un prompt bloqueado se puede reescribir a mano, y lo reescrito es lo que viaja', async () => {
+    // EL PROBLEMA QUE RESUELVE. Google contesta «los filtros de contenido
+    // bloquearon esta imagen, cambia la descripción de la toma» — y hasta ahora
+    // no había ninguna forma de cambiarla: el prompt se escribía al crear el
+    // corto y era de sólo lectura. El único remedio que ofrecía la herramienta
+    // para un prompt bloqueado era empezar el corto de cero.
+    const promptEp = require('../api/prompt.js');
+
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } }))
+      .cuerpo.proyecto.assets.find((x) => x.id === 'master_character');
+    const original = antes.spec.prompt;
+
+    const MIO = 'RETRATO ESCRITO A MANO POR EL USUARIO, sin la palabra que bloqueaba.';
+    const r = await pedir(promptEp, { metodo: 'POST', cuerpo: { id, activo: 'master_character', prompt: MIO } });
+    if (r.codigo !== 200) throw new Error('prompt: ' + JSON.stringify(r.cuerpo).slice(0, 200));
+    const editado = r.cuerpo.proyecto.assets.find((x) => x.id === 'master_character');
+    cierto(editado.spec.prompt === MIO, 'no se guardó lo que escribió: ' + editado.spec.prompt);
+    cierto(editado.spec.promptOriginal === original, 'se perdió el original del Director');
+    cierto(editado.spec.promptEditado === true, 'no queda marcado como escrito a mano');
+
+    // LO QUE DE VERDAD IMPORTA: que su texto llegue al modelo. Guardarlo y
+    // seguir mandando el viejo sería peor que no dejarlo editar, porque
+    // regeneraría igual y sin ningún error que se lo explicase.
+    const desde = google.pedidos.length;
+    const g = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: 'master_character' } });
+    cierto(g.codigo === 200 || g.codigo === 202, 'generar dio ' + g.codigo);
+    const enviados = JSON.stringify(google.pedidos.slice(desde));
+    cierto(enviados.indexOf(MIO) !== -1, 'el prompt escrito a mano no llegó a Google');
+    cierto(enviados.indexOf(original.slice(0, 60)) === -1, 'se siguió mandando el prompt viejo');
+
+    // Un vacío no se acepta: borraría el encargo en vez de cambiarlo.
+    const vacio = await pedir(promptEp, { metodo: 'POST', cuerpo: { id, activo: 'master_character', prompt: '   ' } });
+    cierto(vacio.codigo === 400, 'un prompt vacío se aceptó (código ' + vacio.codigo + ')');
+
+    // Y siempre se puede volver a lo que escribió el Director.
+    const v = await pedir(promptEp, { metodo: 'POST', cuerpo: { id, activo: 'master_character', restaurar: true } });
+    if (v.codigo !== 200) throw new Error('restaurar: ' + JSON.stringify(v.cuerpo).slice(0, 200));
+    const vuelto = v.cuerpo.proyecto.assets.find((x) => x.id === 'master_character');
+    cierto(vuelto.spec.prompt === original, 'no volvió el original');
+    cierto(!vuelto.spec.promptEditado, 'sigue marcado como escrito a mano');
+
+    // La música se encarga EN INGLÉS, y es ese campo el que se edita: corregir
+    // el español, que es sólo lo que se le enseña al usuario, no cambiaría nada.
+    const m = await pedir(promptEp, {
+      metodo: 'POST',
+      cuerpo: { id, activo: 'music', prompt: 'Instruments: erhu. Mood: calm. Tempo: around 70 BPM.' },
+    });
+    if (m.codigo !== 200) throw new Error('prompt de música: ' + JSON.stringify(m.cuerpo).slice(0, 200));
+    cierto(m.cuerpo.campo === 'promptEn',
+      'la música no se editó sobre el campo en inglés, sino sobre ' + m.cuerpo.campo);
+    const musica = m.cuerpo.proyecto.assets.find((x) => x.id === 'music');
+    cierto(/Mood: calm/.test(musica.spec.promptEn), 'no se guardó el encargo en inglés');
+    cierto(/[áéíóúñ]/i.test(musica.spec.prompt), 'se pisó el encargo en español, que es el que ve el usuario');
+    await pedir(promptEp, { metodo: 'POST', cuerpo: { id, activo: 'music', restaurar: true } });
+
+    // El ambiente se deja EDITADO A PROPÓSITO y no se restaura: más abajo, tras
+    // producir el corto entero, se comprueba que lo que llegó al modelo fue
+    // esto y no el encargo del plan. Sin una diferencia real entre los dos, esa
+    // comprobación pasaría igual aunque se mandara el que no toca.
+    const a = await pedir(promptEp, {
+      metodo: 'POST',
+      cuerpo: { id, activo: 'ambient', prompt: AMBIENTE_A_MANO },
+    });
+    if (a.codigo !== 200) throw new Error('prompt de ambiente: ' + JSON.stringify(a.cuerpo).slice(0, 200));
   });
 
   await paso('el montaje se niega mientras falte material, y dice cuál', async () => {
@@ -310,6 +383,37 @@ async function principal() {
     }
   });
 
+  await paso('el ambiente se generó con IA y lo dice', async () => {
+    const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
+    const a = p.cuerpo.proyecto.assets.find((x) => x.kind === 'ambient');
+    cierto(a, 'no hay activo de ambiente');
+    const aprobada = (a.generations || []).find((g) => g.id === a.approvedGenerationId);
+    cierto(aprobada, 'el ambiente no tiene generación aprobada');
+    cierto(aprobada.metodo === 'ia', 'el ambiente no recuerda que se hizo con IA: ' + aprobada.metodo);
+    // Y su archivo existe de verdad en el bucket, con firma de audio.
+    cierto(aprobada.file && aprobada.file.path, 'el ambiente no dejó archivo');
+    const bytes = objetos.get(aprobada.file.path);
+    cierto(bytes && bytes.length > 100, 'el archivo del ambiente está vacío');
+
+    // Y lo que se le mandó al modelo es el encargo QUE LLEVA EL ACTIVO —el que
+    // se reescribió a mano unos pasos más arriba— y no el del plan, que sigue
+    // diciendo otra cosa. Es el único de los dos que el usuario puede tocar: si
+    // se mandara el otro, editarlo no cambiaría ni un sonido y no habría ningún
+    // error que se lo explicase.
+    cierto(a.spec.promptEn === AMBIENTE_A_MANO,
+      'el activo no conserva el encargo escrito a mano: ' + a.spec.promptEn);
+    const delPlan = (p.cuerpo.proyecto.plan.ambient || {}).promptEn || '';
+    cierto(delPlan && delPlan !== AMBIENTE_A_MANO, 'el plan y el activo dicen lo mismo: la prueba no distingue nada');
+
+    const textoDe = (q) => ((q.cuerpo.contents || [])
+      .flatMap((c) => c.parts || []).map((x) => x.text || '').join('\n'));
+    const mandado = google.pedidos.filter((q) => textoDe(q).indexOf('NOT MUSIC') !== -1);
+    cierto(mandado.length, 'no se encuentra la petición de ambiente que se le hizo al modelo');
+    const ultimo = textoDe(mandado[mandado.length - 1]);
+    cierto(ultimo.indexOf(AMBIENTE_A_MANO) !== -1,
+      'al modelo no le llegó el encargo escrito a mano, sino: ' + ultimo.slice(0, 200));
+  });
+
   await paso('un corto viejo puede actualizar sus instrucciones sin perder nada', async () => {
     // EL PROBLEMA QUE RESUELVE. Los encargos se escriben al crear el corto y se
     // guardan dentro. El usuario tuvo un corto de un zombie con batería cuya
@@ -337,10 +441,22 @@ async function principal() {
 
     // 1. Los encargos se reescribieron.
     cierto(r.cuerpo.cambiados.length > 0, 'no se actualizó ningún encargo');
-    cierto(!despues.assets.some((a) => a.spec && a.spec.prompt === 'ENCARGO VIEJO'),
+    cierto(!despues.assets.some((a) => !a.spec.promptEditado && a.spec.prompt === 'ENCARGO VIEJO'),
       'quedan encargos viejos sin actualizar');
     cierto(!/bateria/.test(despues.plan.music.promptEn || ''),
       'el encargo de música sigue siendo el viejo: ' + despues.plan.music.promptEn);
+
+    // 1 bis. LO QUE EL USUARIO ESCRIBIÓ A MANO NO SE PISA. El ambiente se
+    // reescribió a mano unos pasos más arriba —normalmente se hace para rodear
+    // un filtro de contenido que bloqueaba la generación—, así que ponerle
+    // encima el texto del Director le devolvería justo el que ya sabe que no
+    // pasa. Se respeta y se le avisa de cuáles se han quedado fuera.
+    const ambiente = despues.assets.find((a) => a.kind === 'ambient');
+    cierto(ambiente.spec.promptEn === AMBIENTE_A_MANO,
+      'se pisó el encargo que el usuario escribió a mano: ' + ambiente.spec.promptEn);
+    cierto((r.cuerpo.respetados || []).length > 0, 'no se dice qué encargos a mano se han respetado');
+    cierto((r.cuerpo.avisos || []).some((t) => /a mano/i.test(t)),
+      'el usuario no recibe ningún aviso de que hay encargos suyos sin actualizar');
 
     // 2. LA ESTRUCTURA NO SE TOCA. Ni una toma más, ni una menos, ni un segundo.
     cierto(despues.plan.shots.length === tomasAntes,
@@ -358,19 +474,6 @@ async function principal() {
     // 5. Y el MP4 exportado sigue en su sitio.
     cierto(despues.finalCut && despues.finalCut['export'] && despues.finalCut['export'].path,
       'se perdió el MP4 exportado');
-  });
-
-  await paso('el ambiente se generó con IA y lo dice', async () => {
-    const p = await pedir(proyectoEp, { metodo: 'GET', query: { id } });
-    const a = p.cuerpo.proyecto.assets.find((x) => x.kind === 'ambient');
-    cierto(a, 'no hay activo de ambiente');
-    const aprobada = (a.generations || []).find((g) => g.id === a.approvedGenerationId);
-    cierto(aprobada, 'el ambiente no tiene generación aprobada');
-    cierto(aprobada.metodo === 'ia', 'el ambiente no recuerda que se hizo con IA: ' + aprobada.metodo);
-    // Y su archivo existe de verdad en el bucket, con firma de audio.
-    cierto(aprobada.file && aprobada.file.path, 'el ambiente no dejó archivo');
-    const bytes = objetos.get(aprobada.file.path);
-    cierto(bytes && bytes.length > 100, 'el archivo del ambiente está vacío');
   });
 
   await paso('el paquete .zip existe, se abre y trae el vídeo y el texto', async () => {

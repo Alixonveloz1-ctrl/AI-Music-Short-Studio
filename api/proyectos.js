@@ -24,6 +24,7 @@ const {
   PERFORMER_TYPES_BY_ID,
   SCENARIOS_BY_ID,
   VISUAL_STYLES_BY_ID,
+  MUSIC_GENRES,
 } = require('./_lib/catalogo.js');
 const modelos = require('./_lib/modelos.js');
 const rasgos = require('./_lib/rasgos.js');
@@ -306,8 +307,23 @@ function validarConfiguracion(bruto) {
   // Una por intérprete principal. Lo que se deja vacío lo decide el Director.
   const performers = rasgos.normalizarFichas(bruto.performers);
 
+  // --- Género musical ---
+  // 'auto' significa que lo decide el Director desde el instrumento.
+  const musicGenreId = texto(bruto.musicGenreId) || 'auto';
+  if (!MUSIC_GENRES.some((g) => g.id === musicGenreId)) {
+    throw malaPeticion(
+      'Género musical desconocido: "' + musicGenreId + '". Elige uno de la lista (' +
+        MUSIC_GENRES.map((g) => g.label).join(', ') + ').',
+    );
+  }
+  const musicGenreCustom = texto(bruto.musicGenreCustom).trim().slice(0, 200);
+  if (musicGenreId === 'other' && !musicGenreCustom) {
+    throw malaPeticion('Has elegido «Otro» género musical: descríbelo en el cuadro de al lado.');
+  }
+
   const config = {
     instrumentIds: Array.from(vistos),
+    musicGenreId,
     formationId,
     performerGenderId,
     performerTypeId,
@@ -325,6 +341,7 @@ function validarConfiguracion(bruto) {
   if (visualStyleCustom) config.visualStyleCustom = visualStyleCustom;
   if (titleHint) config.titleHint = titleHint;
   if (performers) config.performers = performers;
+  if (musicGenreCustom) config.musicGenreCustom = musicGenreCustom;
 
   return config;
 }

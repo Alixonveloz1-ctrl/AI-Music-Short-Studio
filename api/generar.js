@@ -546,7 +546,11 @@ async function ambienteConIA(proyecto, activo, gen, inicio, durationSec) {
     r = await vertex.generarAmbiente({
       token,
       projectId,
-      prompt: brief.promptEn || (activo.spec && activo.spec.promptEn) || brief.prompt,
+      // EL DEL ACTIVO VA PRIMERO. Es el que el usuario puede reescribir a mano
+      // cuando algo se atasca; si mandara el del plan, su corrección no
+      // llegaría nunca al modelo. El del plan queda de respaldo para los cortos
+      // creados antes de que el activo lo guardara.
+      prompt: (activo.spec && activo.spec.promptEn) || brief.promptEn || brief.prompt,
       segundos: durationSec,
       presupuestoMs: presupuestoRestante(inicio),
     });

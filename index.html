@@ -596,6 +596,7 @@ var estado = {
   catalogo: null,
   activoSel: null,         // activo que se está revisando
   genVista: null,          // generación concreta que se está mirando
+  editandoPrompt: null,    // activo cuyo prompt se está reescribiendo a mano
   trabajando: false,       // hay una acción del usuario en vuelo
   montajeJob: null,        // identificador del montaje en curso
   filtroBib: 'todo',
@@ -704,6 +705,12 @@ var api = {
   aprobar: function(id, activo, gen){ return pedir('aprobar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   actualizarPlan: function(id){ return pedir('actualizar', { metodo:'POST', cuerpo:{ id:id } }); },
+  guardarPrompt: function(id, activo, prompt, negativo){
+    return pedir('prompt', { metodo:'POST', cuerpo:{ id:id, activo:activo, prompt:prompt, negativePrompt:negativo } });
+  },
+  restaurarPrompt: function(id, activo){
+    return pedir('prompt', { metodo:'POST', cuerpo:{ id:id, activo:activo, restaurar:true } });
+  },
   desbloquear: function(id, activo){ return pedir('desbloquear', { metodo:'POST', cuerpo:{ id:id, activo:activo } }); },
   montar: function(id){ return pedir('montar', { metodo:'POST', cuerpo:{ id:id } }); },
   estadoMontaje: function(id, job){
@@ -949,7 +956,7 @@ function leerRuta(){
 
   // Cambiar de proyecto tira la selección: revisar el activo de otro corto no
   // tiene sentido y era una fuente de pantallas en blanco.
-  if (estado.proyectoId !== antesId) { estado.activoSel = null; estado.genVista = null; }
+  if (estado.proyectoId !== antesId) { estado.activoSel = null; estado.genVista = null; estado.editandoPrompt = null; }
   if (antes !== estado.vista) { window.scrollTo(0, 0); }
 
   pintar();
@@ -1370,6 +1377,10 @@ function prepararFormulario(){
     escenarioTexto: '',
     estilo: primera(c.visualStyles, 'anime_cinematic'),
     estiloTexto: '',
+    // 'auto' = que lo decida el Director a partir del instrumento. Es el de
+    // siempre: quien no quiera pensar en géneros no tiene que tocar nada.
+    generoMusical: 'auto',
+    generoMusicalTexto: '',
     duracion: 120,
     formato: primera(c.formatos, 'vertical'),
     modeloImagen: modeloPorDefecto(c.modelosImagen),
@@ -1589,8 +1600,36 @@ function vistaCrear(){
       '">' + esc(f.estiloTexto) + '</textarea>' +
   '</div>';
 
+  // EL GÉNERO DE LA MÚSICA. Va justo después del estilo visual porque es la
+  // misma decisión por el otro lado: uno dice cómo se ve el corto y el otro
+  // cómo suena. Y va aquí, y no escondido en la dirección creativa, porque de
+  // él sale también con cuánta fuerza toca el personaje en el vídeo.
+  var genOtro = (f.generoMusical === 'other');
+  var generos = c.musicGenres || [];
+  var generoElegido = generos.find(function(x){ return x.id === f.generoMusical; });
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">5</span>Duración y formato</h3>' +
+    '<h3><span class="paso">5</span>Género musical</h3>' +
+    '<p class="tenue mini" style="margin-bottom:10px">Manda sobre la música <b>y sobre el vídeo</b>: un joropo se rasguea fuerte y un bolero se toca despacio, ' +
+      'y el personaje tiene que tocar como suena. Si lo dejas en automático, lo decide el instrumento.</p>' +
+    '<label class="campo"><select data-campo="generoMusical">' + generos.map(function(x){
+      return '<option value="' + esc(x.id) + '"' + (f.generoMusical === x.id ? ' selected' : '') + '>' + esc(x.label) + '</option>';
+    }).join('') + '</select></label>' +
+    (genOtro
+      ? '<input data-campo="generoMusicalTexto" placeholder="¿Qué género? («cumbia», «vals», «música de circo»)" value="' + esc(f.generoMusicalTexto) + '">'
+      : '') +
+    (f.generoMusical === 'auto' && f.instrumentos.length
+      ? '<p class="tenue mini" style="margin-top:8px">Con lo que llevas elegido saldrá algo en la línea de <b>' +
+          esc(etiquetaDeGenero(generoSugeridoAqui(), generos)) + '</b>.</p>'
+      : '') +
+    (generoElegido && generoElegido.energia
+      ? '<p class="tenue mini" style="margin-top:8px">Se tocará ' +
+          esc({ alta: 'a toda intensidad', media: 'con energía sostenida', suave: 'con delicadeza' }[generoElegido.energia]) +
+          ', y el vídeo lo sabrá.</p>'
+      : '') +
+  '</div>';
+
+  html += '<div class="tarjeta">' +
+    '<h3><span class="paso">6</span>Duración y formato</h3>' +
     '<div class="chips">' + duraciones.map(function(d){
       return '<button class="chip' + (f.duracion === d.seconds ? ' on' : '') + '" data-accion="duracion" data-seg="' + d.seconds + '">' + esc(d.label) + '</button>';
     }).join('') + '</div>' +
@@ -1609,13 +1648,13 @@ function vistaCrear(){
   // la misma decisión: cuánto va a costar este corto. Y van ANTES de crear el
   // proyecto porque después ya no se pueden cambiar.
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">6</span>Modelo de imagen</h3>' +
+    '<h3><span class="paso">7</span>Modelo de imagen</h3>' +
     '<p class="tenue mini" style="margin-bottom:4px">Genera los retratos maestros, el escenario y las imágenes de cada toma. De más barato a más caro.</p>' +
     '<div id="lista-modelo-imagen">' + htmlModelosImagen() + '</div>' +
   '</div>';
 
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">7</span>Modelo de vídeo</h3>' +
+    '<h3><span class="paso">8</span>Modelo de vídeo</h3>' +
     '<p class="tenue mini" style="margin-bottom:10px">Anima cada toma a partir de su imagen aprobada. De más barato a más caro.</p>' +
     '<div class="nota aviso">' +
       '<b>El vídeo es la parte cara del corto.</b> Un corto genera muchos clips, y el modelo que elijas aquí multiplica el coste de todos ellos. ' +
@@ -1628,7 +1667,7 @@ function vistaCrear(){
   html += htmlFichasPersonaje();
 
   html += '<div class="tarjeta">' +
-    '<h3><span class="paso">9</span>Dirección creativa</h3>' +
+    '<h3><span class="paso">10</span>Dirección creativa</h3>' +
     '<p class="tenue mini" style="margin-bottom:10px">Escribe libremente: apariencia, vestuario, ambiente, luz, época, colores, intención emocional. No hace falta que suene a prompt técnico; el equipo lo traduce.</p>' +
     '<textarea data-campo="direccion" rows="6" placeholder="Describe libremente lo que quieres ver…">' + esc(f.direccion) + '</textarea>' +
   '</div>';
@@ -1637,6 +1676,42 @@ function vistaCrear(){
     '<p class="tenue mini centro" style="margin-top:10px">La planificación tarda unos segundos: la IA escribe el concepto, la biblia visual y el plan de tomas.</p>';
 
   return html;
+}
+
+/**
+ * QUÉ CAMPO DEL ENCARGO SE EDITA, según el tipo de elemento.
+ *
+ * La música y el ambiente se le piden a Google EN INGLÉS —es el único idioma
+ * que entiende el modelo de audio— y guardan además una versión en español que
+ * es la que se le enseña al usuario. Lo que se edita tiene que ser el que
+ * viaja: corregir el español no cambiaría ni una nota.
+ *
+ * La misma regla está en api/prompt.js, escrita igual y sobre el mismo `kind`.
+ * Una prueba comprueba que las dos listas siguen coincidiendo.
+ */
+var PROMPT_EN_INGLES = ['music', 'ambient'];
+
+function campoDePrompt(a){
+  return PROMPT_EN_INGLES.indexOf(a && a.kind) !== -1 ? 'promptEn' : 'prompt';
+}
+
+/**
+ * Qué género saldría con lo que hay elegido, si se deja en automático.
+ *
+ * No se deduce aquí: cada instrumento del catálogo llega con su sugerencia ya
+ * puesta por el servidor. Duplicar la tabla en la pantalla sería garantizar que
+ * un día diga una cosa y el corto salga con otra.
+ */
+function generoSugeridoAqui(){
+  var c = estado.catalogo || {}, f = estado.form || {};
+  var id = (f.instrumentos || [])[0];
+  var ins = (c.instruments || []).find(function(x){ return x.id === id; });
+  return (ins && ins.suggestedGenreId) || 'cinematic';
+}
+
+function etiquetaDeGenero(id, generos){
+  var g = (generos || []).find(function(x){ return x.id === id; });
+  return g ? g.label : id;
 }
 
 /**
@@ -1732,7 +1807,7 @@ function htmlFichasPersonaje(){
   if (f.fichaAbierta > cuantos) f.fichaAbierta = 1;
 
   var html = '<div class="tarjeta">' +
-    '<h3><span class="paso">8</span>Los personajes</h3>' +
+    '<h3><span class="paso">9</span>Los personajes</h3>' +
     '<p class="tenue mini" style="margin-bottom:10px">Elige cómo quieres que sean. ' +
     '<b>Lo que dejes en blanco lo decide el director.</b> Junto a los botones puedes escribir lo tuyo si no está en la lista.</p>';
 
@@ -2033,21 +2108,61 @@ function htmlRevision(p){
     html += '<div class="nota aviso" style="margin-top:11px">Esta generación ha terminado bien, pero <b>no está aprobada</b>. Nada que dependa de ella puede empezar hasta que lo decidas.</div>';
   }
 
-  // ── El prompt y las referencias, siempre consultables ──
-  var promptTexto = (gen && gen.prompt) || (a.spec && a.spec.prompt) || '';
-  var negativo = (gen && gen.negativePrompt) || (a.spec && a.spec.negativePrompt) || '';
-  var refs = (gen && gen.referenceAssetIds) || (a.spec && a.spec.referenceAssetIds) || [];
+  // ── El prompt y las referencias, consultables Y EDITABLES ──
+  //
+  // Editables porque cuando un filtro de contenido bloquea una generación, el
+  // error dice «cambia la descripción de la toma» — y hasta ahora no había
+  // ninguna forma de cambiarla. Un filtro no se pelea: se cambia la palabra que
+  // lo dispara y se vuelve a pedir.
+  var spec = a.spec || {};
+  var campo = campoDePrompt(a);
+  var promptTexto = spec[campo] || (gen && gen.prompt) || spec.prompt || '';
+  var negativo = spec.negativePrompt || (gen && gen.negativePrompt) || '';
+  var editado = !!spec.promptEditado;
+  var editando = (estado.editandoPrompt === a.id);
+  var refs = (gen && gen.referenceAssetIds) || spec.referenceAssetIds || [];
   var porId = {};
   activos(p).forEach(function(x){ porId[x.id] = x; });
 
-  html += '<details style="margin-top:12px"><summary>Ver el prompt y las referencias</summary><div class="cuerpo">' +
-    '<h4>Prompt</h4><pre>' + esc(promptTexto) + '</pre>' +
-    (negativo ? '<h4>Prompt negativo</h4><pre>' + esc(negativo) + '</pre>' : '') +
-    (refs.length ? '<h4>Referencias aprobadas utilizadas</h4><ul class="reglas">' + refs.map(function(id){
+  html += '<details' + (editando ? ' open' : '') + ' style="margin-top:12px">' +
+    '<summary>Ver' + (editado ? ' o editar' : ' y editar') + ' el prompt' +
+      (editado ? ' · reescrito a mano' : '') + '</summary><div class="cuerpo">' +
+    '<h4>Prompt' + (campo === 'promptEn' ? ' (en inglés: es el idioma que entiende el modelo de audio)' : '') + '</h4>';
+
+  if (editando) {
+    html += '<textarea id="editor-prompt" rows="12" spellcheck="false" ' +
+        'style="font-family:ui-monospace,monospace;font-size:12.5px">' + esc(promptTexto) + '</textarea>' +
+      '<h4>Prompt negativo</h4>' +
+      '<textarea id="editor-negativo" rows="3" spellcheck="false" placeholder="Lo que NO quieres ver. Puede quedarse vacío." ' +
+        'style="font-family:ui-monospace,monospace;font-size:12.5px">' + esc(negativo) + '</textarea>' +
+      '<div class="nota" style="margin:4px 0 10px">Si te lo bloquearon los filtros de contenido, cambia la palabra que lo dispara y vuelve a generar. ' +
+        'El texto del Director se guarda: siempre puedes volver a él.</div>' +
+      '<button class="btn pri ancho" data-accion="guardar-prompt" data-activo="' + esc(a.id) + '">Guardar el prompt</button>' +
+      '<button class="btn fantasma ancho pequeno" style="margin-top:8px" data-accion="cancelar-prompt">Cancelar</button>';
+  } else {
+    html += '<pre>' + esc(promptTexto) + '</pre>' +
+      (negativo ? '<h4>Prompt negativo</h4><pre>' + esc(negativo) + '</pre>' : '') +
+      '<button class="btn ancho pequeno" data-accion="editar-prompt" data-activo="' + esc(a.id) + '">Editar el prompt</button>' +
+      (editado
+        ? '<button class="btn fantasma ancho pequeno" style="margin-top:8px" data-accion="restaurar-prompt" data-activo="' + esc(a.id) + '">Volver al prompt original del Director</button>'
+        : '');
+  }
+
+  // EL MISMO ENCARGO EN ESPAÑOL, para leerlo. La música y el ambiente se le
+  // piden a Google en inglés, y ése es el que se edita porque es el que viaja;
+  // pero el producto está en español y el usuario tiene derecho a ver qué se ha
+  // encargado en su idioma sin traducir un párrafo de cabeza (PRD §19).
+  if (campo === 'promptEn' && spec.prompt) {
+    html += '<h4>Lo mismo en español</h4><pre>' + esc(spec.prompt) + '</pre>' +
+      '<p class="tenue mini" style="margin:-4px 0 10px">Esto es sólo para que lo leas. Lo que se manda es el de arriba, ' +
+      'porque el modelo de audio rechaza la petición si detecta cualquier otro idioma.</p>';
+  }
+
+  html += (refs.length ? '<h4>Referencias aprobadas utilizadas</h4><ul class="reglas">' + refs.map(function(id){
       return '<li>' + esc(porId[id] ? porId[id].label : id) + '</li>';
     }).join('') + '</ul>' : '') +
-    (a.spec && a.spec.continuityNotes && a.spec.continuityNotes.length
-      ? '<h4>Continuidad</h4><ul class="reglas">' + a.spec.continuityNotes.map(function(n){ return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>'
+    (spec.continuityNotes && spec.continuityNotes.length
+      ? '<h4>Continuidad</h4><ul class="reglas">' + spec.continuityNotes.map(function(n){ return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>'
       : '') +
     (gen && gen.seed !== undefined && gen.seed !== null ? '<p class="tenue mini">Semilla: ' + esc(gen.seed) + '</p>' : '') +
   '</div></details>';
@@ -2443,6 +2558,7 @@ async function crearProyecto(){
   if (!f.instrumentos.length) { avisar('Elige al menos un instrumento.'); return; }
   if (f.escenario === 'other' && !f.escenarioTexto.trim()) { avisar('Describe el escenario personalizado.'); return; }
   if (f.estilo === 'other' && !f.estiloTexto.trim()) { avisar('Describe el estilo visual personalizado.'); return; }
+  if (f.generoMusical === 'other' && !f.generoMusicalTexto.trim()) { avisar('Escribe qué género musical quieres.'); return; }
 
   var config = {
     instrumentIds: f.instrumentos.slice(),
@@ -2457,6 +2573,8 @@ async function crearProyecto(){
   if (f.formato) config.formatoId = f.formato;
   if (f.escenarioTexto.trim()) config.scenarioCustom = f.escenarioTexto.trim();
   if (f.estiloTexto.trim()) config.visualStyleCustom = f.estiloTexto.trim();
+  if (f.generoMusical) config.musicGenreId = f.generoMusical;
+  if (f.generoMusicalTexto.trim()) config.musicGenreCustom = f.generoMusicalTexto.trim();
   // Sólo se envían las fichas con algo dentro; el resto son huecos que el
   // Director rellena. Se conserva la posición: la ficha 2 es del intérprete 2.
   var fichas = (f.fichas || []).slice(0, cuantosInterpretes()).map(function(x){
@@ -2503,6 +2621,45 @@ async function accionActualizarPlan(id){
     await cargarProyecto(id);
     var n = (r && r.cambiados) ? r.cambiados.length : 0;
     avisar(n ? n + ' elemento(s) con instrucciones nuevas.' : 'Ya estaban al día.', 'ok');
+  });
+}
+
+/**
+ * EDITAR EL ENCARGO A MANO.
+ *
+ * El caso que lo trajo: Google contesta «los filtros de contenido bloquearon
+ * esta imagen, cambia la descripción de la toma» y no había ninguna forma de
+ * cambiarla. Un filtro no se discute — se cambia la palabra que lo dispara.
+ *
+ * El texto se lee del DOM al pulsar «Guardar», no según se escribe: repintar la
+ * pantalla mientras se teclea en el móvil cierra el teclado y pierde el cursor.
+ */
+async function accionGuardarPrompt(activoId){
+  var p = estado.proyecto;
+  if (!p || !activoId) return;
+  var caja = $('editor-prompt');
+  var cajaNeg = $('editor-negativo');
+  if (!caja) return;
+  var texto = caja.value.trim();
+  if (!texto) { avisar('El prompt no puede quedarse vacío.'); return; }
+
+  await ejecutar(async function(){
+    await api.guardarPrompt(p.id, activoId, texto, cajaNeg ? cajaNeg.value.trim() : undefined);
+    estado.editandoPrompt = null;
+    await cargarProyecto(p.id);
+    avisar('Prompt guardado. Vuelve a generar para usarlo.', 'ok');
+  });
+}
+
+async function accionRestaurarPrompt(activoId){
+  var p = estado.proyecto;
+  if (!p || !activoId) return;
+  if (!window.confirm('Se pierde lo que escribiste y vuelve el prompt original del Director.\n\n¿Continuar?')) return;
+  await ejecutar(async function(){
+    await api.restaurarPrompt(p.id, activoId);
+    estado.editandoPrompt = null;
+    await cargarProyecto(p.id);
+    avisar('Prompt devuelto al original.', 'ok');
   });
 }
 
@@ -2667,12 +2824,13 @@ document.addEventListener('click', function(ev){
     // Desde el panel, un activo pertenece a un proyecto que quizá no está
     // abierto: primero se navega y luego se selecciona.
     if (estado.vista !== 'proyecto' && estado.proyecto) {
-      estado.activoSel = id; estado.genVista = null; estado.subtab = 'produccion';
+      estado.activoSel = id; estado.genVista = null; estado.editandoPrompt = null; estado.subtab = 'produccion';
       irA('#/proyecto/' + estado.proyecto.id);
       return;
     }
     estado.activoSel = id;
     estado.genVista = null;
+    estado.editandoPrompt = null;
     estado.subtab = 'produccion';
     pintar();
     var caja = $('caja-revision');
@@ -2682,6 +2840,10 @@ document.addEventListener('click', function(ev){
 
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
   if (accion === 'actualizar-plan') { accionActualizarPlan(el.getAttribute('data-id')); return; }
+  if (accion === 'editar-prompt') { estado.editandoPrompt = el.getAttribute('data-activo'); pintar(); return; }
+  if (accion === 'cancelar-prompt') { estado.editandoPrompt = null; pintar(); return; }
+  if (accion === 'guardar-prompt') { accionGuardarPrompt(el.getAttribute('data-activo')); return; }
+  if (accion === 'restaurar-prompt') { accionRestaurarPrompt(el.getAttribute('data-activo')); return; }
   if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
   if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
   if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo'), el.getAttribute('data-metodo')); return; }
@@ -2781,7 +2943,7 @@ document.addEventListener('change', function(ev){
   estado.form[campo] = el.value;
   if (campo === 'genero') { ajustarTipos(); limpiarFichasDeOtroGenero(); pintar(); }
   if (campo === 'tipo') { limpiarFichasDeOtroGenero(); pintar(); }
-  if (campo === 'escenario' || campo === 'estilo') pintar();
+  if (campo === 'escenario' || campo === 'estilo' || campo === 'generoMusical') pintar();
 });
 
 document.addEventListener('keydown', function(ev){

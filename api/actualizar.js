@@ -55,6 +55,7 @@ module.exports = async function handler(req, res) {
     const nuevosPorId = new Map(modelo.assets.map((a) => [a.id, a.spec || {}]));
 
     const cambiados = [];
+    const respetados = [];
 
     const { proyecto } = await modificarProyecto(id, (p) => {
       for (const activo of p.assets) {
@@ -63,6 +64,16 @@ module.exports = async function handler(req, res) {
         // planos cambió— se queda EXACTAMENTE como está. Cambiarle el encargo
         // por el de otro plano sería peor que dejarlo viejo.
         if (!nuevo) continue;
+
+        // LO QUE EL USUARIO ESCRIBIÓ A MANO NO SE PISA. Si reescribió este
+        // prompt —normalmente para rodear un filtro de contenido que bloqueaba
+        // la generación—, machacárselo con el del Director le devolvería el
+        // texto que ya sabe que no pasa. Se le avisa y se deja como está; en el
+        // panel tiene «volver al original» si lo quiere al día.
+        if (activo.spec && activo.spec.promptEditado) {
+          respetados.push(activo.label);
+          continue;
+        }
 
         const antes = activo.spec || {};
         const distinto =
@@ -99,9 +110,12 @@ module.exports = async function handler(req, res) {
       makeEventAndPush(
         p,
         'plan_updated',
-        cambiados.length
+        (cambiados.length
           ? `Instrucciones actualizadas en ${cambiados.length} elemento(s) del corto.`
-          : 'Instrucciones revisadas: ya estaban al día.',
+          : 'Instrucciones revisadas: ya estaban al día.') +
+        (respetados.length
+          ? ` ${respetados.length} elemento(s) con prompt escrito a mano se han dejado intactos.`
+          : ''),
       );
     });
 
@@ -110,7 +124,13 @@ module.exports = async function handler(req, res) {
       proyecto: paraEnviar(proyecto),
       estado: computeProductionStatus(proyecto),
       cambiados,
-      avisos: avisos || [],
+      respetados,
+      avisos: (avisos || []).concat(
+        respetados.length
+          ? ['No se han tocado los prompts que reescribiste a mano (' + respetados.join(', ') +
+             '). Si los quieres al día, usa «volver al original» en cada uno.']
+          : [],
+      ),
     });
   } catch (e) {
     return fallo(res, e);

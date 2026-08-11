@@ -15,6 +15,7 @@ const {
   PERFORMER_TYPES_BY_ID,
   SCENARIOS_BY_ID,
   VISUAL_STYLES_BY_ID,
+  generoDe,
 } = require('./catalogo.js');
 
 const SHOT_TYPE_LABELS = {
@@ -164,6 +165,12 @@ function buildVisualBible(config, brief) {
       photography: style?.photography ?? 'fotografía cinematográfica',
       finish: `paleta dominante: ${brief.palette.join(', ')}`,
     },
+    // QUÉ MÚSICA SUENA MIENTRAS SE VE ESTO. No es un adorno del prompt: de aquí
+    // sale con cuánta fuerza se mueven las manos. Sin este dato la imagen y la
+    // música salían de fuentes distintas y no pegaban — el usuario montó un
+    // cuatro y el personaje rasgueaba joropo a toda velocidad mientras sonaba
+    // una pieza melancólica de cuerdas pulsadas una a una.
+    music: musicaQueSuena(config, instruments, brief),
     continuityRules: dedupe([
       // Con un solo músico la regla habla de él. Con varios, decir «mismo
       // rostro» sería pedir justo lo contrario de lo que hace falta: los
@@ -190,6 +197,103 @@ function buildVisualBible(config, brief) {
     ]),
     negativePrompt: BASE_NEGATIVE.join(', '),
   };
+}
+
+/**
+ * CÓMO SE TOCA, según lo que va a sonar.
+ *
+ * Tres intensidades, y cada una dice lo mismo de dos maneras: `imagen` describe
+ * una postura congelada —que es lo único que puede enseñar una foto— y `video`
+ * describe el movimiento. Están separadas porque pedirle «las manos vuelan» a
+ * una imagen fija sólo consigue manos borrosas.
+ */
+const ENERGIA_AL_TOCAR = {
+  alta: {
+    resumen: 'a toda intensidad',
+    imagen: [
+      'Está tocando FUERTE, en pleno esfuerzo: el gesto está en su punto más amplio',
+      'El cuerpo acompaña —hombros y torso metidos en el golpe, peso hacia delante—',
+      'La cara es de concentración intensa, no de calma; puede haber ceño, boca entreabierta o sonrisa de disfrute',
+      'Manos y dedos en una posición de ataque, no en reposo sobre el instrumento',
+    ],
+    video: [
+      'Toca RÁPIDO y FUERTE: el gesto es amplio, rítmico y sin pausas',
+      'El cuerpo se mueve con la música: hombros, torso y cabeza marcan el pulso',
+      'Nada de un movimiento lento y contemplativo: aquí hay energía y esfuerzo visible',
+    ],
+  },
+  media: {
+    resumen: 'con energía sostenida',
+    imagen: [
+      'Está tocando con energía sostenida: el gesto es firme y claro, ni tímido ni desbocado',
+      'El cuerpo acompaña la música con un movimiento contenido',
+      'La cara está concentrada en lo que toca',
+    ],
+    video: [
+      'Toca con energía sostenida y constante, con el gesto claro y bien marcado',
+      'El cuerpo acompaña el pulso sin exagerarlo',
+    ],
+  },
+  suave: {
+    resumen: 'con delicadeza',
+    imagen: [
+      'Está tocando SUAVE: el gesto es pequeño, delicado y sin tensión',
+      'El cuerpo está sereno, casi quieto; el peso repartido y los hombros bajos',
+      'La cara es de calma o de recogimiento, con los ojos entornados o cerrados',
+    ],
+    video: [
+      'Toca DESPACIO y SUAVE: el gesto es lento, mínimo y muy controlado',
+      'El cuerpo casi no se mueve; sólo respira y sigue la música por dentro',
+      'Nada de golpes fuertes ni de movimientos rápidos: aquí la música es delicada',
+    ],
+  },
+};
+
+/**
+ * El género que va a sonar y con cuánta fuerza se toca, para la parte visual.
+ *
+ * DE DÓNDE SALE LA ENERGÍA, y por qué de ahí. Si el usuario ELIGIÓ el género a
+ * mano, manda su energía: es la señal más clara que puede dar. Si lo dejó en
+ * «que lo decida el director», manda el TEMPO que el Director acabó fijando —
+ * que es el mismo arbitraje que ya se hace con el carácter, donde el género
+ * sugerido por el instrumento entra el último, por detrás del estilo visual y
+ * del escenario.
+ *
+ * Sin esa distinción salía una contradicción dentro del propio prompt: un
+ * cuatro sugiere joropo, joropo es energía alta, y el prompt de vídeo pedía «a
+ * toda intensidad» encima de una pieza que el Director había puesto a 84 BPM.
+ */
+const ENERGIA_POR_TEMPO = { alta: 110, suave: 70 };
+
+function musicaQueSuena(config, instruments, brief) {
+  const genero = generoDe(config || {}, instruments || []);
+  const elegidoAMano = genero.id !== 'other' && Boolean(config && config.musicGenreId) &&
+    config.musicGenreId !== 'auto' && config.musicGenreId === genero.id;
+
+  const bpm = Number((brief && brief.music && brief.music.tempoBpm) || genero.bpm || 0);
+  const porTempo = bpm >= ENERGIA_POR_TEMPO.alta ? 'alta'
+    : bpm && bpm <= ENERGIA_POR_TEMPO.suave ? 'suave'
+      : 'media';
+
+  return {
+    genreId: genero.id,
+    genreLabel: genero.label || '',
+    energia: (elegidoAMano && genero.energia) || porTempo,
+    tempoBpm: bpm,
+  };
+}
+
+/** El bloque de prompt que ata el gesto del intérprete a la música que suena. */
+function bloqueComoSeToca(bible, cual) {
+  const musica = bible && bible.music;
+  if (!musica) return '';
+  const nivel = ENERGIA_AL_TOCAR[musica.energia] || ENERGIA_AL_TOCAR.media;
+  const suena = musica.genreLabel
+    ? `La música que suena en este momento es ${musica.genreLabel}` +
+      (musica.tempoBpm ? ` (unos ${musica.tempoBpm} BPM)` : '') +
+      `, y se toca ${nivel.resumen}`
+    : `La música se toca ${nivel.resumen}`;
+  return block('LA MÚSICA Y LA IMAGEN TIENEN QUE PEGAR', [suena, ...nivel[cual]]);
 }
 
 function dedupe(values) {
@@ -662,6 +766,10 @@ function buildShotImagePrompt(bible, shot, config) {
     SIN_PERSONAS.indexOf(shot.shotType) === -1
       ? block('La persona', bellezaDelSujeto(bible, shot.subject))
       : null,
+    // Con cuánta fuerza está tocando. En un plano detalle del instrumento no
+    // hay nadie a quien pedírselo, pero en uno de las manos sí — y ahí es justo
+    // donde más se nota si el gesto no pega con lo que suena.
+    shot.shotType === 'detail' ? null : bloqueComoSeToca(bible, 'imagen'),
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
   ]);
@@ -686,6 +794,10 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
       `Relación intérprete-instrumento: ${bible.instrument.physicalRelation}`,
       `Entorno: ${bible.environment.atmosphere}`,
     ]),
+    // El clip es donde se vio el fallo: el personaje rasgueando joropo a toda
+    // velocidad encima de una pieza melancólica. En el último plano no va, que
+    // ahí lo que toca es dejar de tocar.
+    esElUltimoDelCorto ? null : bloqueComoSeToca(bible, 'video'),
     block(CONTINUITY_HEADER, [
       'El primer fotograma debe coincidir con la imagen de referencia aprobada',
       ...bible.continuityRules,
@@ -751,6 +863,8 @@ module.exports = {
   buildScenePrompt,
   buildShotImagePrompt,
   buildClipPrompt,
+  musicaQueSuena,
+  ENERGIA_AL_TOCAR,
   BASE_NEGATIVE,
   NEGATIVE_VIDEO_EXTRA,
 };
