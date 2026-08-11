@@ -33,7 +33,7 @@ const SHOT_TYPE_LABELS = {
   profile: 'plano lateral de perfil',
   // El plano con el que termina todo corto. Su etiqueta ya dice lo esencial,
   // porque es lo que lo distingue de los otros trece: aquí no se toca.
-  closing_still: 'plano final, con el intérprete SIN TOCAR',
+  closing_still: 'plano final, con el instrumento ya bajado y SIN TOCAR',
 };
 
 const CAMERA_MOVE_LABELS = {
@@ -780,13 +780,18 @@ const CIERRE_IMAGEN = [
     'vestuario, el mismo escenario y la misma luz',
 ];
 
+// El clip de este plano puede colocarse VARIAS VECES en el montaje —vuelve
+// durante el corto y además lo cierra—, así que sus instrucciones describen el
+// PLANO y no el momento: nada de «la película se está apagando», que sería falso
+// las veces que aparece a mitad.
 const CIERRE_VIDEO = [
   'NO TOCA EN NINGÚN MOMENTO de este clip. Nada de retomar la interpretación, ni ' +
     'una nota, ni un gesto de empezar',
   'El movimiento es mínimo y de reposo: respirar, un parpadeo, el pelo o la ropa ' +
     'con el aire, una mirada lenta',
   'El instrumento sigue bajado del primer fotograma al último',
-  'El último segundo es casi inmóvil: la película se está apagando',
+  'Empieza quieto y termina quieto, en la misma postura: este plano vuelve varias ' +
+    'veces en el montaje y tiene que poder encajar en cualquiera de ellas',
 ];
 
 /** Imagen fija de cada toma, compuesta con la biblia más la intención de la toma. */
@@ -819,7 +824,7 @@ function buildShotImagePrompt(bible, shot, config) {
       ? null
       : bloqueComoSeToca(bible, 'imagen'),
     shot.shotType === PLANO_DE_CIERRE
-      ? block('CÓMO TERMINA EL CORTO (este es el plano final)', CIERRE_IMAGEN)
+      ? block('EL PLANO DE CIERRE: AQUÍ NO SE TOCA', CIERRE_IMAGEN)
       : null,
     block(CONTINUITY_HEADER, bible.continuityRules),
     block('Acabado', [bible.aesthetic.finish]),
@@ -864,7 +869,7 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
     // transición de tocar a no tocar: la imagen de referencia de este plano ya
     // enseña al intérprete quieto y con el instrumento bajado, así que el clip
     // sólo tiene que no estropearlo.
-    esCierre ? block('CÓMO TERMINA EL CORTO (este es el plano final)', CIERRE_VIDEO) : null,
+    esCierre ? block('EL PLANO DE CIERRE: AQUÍ NO SE TOCA', CIERRE_VIDEO) : null,
     block('Requisitos', [
       'Sin cortes internos ni cambios de plano',
       'Sin deformaciones en manos, rostro ni instrumento',

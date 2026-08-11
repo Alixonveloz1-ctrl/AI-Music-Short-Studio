@@ -590,7 +590,7 @@ async function principal() {
       // dice el montaje, no el orden de la lista: el último hueco de la línea
       // de tiempo suele ser un plano reutilizado de más arriba.
       const clips = proyecto.assets.filter((a) => a.kind === 'clip');
-      const cierra = clips.filter((c) => /CÓMO TERMINA EL CORTO/.test(c.spec.prompt));
+      const cierra = clips.filter((c) => /EL PLANO DE CIERRE/.test(c.spec.prompt));
       igual(cierra.length, 1, 'debería haber exactamente un clip que cierre la película');
       const salvoElUltimo = clips.filter((c) => c.id !== cierra[0].id);
       cierto(salvoElUltimo.length, 'el corto de prueba no tiene clips');
@@ -1045,19 +1045,62 @@ async function principal() {
 
       cierto(cierre.esCierre, segundos + ' s: el corto no termina en el plano de cierre');
       igual(cierre.shotType, productor.PLANO_DE_CIERRE, segundos + ' s: el plano final no es del tipo de cierre');
-      cierto(!ultimo.reused, segundos + ' s: el corto cierra con material repetido de otro momento');
+      // El último hueco puede ser una repetición DEL PROPIO cierre —eso está
+      // permitido— pero nunca de otro plano, que es de donde venía el fallo.
+      cierto(ultimo.shotId === cierre.id,
+        segundos + ' s: el corto cierra con material de otro plano');
       igual(ultimo.transitionIn, 'dissolve', segundos + ' s: el plano final entra a corte seco');
 
       // Tiene su hueco entero: es un plano que se genera aposta, y darle el
       // sobrante de cuatro segundos sería pagar ocho y tirar la mitad.
       igual(ultimo.durationSec, 8, segundos + ' s: el plano de cierre no se lleva los ocho segundos');
 
-      // Y NO sale en ningún otro sitio: un plano sin nadie tocando en mitad de
-      // la película contradiría la música que sigue sonando.
-      const veces = e.timeline.filter((t) => t.shotId === cierre.id).length;
-      igual(veces, 1, segundos + ' s: el plano de cierre se reutiliza donde sí debería tocar');
-      cierto(!cierre.reusable, segundos + ' s: el plano de cierre está marcado como repetible');
+      // SÍ puede volver durante el corto: el usuario lo pidió así —«eso le daría
+      // un aire como de videoclip musical»—. Lo único que no se negocia es que el
+      // último hueco sea suyo.
+      cierto(cierre.reusable, segundos + ' s: el plano de cierre ya no se puede reutilizar');
+
+      // Pero nunca pegado a sí mismo, ni siquiera en el hueco justo anterior al
+      // final, que es el caso que `ultimaTomaId` no puede ver porque mira atrás.
+      const posiciones = e.timeline
+        .map((t, i) => (t.shotId === cierre.id ? i : -1))
+        .filter((i) => i !== -1);
+      for (let k = 1; k < posiciones.length; k += 1) {
+        cierto(posiciones[k] - posiciones[k - 1] > 1,
+          segundos + ' s: el plano de cierre sale dos veces seguidas');
+      }
     }
+  });
+
+  comprobar('el plano de cierre puede volver durante el corto', () => {
+    // «De hecho, sí se puede reutilizar, no hay ningún problema, porque eso le
+    // daría un aire como de videoclip musical. Lo que hay que asegurarnos es de
+    // que siempre sea el final, ese clip.»
+    //
+    // Para poder volver tiene que EXISTIR antes de repartir los huecos: si se
+    // creara al llegar al último, los anteriores no podrían reutilizarlo porque
+    // todavía no estaría. De ahí que se cree el primero y se coloque el último.
+    let algunaVezVolvio = false;
+    for (const segundos of [60, 120, 180]) {
+      const e = productor.planStructure(segundos);
+      const cierre = e.shots.find((t) => t.esCierre);
+      const veces = e.timeline.filter((t) => t.shotId === cierre.id).length;
+      if (veces > 1) algunaVezVolvio = true;
+
+      // Vuelva o no, el último hueco es suyo. Eso no se negocia.
+      igual(e.timeline[e.timeline.length - 1].shotId, cierre.id,
+        segundos + ' s: el corto no termina en el plano de cierre');
+
+      // Y aparece EL ÚLTIMO en la lista de tomas, aunque se cree el primero:
+      // la pantalla y la lista de activos van en este orden.
+      igual(e.shots[e.shots.length - 1].id, cierre.id,
+        segundos + ' s: el plano de cierre no es el último de la lista de tomas');
+      igual(cierre.index, e.shots.length, segundos + ' s: el plano de cierre está mal numerado');
+      // Y no le roba el número a nadie: los planos de interpretación siguen
+      // empezando en Shot 01.
+      cierto(e.shots.some((t) => t.id === 'shot_01'), segundos + ' s: el corto ya no empieza en Shot 01');
+    }
+    cierto(algunaVezVolvio, 'el plano de cierre no vuelve nunca, y debería poder');
   });
 
   comprobar('el plano de cierre no le cuesta al usuario una generación de más', () => {
@@ -1652,7 +1695,7 @@ async function principal() {
     // sostenido de interpretación. La película se quedaba sin final.
     const p = nuevo();
     const clips = p.assets.filter((a) => a.kind === 'clip');
-    const conFinal = clips.filter((a) => /CÓMO TERMINA EL CORTO/.test(a.spec.prompt));
+    const conFinal = clips.filter((a) => /EL PLANO DE CIERRE/.test(a.spec.prompt));
     igual(conFinal.length, 1, 'tiene que pedir el final exactamente un clip');
 
     // Y es el último que se VE. Antes NO lo era: el último hueco lo ocupaba un
@@ -1671,6 +1714,8 @@ async function principal() {
     const prompt = conFinal[0].spec.prompt;
     cierto(/NO TOCA EN NINGÚN MOMENTO/.test(prompt), 'no prohíbe tocar en el clip final');
     cierto(/instrumento sigue bajado/.test(prompt), 'no exige el instrumento bajado');
+    cierto(!/la película se está apagando/.test(prompt),
+      'el clip del cierre habla del momento, y ahora también sale a mitad de corto');
     // Y su IMAGEN ya lo enseña quieto: ahí está la diferencia con el intento
     // anterior. El vídeo no tiene que inventarse la transición de tocar a no
     // tocar, porque su fotograma de partida ya es el de después.

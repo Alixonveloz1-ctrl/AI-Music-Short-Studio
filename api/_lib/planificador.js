@@ -541,7 +541,10 @@ function aplicarFicha(miembro, ficha) {
  *  - Y ninguna se queda fuera: si al terminar el reparto alguien no tiene ni una
  *    toma propia, se le quita una a quien más tenga.
  */
-const PLANOS_DE_GRUPO = ['establishing_wide', 'wide', 'high_angle', 'detail'];
+// El plano de cierre entra aquí porque el corto termina con TODO el grupo, no
+// con uno de sus miembros: dejar a la otra intérprete fuera del último plano —y
+// de sus repeticiones, que ahora las tiene— sería sacarla del final del corto.
+const PLANOS_DE_GRUPO = ['establishing_wide', 'wide', 'high_angle', 'detail', 'closing_still'];
 
 function repartirProtagonismo(shots, cuantos) {
   if (cuantos <= 1) return shots.map(() => 1);
@@ -909,10 +912,12 @@ function describeShot(args) {
   // dijera «interpretando», el modelo de imagen se quedaría con esa palabra por
   // muchos avisos que llevara debajo.
   if (args.esCierre) {
+    const varios = reparto.length > 1 && args.subject === 'todos';
     return `${capitalize(args.shotTypeLabel)}: ${quien} en ${args.place}${anchor}, ` +
-      `YA NO TOCA. ${instrumento} bajado y en reposo, las manos quietas y fuera del ` +
-      `instrumento. La pieza ha terminado y queda la calma: respiración, la mirada ` +
-      `sostenida y la luz de ${args.timeOfDay}.`;
+      `YA NO ${varios ? 'TOCAN' : 'TOCA'}. ${instrumento} ${varios ? 'bajados' : 'bajado'} y en ` +
+      `reposo, las manos quietas y fuera del instrumento. La pieza ha terminado y queda ` +
+      `la calma: ${varios ? 'respiran' : 'respira'}, ${varios ? 'sostienen' : 'sostiene'} la ` +
+      `mirada, y la luz de ${args.timeOfDay} sobre la escena quieta.`;
   }
 
   const base = `${capitalize(args.shotTypeLabel)} de ${quien} interpretando ${instrumento} en ${args.place}${anchor}.`;
