@@ -218,15 +218,60 @@ const CARACTER_EN = {
   'solemne': 'solemn', 'amplio': 'expansive', 'reverente': 'reverent',
   'esperanzado': 'hopeful', 'luminoso': 'luminous', 'tenso': 'tense',
   'misterioso': 'mysterious', 'contenido': 'restrained',
+  // Los que trae el carácter deducido del contexto. Sin estos, un corto de
+  // zombies le pedía a Lyria «desolado, crudo, amenazante» en español y el
+  // modelo, que sólo entiende inglés, se los saltaba enteros.
+  'oscuro': 'dark', 'amenazante': 'menacing', 'pesado': 'heavy',
+  'épico': 'epic', 'eléctrico': 'electric', 'nocturno': 'nocturnal',
+  'sintético': 'synthetic', 'crudo': 'raw', 'dramático': 'dramatic',
+  'desgastado': 'worn', 'delicado': 'delicate', 'aireado': 'airy',
+  'clásico': 'classical', 'urbano': 'urban', 'inquieto': 'restless',
+  'enorme': 'huge', 'eufórico': 'euphoric', 'poderoso': 'powerful',
+  'sacro': 'sacred', 'antiguo': 'ancient', 'árido': 'arid',
+  'desolado': 'desolate', 'cercano': 'close', 'limpio': 'clean',
+  'preciso': 'precise', 'con garra': 'gritty', 'agresivo': 'aggressive',
+  'implacable': 'relentless', 'siniestro': 'sinister', 'inquietante': 'unsettling',
+  'doliente': 'mournful', 'alegre': 'joyful', 'vivo': 'lively',
+  'bailable': 'danceable', 'electrónico': 'electronic', 'pulsante': 'pulsing',
+  'jazzístico': 'jazzy', 'humeante': 'smoky', 'libre': 'free',
+  'tierno': 'tender', 'rítmico': 'rhythm-driven', 'contundente': 'hard-hitting',
+  'rotundo': 'bold', 'lírico': 'lyrical', 'expresivo': 'expressive',
+  'claro': 'clear', 'articulado': 'articulate', 'brillante': 'bright',
 };
 
 const ACUSTICA_EN = { dry: 'dry, close and intimate', natural: 'natural room reverb', hall: 'large hall reverb' };
 
-/** El nombre inglés de un instrumento: su primer alias ASCII, o su id. */
+/**
+ * El nombre INGLÉS de un instrumento: SU PROPIO ID.
+ *
+ * Los ids del catálogo están en inglés por construcción —`drum_kit`,
+ * `bass_guitar`, `hurdy_gurdy`, `french_horn`, `timpani`— así que el nombre que
+ * Lyria entiende ya estaba escrito, y con guiones bajos por toda diferencia.
+ *
+ * Antes se usaba el primer alias, y ahí estaba el fallo: el primer alias de la
+ * batería es «bateria», el nombre español sin la tilde, que a un modelo inglés
+ * no le dice nada. Se probó a descartar el alias que coincidiera con el nombre
+ * español, y eso rompía el violín —donde el español y el inglés son la misma
+ * palabra— y lo dejaba en «fiddle». La respuesta no era una heurística mejor:
+ * era mirar el dato exacto que ya existía.
+ */
 function instrumentoEn(instrumento) {
-  const alias = (instrumento.aliases || []).find((a) => /^[\x20-\x7e]+$/.test(a));
-  return alias || String(instrumento.id).replace(/_/g, ' ');
+  return String(instrumento.id).replace(/_/g, ' ');
 }
+
+function sinTildes(texto) {
+  return String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/**
+ * Familias de instrumento que NO llevan la melodía.
+ *
+ * Pedirle a una batería que «lleve la melodía de principio a fin» es pedirle
+ * algo que no puede hacer, y el modelo resuelve esa contradicción metiendo un
+ * instrumento melódico que nadie pidió. El usuario lo describió exacto: puso
+ * batería y le salió algo que «parece de un xilófono».
+ */
+const FAMILIAS_SIN_MELODIA = ['percussion'];
 
 function enLista(texto, tabla) {
   return String(texto || '')
@@ -236,22 +281,74 @@ function enLista(texto, tabla) {
     .join(', ');
 }
 
-function promptMusicalEn(config, brief, instrumentos, formacion, escenario) {
+/**
+ * Lo que el usuario escribió, en una línea, para dárselo a Lyria como contexto.
+ *
+ * Su petición fue clara: «no es que lo pongas literal en el prompt, sólo te
+ * digo qué esperaba: el director debería poder interpretar, darle contexto a la
+ * situación». Esto es justo eso — no se le manda como una orden de género, se le
+ * manda como el mundo en el que ocurre la pieza, que es lo que un compositor
+ * necesita saber antes de escribir la primera nota.
+ *
+ * Va en inglés a trompicones si el usuario escribió en español, y da igual:
+ * Lyria entiende «postapocaliptico» perfectamente en un texto por lo demás
+ * inglés, y traducirlo a mano sería inventarse lo que quiso decir.
+ */
+function contextoDelUsuario(config) {
+  const partes = [config.creativeDirection, config.scenarioCustom, config.visualStyleCustom]
+    .map((t) => String(t || '').trim())
+    .filter(Boolean);
+  if (!partes.length) return '';
+  return partes.join('. ').replace(/\s+/g, ' ').slice(0, 300);
+}
+
+function promptMusicalEn(config, brief, instrumentos, formacion, escenario, contexto) {
   const nombres = instrumentos.map(instrumentoEn);
   return [
     'Instrumental music for a short film. ' + config.durationSec + ' seconds long.',
     'Instruments: ' + (nombres.join(', ') || 'a single solo instrument') +
       '. Ensemble: ' + String((formacion && formacion.id) || 'solo').replace(/_/g, ' ') + '.',
     'Mood: ' + (enLista(brief.music.mood, CARACTER_EN) || 'contemplative') + '.',
-    'Key: ' + tonalidadEn(brief.music.key) +
-      '. Scale: ' + (ESCALAS_EN[String(brief.music.scale || '').toLowerCase()] || brief.music.scale) +
-      '. Tempo: around ' + brief.music.tempoBpm + ' BPM.',
+    // Una batería no tiene tonalidad ni escala. Pedírselas es darle al modelo
+    // una instrucción que sólo puede cumplir metiendo un instrumento afinado
+    // que nadie pidió — que es de donde salía el xilófono.
+    FAMILIAS_SIN_MELODIA.indexOf(instrumentos.length ? instrumentos[0].categoryId : '') !== -1
+      ? 'Tempo: around ' + brief.music.tempoBpm + ' BPM. No key and no scale: this is a ' +
+        'percussion piece, it is not tuned.'
+      : 'Key: ' + tonalidadEn(brief.music.key) +
+        '. Scale: ' + (ESCALAS_EN[String(brief.music.scale || '').toLowerCase()] || brief.music.scale) +
+        '. Tempo: around ' + brief.music.tempoBpm + ' BPM.',
     'Recording space: ' + (ACUSTICA_EN[(escenario && escenario.acoustics)] || 'natural room reverb') + '.',
-    nombres.length > 1
-      ? 'All ' + nombres.length + ' instruments play together throughout; ' +
-        nombres[0] + ' leads the melody.'
-      : 'The solo instrument carries the melody from start to finish.',
-  ].join('\n');
+    liderazgoEn(instrumentos, nombres),
+    // LO QUE ESCRIBIÓ EL USUARIO, tal cual. No es lo mismo que el carácter
+    // deducido: aquel son cuatro adjetivos, esto es su frase entera, y Lyria
+    // entiende «post-apocalyptic wasteland» mucho mejor que «desolate, raw».
+    contexto ? 'Context for the piece: ' + contexto : null,
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * Quién lleva la voz cantante, y si la lleva alguien.
+ *
+ * Una batería sola no toca una melodía: marca el ritmo y la pieza se construye
+ * encima. Decirle lo contrario es lo que hacía aparecer un xilófono.
+ */
+function liderazgoEn(instrumentos, nombres) {
+  const familia = instrumentos.length ? instrumentos[0].categoryId : '';
+  const sinMelodia = FAMILIAS_SIN_MELODIA.indexOf(familia) !== -1;
+
+  if (nombres.length > 1) {
+    return sinMelodia
+      ? 'All ' + nombres.length + ' instruments play together throughout, driven by ' +
+        nombres[0] + '. The rhythm leads and everything else is built on top of it.'
+      : 'All ' + nombres.length + ' instruments play together throughout; ' +
+        nombres[0] + ' leads the melody.';
+  }
+  return sinMelodia
+    ? 'This is a SOLO ' + nombres[0] + ' piece and the ' + nombres[0] + ' is the ONLY thing ' +
+      'playing. It carries the whole piece with rhythm, dynamics and fills — not with a tune. ' +
+      'Do NOT add a melodic instrument to carry a melody: there is no melody instrument here.'
+    : 'The solo instrument carries the melody from start to finish.';
 }
 
 function briefMusical(config, brief, bible) {
@@ -290,7 +387,7 @@ function briefMusical(config, brief, bible) {
     prompt,
     // El mismo encargo en inglés, que es lo que se le manda a Lyria. El de
     // arriba, en español, es el que ve el usuario.
-    promptEn: promptMusicalEn(config, brief, instrumentos, formacion, escenario),
+    promptEn: promptMusicalEn(config, brief, instrumentos, formacion, escenario, contextoDelUsuario(config)),
     negativePrompt: 'voz, canto, coros, letra, palabras habladas, aplausos, ruido de público',
   };
 }

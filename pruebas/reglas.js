@@ -316,6 +316,72 @@ async function principal() {
     cierto(ui.colaPendientes(p).length > 0, 'la cola se creería terminada con trabajo por hacer');
   });
 
+  await comprobarAsync('el Director lee el contexto antes de encargar la música', async () => {
+    // El fallo: un zombie solista tocando la BATERÍA en una ciudad en ruinas, y
+    // la herramienta encargó «hopeful, luminous, serene» a 78 pulsaciones. El
+    // carácter se sorteaba de cinco juegos, todos apacibles, sin mirar el
+    // estilo, ni el escenario, ni el instrumento, ni lo que el usuario escribió.
+    const armar = async (extra) => {
+      const c = Object.assign({}, CONFIG, { formationId: 'solo' }, extra);
+      return (await construirPlan(c)).plan.music.promptEn;
+    };
+
+    const zombi = await armar({
+      instrumentIds: ['drum_kit'], scenarioId: 'city', visualStyleId: 'dark_fantasy',
+      creativeDirection: 'un zombie en un mundo postapocalíptico, rock alternativo',
+    });
+    // 1. El instrumento, en inglés y con su nombre real. Era «bateria».
+    cierto(/Instruments: drum kit/.test(zombi), 'la batería no llega en inglés: ' + zombi);
+    // 2. El carácter sale del contexto, no de un sorteo apacible.
+    cierto(/desolate|raw|menacing|dark/.test(zombi), 'el carácter no recoge el contexto: ' + zombi);
+    cierto(!/serene|hopeful|luminous/.test(zombi), 'sigue encargando una pieza apacible para un corto de zombies');
+    // 3. Y con empuje: 128, no 78.
+    const bpm = Number(/around (\d+) BPM/.exec(zombi)[1]);
+    cierto(bpm >= 110, 'el tempo es de ' + bpm + ' BPM para un corto de rock');
+    // 4. A una batería no se le pide melodía ni tonalidad: de ahí el xilófono.
+    cierto(/Do NOT add a melodic instrument/.test(zombi), 'no se prohíbe meter un instrumento melódico');
+    cierto(!/carries the melody/.test(zombi), 'a la batería se le sigue pidiendo la melodía');
+    cierto(/No key and no scale/.test(zombi), 'a una batería se le está pidiendo tonalidad');
+    // 5. Y lo que escribió el usuario llega como contexto.
+    cierto(/postapocal/.test(zombi), 'su texto no llega a la música');
+
+    // Lo de siempre sigue funcionando: un violín es un violín y lleva melodía.
+    const violin = await armar({ instrumentIds: ['violin'], scenarioId: 'forest' });
+    cierto(/Instruments: violin/.test(violin), 'el violín llega mal: ' + violin);
+    cierto(/carries the melody/.test(violin), 'a un violín se le quitó la melodía');
+    cierto(/Key: /.test(violin), 'a un violín se le quitó la tonalidad');
+
+    // Y el escenario manda aunque no se escriba nada: un arpa en una iglesia no
+    // suena como una caja de ritmos en la calle.
+    const iglesia = await armar({ instrumentIds: ['harp'], scenarioId: 'church', visualStyleId: 'oil' });
+    const calle = await armar({ instrumentIds: ['drum_machine'], scenarioId: 'street', visualStyleId: 'retro' });
+    cierto(/sacred|solemn|classical/.test(iglesia), 'la iglesia no tiñe la música: ' + iglesia);
+    cierto(/urban|electric|nocturnal/.test(calle), 'la calle no tiñe la música: ' + calle);
+    cierto(Number(/around (\d+) BPM/.exec(calle)[1]) > Number(/around (\d+) BPM/.exec(iglesia)[1]),
+      'la caja de ritmos en la calle debería ir más rápida que el arpa en la iglesia');
+  });
+
+  comprobar('los 89 instrumentos tienen nombre inglés', () => {
+    // El primer alias de la batería era «bateria», el nombre español sin tilde.
+    // Los ids del catálogo SÍ están en inglés por construcción, así que son
+    // ellos los que viajan. Esta comprobación vigila que siga siendo verdad.
+    for (const i of catalogo.INSTRUMENTS) {
+      cierto(/^[a-z0-9_]+$/.test(i.id), 'el id "' + i.id + '" no sirve como nombre inglés');
+      cierto(i.id.length >= 3, 'el id "' + i.id + '" es demasiado corto para nombrar un instrumento');
+    }
+    // Y los casos donde el español y el inglés se separan, uno a uno.
+    const esperado = {
+      drum_kit: 'drum kit', bass_guitar: 'bass guitar', acoustic_guitar: 'acoustic guitar',
+      flute: 'flute', french_horn: 'french horn', timpani: 'timpani',
+      hurdy_gurdy: 'hurdy gurdy', full_orchestra: 'full orchestra', cello: 'cello',
+      violin: 'violin', harp: 'harp', drum_machine: 'drum machine',
+    };
+    for (const id of Object.keys(esperado)) {
+      cierto(catalogo.INSTRUMENTS_BY_ID.has(id), 'falta el instrumento ' + id);
+      igual(id.replace(/_/g, ' '), esperado[id], 'el nombre inglés de ' + id + ' no es el esperado');
+    }
+  });
+
   await comprobarAsync('a Lyria no le llega ni una palabra en español', async () => {
     // El fallo: «Audio generation failed with the following error: Unsupported
     // language detected. Please use one of the supported languages: en.» El

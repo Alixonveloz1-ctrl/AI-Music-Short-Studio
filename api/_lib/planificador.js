@@ -88,6 +88,137 @@ const MOOD_SETS = [
 ];
 
 /**
+ * EL CARÁCTER DE LA MÚSICA LO DECIDE EL CONTEXTO, NO UN SORTEO.
+ *
+ * El fallo, en palabras del usuario: puso un zombie solista tocando la batería
+ * en un escenario postapocalíptico, y la herramienta compuso una pieza de
+ * «hopeful, luminous, serene» a 78 pulsaciones que sonaba a xilófono. Los cinco
+ * juegos de arriba son todos apacibles y se elegía uno al azar: daba igual que
+ * el corto fuera un réquiem o una fiesta.
+ *
+ * Y su petición era exactamente esta: «el director debería tener contexto,
+ * debería poder interpretar también». Un director de verdad mira el escenario,
+ * el estilo y el instrumento antes de encargar la música.
+ *
+ * Así que ahora el carácter se DEDUCE, en este orden de mando:
+ *
+ *   1. Lo que escribe el usuario. Si dice «rock alternativo», es eso y punto.
+ *   2. El estilo visual. Fantasía oscura no lleva la misma música que acuarela.
+ *   3. El escenario. Una ciudad en ruinas no suena como una iglesia.
+ *   4. La familia del instrumento. Una batería manda el ritmo; un arpa, no.
+ *
+ * Sólo cuando nada de eso dice nada se vuelve al sorteo, que para un violín en
+ * un bosque sigue siendo una respuesta razonable.
+ */
+const CARACTER_POR_ESTILO = {
+  dark_fantasy: { mood: ['oscuro', 'amenazante', 'pesado'], empuje: 'duro' },
+  fantasy: { mood: ['épico', 'amplio', 'luminoso'], empuje: 'medio' },
+  retro: { mood: ['eléctrico', 'nocturno', 'sintético'], empuje: 'duro' },
+  manga: { mood: ['tenso', 'crudo', 'dramático'], empuje: 'duro' },
+  vintage: { mood: ['nostálgico', 'cálido', 'desgastado'], empuje: 'suave' },
+  watercolor: { mood: ['delicado', 'aireado', 'sereno'], empuje: 'suave' },
+  oil: { mood: ['solemne', 'clásico', 'cálido'], empuje: 'suave' },
+};
+
+const CARACTER_POR_ESCENARIO = {
+  street: { mood: ['urbano', 'crudo', 'inquieto'], empuje: 'duro' },
+  city: { mood: ['urbano', 'nocturno', 'inquieto'], empuje: 'duro' },
+  rooftop: { mood: ['nocturno', 'amplio', 'íntimo'], empuje: 'medio' },
+  stadium: { mood: ['enorme', 'eufórico', 'poderoso'], empuje: 'duro' },
+  open_air_concert: { mood: ['enorme', 'eufórico', 'cálido'], empuje: 'duro' },
+  church: { mood: ['sacro', 'reverente', 'amplio'], empuje: 'suave' },
+  temple: { mood: ['sacro', 'antiguo', 'contenido'], empuje: 'suave' },
+  desert: { mood: ['árido', 'desolado', 'amplio'], empuje: 'medio' },
+  room: { mood: ['íntimo', 'cercano', 'contenido'], empuje: 'suave' },
+  studio: { mood: ['limpio', 'cercano', 'preciso'], empuje: 'medio' },
+};
+
+/**
+ * Palabras que el usuario escribe y que cambian la música entera.
+ *
+ * No es una lista de géneros: es la lista de cosas que, si aparecen en su
+ * texto, hacen que cualquier otra deducción sobre. Gana la que aparezca ANTES.
+ */
+const CARACTER_ESCRITO = [
+  { palabras: ['postapocalip', 'post-apocalip', 'apocalip', 'ruinas', 'zombi', 'zombie'],
+    mood: ['desolado', 'crudo', 'amenazante'], empuje: 'duro' },
+  { palabras: ['rock alternativo', 'alternativo', 'rock', 'punk', 'grunge'],
+    mood: ['crudo', 'eléctrico', 'con garra'], empuje: 'duro' },
+  { palabras: ['metal', 'agresiv', 'brutal', 'furios'],
+    mood: ['agresivo', 'pesado', 'implacable'], empuje: 'duro' },
+  { palabras: ['epic', 'épic', 'heroic', 'batalla', 'guerra'],
+    mood: ['épico', 'poderoso', 'amplio'], empuje: 'duro' },
+  { palabras: ['terror', 'miedo', 'siniestr', 'macabr', 'pesadilla'],
+    mood: ['siniestro', 'inquietante', 'oscuro'], empuje: 'medio' },
+  { palabras: ['triste', 'melancol', 'duelo', 'luto', 'despedida'],
+    mood: ['melancólico', 'doliente', 'íntimo'], empuje: 'suave' },
+  { palabras: ['alegre', 'fiesta', 'celebra', 'bail'],
+    mood: ['alegre', 'vivo', 'bailable'], empuje: 'duro' },
+  { palabras: ['electronic', 'electrónic', 'synth', 'techno', 'sintetiz'],
+    mood: ['electrónico', 'pulsante', 'nocturno'], empuje: 'duro' },
+  { palabras: ['jazz', 'swing', 'blues'],
+    mood: ['jazzístico', 'humeante', 'libre'], empuje: 'medio' },
+  { palabras: ['romantic', 'romántic', 'amor', 'tierno'],
+    mood: ['tierno', 'cálido', 'cercano'], empuje: 'suave' },
+];
+
+/** La familia del instrumento también manda: una batería no toca melodías. */
+const CARACTER_POR_FAMILIA = {
+  percussion: { mood: ['rítmico', 'contundente'], empuje: 'duro' },
+  electronic: { mood: ['pulsante', 'sintético'], empuje: 'duro' },
+  brass: { mood: ['rotundo', 'brillante'], empuje: 'medio' },
+  woodwind: { mood: ['aireado', 'lírico'], empuje: 'suave' },
+  strings: { mood: ['lírico', 'expresivo'], empuje: 'suave' },
+  keyboards: { mood: ['claro', 'articulado'], empuje: 'medio' },
+};
+
+/** Cuánto empuja la pieza, traducido a pulsaciones por minuto. */
+const TEMPO_POR_EMPUJE = { suave: 62, medio: 84, duro: 128 };
+
+function caracterEscritoPorElUsuario(...textos) {
+  const texto = textos.map(sinTildes).filter(Boolean).join(' . ');
+  if (!texto) return null;
+  let mejor = null;
+  for (const entrada of CARACTER_ESCRITO) {
+    for (const palabra of entrada.palabras) {
+      const donde = texto.indexOf(sinTildes(palabra));
+      if (donde !== -1 && (mejor === null || donde < mejor.donde)) {
+        mejor = { donde, mood: entrada.mood, empuje: entrada.empuje };
+      }
+    }
+  }
+  return mejor;
+}
+
+/**
+ * El carácter musical del corto, deducido de todo lo que se sabe de él.
+ *
+ * Devuelve `{ mood: [...], tempoBpm }`. Las fuentes se suman en orden de mando
+ * y sin repetir: primero lo que escribió el usuario, luego el estilo, el
+ * escenario y la familia del instrumento. El empuje —y con él el tempo— lo fija
+ * la fuente de más rango que diga algo.
+ */
+function caracterMusical(config, scenario, style, instruments, rng) {
+  const escrito = caracterEscritoPorElUsuario(config.creativeDirection, config.scenarioCustom, config.visualStyleCustom);
+  const porEstilo = CARACTER_POR_ESTILO[config.visualStyleId] || null;
+  const porEscenario = CARACTER_POR_ESCENARIO[config.scenarioId] || null;
+  const familia = instruments.length ? CARACTER_POR_FAMILIA[instruments[0].categoryId] : null;
+
+  const fuentes = [escrito, porEstilo, porEscenario, familia].filter(Boolean);
+  if (!fuentes.length) {
+    const sorteado = pickFrom(rng, MOOD_SETS);
+    return { mood: sorteado, tempoBpm: tempoFor(sorteado[0]) };
+  }
+
+  const mood = [];
+  for (const f of fuentes) {
+    for (const m of f.mood) if (mood.indexOf(m) === -1 && mood.length < 4) mood.push(m);
+  }
+  const empuje = (fuentes.find((f) => f.empuje) || {}).empuje || 'medio';
+  return { mood, tempoBpm: TEMPO_POR_EMPUJE[empuje] || 84 };
+}
+
+/**
  * La hora del día que el usuario dejó escrita, si la dejó.
  *
  * El fallo: escribió «azotea de noche, decorada con luces decorativas» y el
@@ -434,7 +565,10 @@ function buildHeuristicBrief(input) {
   const performerType = PERFORMER_TYPES_BY_ID.get(config.performerTypeId);
 
   const placeName = config.scenarioCustom?.trim() || scenario?.label || 'el escenario';
-  const mood = pickFrom(rng, MOOD_SETS);
+  // El carácter de la música sale del contexto —lo que escribió el usuario, el
+  // estilo, el escenario y el instrumento— y sólo se sortea si nada dice nada.
+  const caracter = caracterMusical(config, scenario, style, instruments, rng);
+  const mood = caracter.mood;
   // Si el usuario escribió la hora, esa es la hora. El sorteo es sólo para
   // cuando no dijo nada.
   const timeOfDay =
@@ -646,7 +780,7 @@ function buildHeuristicBrief(input) {
         190,
       ),
       mood: truncate(mood.join(', '), 190),
-      tempoBpm: tempoFor(mood[0] ?? 'sereno'),
+      tempoBpm: caracter.tempoBpm,
       key: pickFrom(rng, ['Re menor', 'La menor', 'Mi menor', 'Sol menor', 'Do mayor', 'Fa mayor']),
       scale: pickFrom(rng, [
         'menor natural',
