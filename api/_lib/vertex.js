@@ -802,16 +802,20 @@ const SOLO_INSTRUMENTAL =
   'no human voice of any kind. This is the score of a music short film: the music IS the piece.';
 
 /**
- * Compone la pieza entera. Un solo intento, un solo archivo.
+ * El encargo exacto que se le manda a Lyria: adónde va y qué lleva dentro.
  *
- * `segundos` es la duración del corto. Si llega algo fuera de rango se recorta
- * al máximo del modelo en vez de fallar: mejor una pieza de 184 s que ninguna.
+ * Está separado de `generarMusica` porque hay DOS caminos que mandan esto
+ * mismo. El de aquí, que llama y espera dentro de la función de Vercel, y el de
+ * `compositor.js`, que se lo encarga a una máquina de Cloud Build cuando el
+ * minuto de la función no da. Los dos tienen que pedir literalmente lo mismo o
+ * la música saldría distinta según por dónde se pidiera, que es la clase de
+ * diferencia que luego no hay quien encuentre.
  */
-async function generarMusica(opciones) {
-  const { token, projectId, prompt } = opciones;
+function encargoMusica(opciones) {
+  const { projectId, prompt } = opciones;
   const total = Math.min(SEGUNDOS_MAX_PIEZA, Math.max(20, Number(opciones.segundos) || 60));
 
-  const cuerpo =
+  const texto =
     SOLO_INSTRUMENTAL + '\n\n' +
     aIngles(prompt).slice(0, 2000) + '\n\n' +
     // El prompt negativo del proyecto está en español, como todo lo demás, y
@@ -824,19 +828,36 @@ async function generarMusica(opciones) {
     lineaDeTiempo(total, opciones.instrumentos) + '\n\n' +
     SOLO_INSTRUMENTAL;
 
+  return {
+    url: vertexUrl(projectId, REGION_MUSICA, MODELO_MUSICA_PRO, 'generateContent'),
+    cuerpo: {
+      contents: [{ role: 'user', parts: [{ text: texto }] }],
+      // El ÚNICO campo válido aquí. Añadir maxOutputTokens hace que Vertex
+      // conteste «Request contains an invalid argument».
+      generationConfig: { responseModalities: ['AUDIO', 'TEXT'] },
+    },
+    segundos: total,
+    modelo: MODELO_MUSICA_PRO,
+  };
+}
+
+/**
+ * Compone la pieza entera. Un solo intento, un solo archivo.
+ *
+ * `segundos` es la duración del corto. Si llega algo fuera de rango se recorta
+ * al máximo del modelo en vez de fallar: mejor una pieza de 184 s que ninguna.
+ */
+async function generarMusica(opciones) {
+  const { token, projectId } = opciones;
+  const encargo = encargoMusica(opciones);
+  const total = encargo.segundos;
+
   // Componer tres minutos de música es lo más lento que hace esta herramienta
   // dentro de una sola petición, así que se le da todo el margen que cabe: la
   // función se corta a los 60 s y después de esto todavía hay que subir el
   // audio al bucket y guardar el proyecto.
   const d = await llamar(
-    vertexUrl(projectId, REGION_MUSICA, MODELO_MUSICA_PRO, 'generateContent'),
-    token, projectId,
-    {
-      contents: [{ role: 'user', parts: [{ text: cuerpo }] }],
-      // El ÚNICO campo válido aquí. Añadir maxOutputTokens hace que Vertex
-      // conteste «Request contains an invalid argument».
-      generationConfig: { responseModalities: ['AUDIO', 'TEXT'] },
-    },
+    encargo.url, token, projectId, encargo.cuerpo,
     { timeoutMs: Number(opciones.presupuestoMs) || 45000 },
   );
 
@@ -940,54 +961,79 @@ function esRiff(buf) {
  * sin lugar a dudas. Se mira eso antes que el mimeType porque la etiqueta puede
  * venir con un valor genérico y los bytes no mienten.
  */
-function prepararAudio(buf, mimeType, segundosPedidos) {
+function reconocerAudio(cabecera, mimeType) {
+  const buf = Buffer.isBuffer(cabecera) ? cabecera : Buffer.from(cabecera || []);
   const firma = buf.toString('latin1', 0, 4);
 
-  // Ya viene empaquetado: NO SE TOCA NI UN BYTE.
+  // `intacto` quiere decir que a estos bytes no hay que hacerles NADA. Cuando
+  // el audio ya está en el bucket —lo dejó ahí una máquina de Cloud Build— eso
+  // es lo que permite copiarlo a su sitio sin bajárselo: un corto de tres
+  // minutos en PCM son treinta y cuatro megas, y bajarlos y volverlos a subir
+  // dentro de una función que se corta al minuto es pedir otro problema.
+
+  // El WAV va el primero, como en `prepararAudio`: sí se toca —hay que
+  // corregirle el tamaño declarado en la cabecera— y su firma manda sobre
+  // cualquier otra comprobación.
   if (firma === 'RIFF') {
-    return {
-      bytes: corregirTamanoWav(buf), tipo: 'audio/wav', extension: '.wav',
-      editable: true, descripcion: 'WAV de Google',
-    };
+    return { tipo: 'audio/wav', extension: '.wav', editable: true, intacto: false, descripcion: 'WAV de Google' };
   }
-  if (firma === 'OggS') {
-    return { bytes: buf, tipo: 'audio/ogg', extension: '.ogg', editable: false, descripcion: 'OGG' };
-  }
-  if (firma === 'fLaC') {
-    return { bytes: buf, tipo: 'audio/flac', extension: '.flac', editable: false, descripcion: 'FLAC' };
-  }
-  if (buf.toString('latin1', 4, 8) === 'ftyp') {
-    return { bytes: buf, tipo: 'audio/mp4', extension: '.m4a', editable: false, descripcion: 'M4A' };
-  }
+  if (firma === 'OggS') return { tipo: 'audio/ogg', extension: '.ogg', editable: false, intacto: true, descripcion: 'OGG' };
+  if (firma === 'fLaC') return { tipo: 'audio/flac', extension: '.flac', editable: false, intacto: true, descripcion: 'FLAC' };
+  if (buf.toString('latin1', 4, 8) === 'ftyp') return { tipo: 'audio/mp4', extension: '.m4a', editable: false, intacto: true, descripcion: 'M4A' };
   if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
-    return { bytes: buf, tipo: 'audio/webm', extension: '.webm', editable: false, descripcion: 'WebM' };
+    return { tipo: 'audio/webm', extension: '.webm', editable: false, intacto: true, descripcion: 'WebM' };
   }
-  // MP3: o empieza por la etiqueta ID3, o directamente por una trama.
   if (firma.slice(0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) {
-    return { bytes: buf, tipo: 'audio/mpeg', extension: '.mp3', editable: false, descripcion: 'MP3' };
+    return { tipo: 'audio/mpeg', extension: '.mp3', editable: false, intacto: true, descripcion: 'MP3' };
   }
 
-  // Sin firma reconocible. Sólo AQUÍ se envuelve, y sólo si la etiqueta dice
-  // que es PCM: es el único caso en el que añadir una cabecera es correcto.
+  // Y al PCM crudo hay que ponerle la cabecera entera. Sólo AQUÍ se envuelve, y
+  // sólo si la etiqueta dice que es PCM: es el único caso en el que añadir una
+  // cabecera es correcto.
   if (/l16|pcm|linear/i.test(mimeType || '')) {
-    const puesto = cabeceraWav(buf, mimeType, segundosPedidos);
-    return {
-      bytes: puesto.wav, tipo: 'audio/wav', extension: '.wav', editable: true,
-      descripcion: 'PCM ' + puesto.formato.rate + ' Hz · ' +
-        (puesto.formato.canales === 2 ? 'estéreo' : 'mono') + ' (' + puesto.formato.origen + ')',
-    };
+    return { tipo: 'audio/wav', extension: '.wav', editable: true, intacto: false, descripcion: 'PCM' };
   }
 
-  // Ni firma ni etiqueta útil. Se guarda TAL CUAL: un archivo intacto que
-  // quizá ffmpeg sepa leer es mejor que uno que se ha roto al reinterpretarlo.
+  // Ni firma ni etiqueta útil. Se guarda TAL CUAL: un archivo intacto que quizá
+  // ffmpeg sepa leer es mejor que uno que se ha roto al reinterpretarlo.
   const sub = (/audio\/([a-z0-9.+-]+)/i.exec(mimeType || '') || [])[1] || 'bin';
   return {
-    bytes: buf,
     tipo: mimeType || 'application/octet-stream',
     extension: '.' + sub.replace(/[^a-z0-9]/gi, ''),
     editable: false,
+    intacto: true,
     descripcion: 'desconocido (' + (mimeType || 'sin mimeType') + ', empieza por ' +
       buf.toString('hex', 0, 4) + ')',
+  };
+}
+
+/**
+ * Lo mismo, pero con los bytes en la mano y ya arreglados.
+ *
+ * La tabla de firmas no se repite aquí: la decide `reconocerAudio` y esto sólo
+ * hace el trabajo que haya que hacer. Dos tablas serían dos tablas que pueden
+ * separarse, y ésta ya costó tres rondas de depuración una vez.
+ */
+function prepararAudio(buf, mimeType, segundosPedidos) {
+  const q = reconocerAudio(buf.subarray(0, 16), mimeType);
+
+  // Ya viene empaquetado: NO SE TOCA NI UN BYTE.
+  if (q.intacto) {
+    return { bytes: buf, tipo: q.tipo, extension: q.extension, editable: q.editable, descripcion: q.descripcion };
+  }
+
+  if (buf.toString('latin1', 0, 4) === 'RIFF') {
+    return {
+      bytes: corregirTamanoWav(buf), tipo: q.tipo, extension: q.extension,
+      editable: q.editable, descripcion: q.descripcion,
+    };
+  }
+
+  const puesto = cabeceraWav(buf, mimeType, segundosPedidos);
+  return {
+    bytes: puesto.wav, tipo: q.tipo, extension: q.extension, editable: q.editable,
+    descripcion: 'PCM ' + puesto.formato.rate + ' Hz · ' +
+      (puesto.formato.canales === 2 ? 'estéreo' : 'mono') + ' (' + puesto.formato.origen + ')',
   };
 }
 
@@ -1113,6 +1159,7 @@ module.exports = {
   rechazaPorPalabras,
   encargoMasCorto,
   generarMusica,
+  encargoMusica,
   fragmentosNecesarios,
   SEGUNDOS_POR_FRAGMENTO,
   SEGUNDOS_MAX_PIEZA,
@@ -1123,5 +1170,6 @@ module.exports = {
   cabeceraWav,
   formatoDelPcm,
   prepararAudio,
+  reconocerAudio,
   SIN_VOZ,
 };

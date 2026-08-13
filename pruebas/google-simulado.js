@@ -32,6 +32,8 @@ function instalarGoogleSimulado() {
   const videosPedidos = [];
   /** Cuántas operaciones de vídeo seguidas rechaza Google por «palabras». */
   let rechazarVideos = 0;
+  /** Cuántas llamadas a Lyria se quedan sin contestar dentro del tiempo. */
+  let agotarMusicas = 0;
   let buildsLanzados = 0;
   const consultasBuild = new Map();
 
@@ -271,6 +273,15 @@ function instalarGoogleSimulado() {
       // contestaba «Unsupported language detected. Please use one of the
       // supported languages: en», pero aquí devolvíamos audio tan contentos.
       if (u.indexOf('lyria') !== -1) {
+        // GOOGLE TARDANDO MÁS DE LO QUE DURA LA FUNCIÓN. No es un error de
+        // Google: es que la respuesta no llega a tiempo y el AbortController de
+        // vertex.js corta la llamada. Se simula exactamente así, abortando, para
+        // que el mensaje que sale sea el de verdad.
+        if (agotarMusicas > 0) {
+          agotarMusicas -= 1;
+          throw Object.assign(new Error('abortada'), { name: 'AbortError' });
+        }
+
         const texto = (((cuerpo.contents || [])[0] || {}).parts || [])
           .map((x) => (x && x.text) || '').join(' ');
 
@@ -347,6 +358,19 @@ function instalarGoogleSimulado() {
           objetos.set(hoja.salida, Buffer.from('MP4 FINAL DE PRUEBA'));
         }
       }
+      // Y la composición deja su audio al lado del encargo, igual que el guion
+      // que corre de verdad dentro del build: los bytes, la etiqueta de formato
+      // y los dieciséis primeros bytes en hexadecimal.
+      for (const k of [...objetos.keys()]) {
+        if (k.indexOf('/composiciones/') !== -1 && k.endsWith('encargo.json')) {
+          const carpeta = k.slice(0, -'/encargo.json'.length);
+          if (objetos.has(carpeta + '/audio.bin')) continue;
+          const bytes = Buffer.from(PCM_CRUDO, 'base64');
+          objetos.set(carpeta + '/audio.bin', bytes);
+          objetos.set(carpeta + '/formato.txt', Buffer.from(PCM_MIME));
+          objetos.set(carpeta + '/cabecera.txt', Buffer.from(bytes.subarray(0, 16).toString('hex')));
+        }
+      }
       return ok({ id, status: 'SUCCESS' });
     }
 
@@ -361,6 +385,8 @@ function instalarGoogleSimulado() {
     objetos, llamadas, pedidos, videosPedidos,
     /** Hace que las N próximas operaciones de vídeo se rechacen por palabras. */
     rechazarProximosVideos(n) { rechazarVideos = n; },
+    /** Hace que las N próximas llamadas a Lyria no contesten a tiempo. */
+    agotarProximasMusicas(n) { agotarMusicas = n; },
     audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
 }
 

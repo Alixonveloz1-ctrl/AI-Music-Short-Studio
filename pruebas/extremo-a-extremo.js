@@ -359,6 +359,63 @@ async function principal() {
       'no se avisa de que el clip salió con un encargo recortado: ' + gen.aviso);
   });
 
+  await paso('si la música no cabe en el minuto de Vercel, se compone en Google', async () => {
+    // EL FALLO, con las palabras del usuario: «No se pudo componer el fragmento
+    // 1: Google tardó más de 45 s en responder y la función de Vercel se corta a
+    // los 60». Componer es lo único aquí que puede tardar más de un minuto, y en
+    // el plan gratuito de Vercel ese minuto no se puede subir. Reintentar desde
+    // la misma función es volver a jugársela al mismo dado.
+    //
+    // Aquí Lyria no contesta a tiempo la primera vez —abortando de verdad, como
+    // pasa en producción— y la pieza tiene que salir igual, compuesta en una
+    // máquina de Cloud Build que no tiene ese límite.
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const musica = antes.assets.find((a) => a.kind === 'music');
+    cierto(musica, 'el corto no tiene música');
+    if (musica.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: musica.id } });
+
+    const mp3Antes = new Set([...objetos.keys()].filter((k) => /\.mp3$/.test(k)));
+    google.agotarProximasMusicas(1);
+
+    const g = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: musica.id } });
+    cierto(g.codigo === 200 || g.codigo === 202, 'lanzar la música dio ' + g.codigo);
+    let gen = g.cuerpo.gen;
+    for (let n = 0; n < 30 && gen && gen.status === 'generating'; n += 1) {
+      const s = await pedir(generar, { metodo: 'GET', query: { id, activo: musica.id, gen: gen.id } });
+      gen = s.cuerpo.gen;
+    }
+
+    // 1. NO se rindió: la pieza está lista para que el usuario la revise.
+    cierto(gen && gen.status === 'review',
+      'la música se dio por perdida en vez de componerla en Google: ' +
+      (gen && gen.status) + ' — ' + (gen && gen.error));
+
+    // 2. Y se compuso allí de verdad: quedó el papeleo del encargo en el bucket.
+    const encargos = [...objetos.keys()].filter((k) => /\/composiciones\/.*encargo\.json$/.test(k));
+    cierto(encargos.length, 'no se le encargó nada a Cloud Build: se reintentó aquí y ya');
+
+    // 3. Lo que se le mandó a Google es un encargo de música de verdad, con su
+    //    línea de tiempo: es la única forma de pedir la duración.
+    const encargo = JSON.parse(objetos.get(encargos[encargos.length - 1]).toString('utf8'));
+    const texto = encargo.contents[0].parts[0].text;
+    cierto(/\[00:00\]/.test(texto), 'el encargo que fue a Cloud Build perdió su línea de tiempo');
+    cierto(!/[áéíóúñ¿¡]/i.test(texto), 'se le coló español a Lyria por el camino de Cloud Build');
+
+    // 4. Y la pista guardada es el audio que dejó la máquina, SIN TOCAR: un MP3
+    //    envuelto en una cabecera WAV es ruido blanco, y eso ya pasó una vez.
+    const nuevas = [...objetos.keys()].filter((k) => /\.mp3$/.test(k) && !mp3Antes.has(k));
+    cierto(nuevas.length, 'la pieza compuesta en Google no llegó al bucket como MP3: ' +
+      [...objetos.keys()].filter((k) => /musica|composiciones/.test(k)).join(' · '));
+    cierto(nuevas.some((k) => objetos.get(k).equals(google.audioEnviado)),
+      'el audio que compuso Google llegó modificado al bucket: ' + nuevas.join(' · '));
+    // Y el fragmento quedó en la carpeta del activo, no en la del papeleo.
+    cierto(nuevas.some((k) => /\/musica\//.test(k)),
+      'la pista no quedó donde van las pistas: ' + nuevas.join(' · '));
+
+    const ap = await pedir(aprobar, { metodo: 'POST', cuerpo: { id, activo: musica.id, gen: gen.id } });
+    cierto(ap.codigo === 200, 'aprobar la música: ' + JSON.stringify(ap.cuerpo).slice(0, 200));
+  });
+
   await paso('el montaje se lanza y termina', async () => {
     const r = await pedir(montar, { metodo: 'POST', cuerpo: { id } });
     cierto(r.codigo === 200 || r.codigo === 202, 'código ' + r.codigo + ' ' + JSON.stringify(r.cuerpo).slice(0, 250));

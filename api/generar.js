@@ -39,6 +39,7 @@ const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
 const { canGenerate } = require('./_lib/progreso.js');
 const vertex = require('./_lib/vertex.js');
+const compositor = require('./_lib/compositor.js');
 const modelos = require('./_lib/modelos.js');
 const audio = require('./_lib/audio.js');
 
@@ -59,6 +60,13 @@ const ESPERA_MAX_VIDEO_MS = 20 * 60 * 1000;
 // está muriendo. Veinte minutos era dejar al usuario media hora mirando una
 // ruedecita, que es exactamente lo que pasó.
 const ESPERA_MAX_MUSICA_MS = 4 * 60 * 1000;
+
+// Salvo cuando la composición se le encargó a una máquina de Cloud Build, que
+// es justo lo contrario: ahí no hay ninguna función muriéndose cada pocos
+// segundos, hay un trabajo que tarda lo que tarda —hacer cola, arrancar la
+// máquina y componer— y cortarlo a los cuatro minutos sería tirar a la basura
+// lo único que sí iba a terminar.
+const ESPERA_MAX_MUSICA_BUILD_MS = 20 * 60 * 1000;
 
 // Margen para una generación que consta como «generando» pero no ha llegado a
 // apuntar ningún trabajo. Lo normal es que el POST siga corriendo (una imagen
@@ -488,7 +496,19 @@ async function arrancarMusica(proyecto, activo, gen, inicio) {
     g.trabajo = { tipo: 'musica', fragmentos, hechos: [], durationSec, tropiezos: 0, desde: Date.now() };
   });
 
-  return hacerFragmento(registrado, activo.id, gen.id, 1, inicio);
+  try {
+    return await hacerFragmento(registrado, activo.id, gen.id, 1, inicio);
+  } catch (e) {
+    const mensaje = motivoLegible(e);
+    // Si lo que falló fue el reloj —y no algo que esté mal— reintentar aquí es
+    // volver a jugársela al mismo dado: esta función dura sesenta segundos y no
+    // se puede alargar. Se le encarga a una máquina de Cloud Build y se vuelve
+    // enseguida; el latido preguntará por ella.
+    if (!esFalloDeReloj(mensaje)) throw e;
+    const fresca = generacionDe(dominio.getAsset(registrado, activo.id), gen.id);
+    const salida = await encargarComposicion(registrado, activo, fresca);
+    return salida.proyecto;
+  }
 }
 
 /**
@@ -893,8 +913,9 @@ async function empujarMusica(proyecto, activo, gen) {
   const total = Number(t.fragmentos) || 1;
   const hechos = t.hechos || [];
   const transcurrido = Date.now() - (t.desde || Date.parse(gen.createdAt || '') || Date.now());
+  const tope = t.build ? ESPERA_MAX_MUSICA_BUILD_MS : ESPERA_MAX_MUSICA_MS;
 
-  if (transcurrido > ESPERA_MAX_MUSICA_MS) {
+  if (transcurrido > tope) {
     return {
       proyecto: await anotarFallo(
         proyecto.id, activo.id, gen.id,
@@ -902,6 +923,10 @@ async function empujarMusica(proyecto, activo, gen) {
       ),
     };
   }
+
+  // La composición está en manos de una máquina de Cloud Build: aquí sólo se
+  // pregunta si terminó. Ninguna llamada a Lyria sale ya de esta función.
+  if (t.build) return seguirComposicion(proyecto, activo, gen);
 
   const siguiente = siguienteFragmento(hechos, total);
 
@@ -951,7 +976,169 @@ async function empujarMusica(proyecto, activo, gen) {
   };
 }
 
+const AVISO_COMPONIENDO_FUERA =
+  'La pieza no cabía en el minuto que dura una función de Vercel, así que se está ' +
+  'componiendo en una máquina de Google que no tiene ese límite. Tarda unos minutos ' +
+  'más y no hay que hacer nada: la página lo va comprobando sola.';
+
+/**
+ * Encarga la pieza a una máquina de Cloud Build y vuelve enseguida.
+ *
+ * A partir de aquí esta generación ya no llama a Lyria desde Vercel: el latido
+ * pregunta por el trabajo y punto. Es lo que hace que una pieza de tres minutos
+ * —que no cabe en sesenta segundos ninguna vez— se pueda componer.
+ */
+async function encargarComposicion(proyecto, activo, gen) {
+  const { token, projectId, sa } = await auth();
+  const t = gen.trabajo || {};
+
+  const encargo = vertex.encargoMusica({
+    projectId,
+    // El mismo encargo que se le habría mandado desde aquí, letra por letra.
+    prompt: (activo.spec && activo.spec.promptEn) || gen.prompt,
+    segundos: t.durationSec,
+    instrumentos: (proyecto.plan && proyecto.plan.music && proyecto.plan.music.instrumentationEn) || [],
+  });
+
+  // Carpeta propia, aparte de la del activo: aquí dentro va el papeleo del
+  // encargo —lo que se pidió, lo que contestó Google, el motivo si falla— y no
+  // debe confundirse con las pistas de música del corto.
+  const carpeta = almacen.rutaProyecto(proyecto.id) +
+    '/composiciones/' + Date.now().toString(36) + '_' + dominio.shortId(6);
+
+  const { buildId } = await compositor.lanzarComposicion({
+    token,
+    projectId,
+    // Con la MISMA cuenta que usa Vercel: así hereda el permiso de llamar a
+    // Lyria y no hay que tocar nada en la consola de Google.
+    cuentaEmail: sa.client_email,
+    bucket: cfg.bucket,
+    carpeta,
+    url: encargo.url,
+    cuerpo: encargo.cuerpo,
+  });
+
+  const actualizado = await anotar(proyecto.id, (p) => {
+    const a = dominio.getAsset(p, activo.id);
+    const g = generacionDe(a, gen.id);
+    if (!g.trabajo || g.trabajo.tipo !== 'musica') return;
+    g.trabajo.build = { id: buildId, carpeta, desde: Date.now() };
+    g.trabajo.desde = Date.now();
+    // Se le cuenta al usuario, o vería una espera mucho más larga de lo normal
+    // sin ninguna explicación.
+    g.aviso = AVISO_COMPONIENDO_FUERA;
+  });
+
+  return {
+    proyecto: actualizado,
+    progreso: {
+      fase: 'musica',
+      hechos: (t.hechos || []).length,
+      total: Number(t.fragmentos) || 1,
+      texto: 'Componiendo la música en una máquina de Google…',
+      aviso: AVISO_COMPONIENDO_FUERA,
+    },
+  };
+}
+
+/** ¿Terminó ya la máquina? Y si terminó, guardar lo que dejó. */
+async function seguirComposicion(proyecto, activo, gen) {
+  const t = gen.trabajo;
+  const b = t.build || {};
+  const { token, projectId } = await auth();
+
+  let r;
+  try {
+    r = await compositor.estadoComposicion(token, projectId, b.id, cfg.bucket, b.carpeta);
+  } catch (e) {
+    // Una consulta que falla no es la composición fallando: se vuelve a mirar
+    // en el siguiente latido.
+    r = { estado: 'desconocido', error: motivoLegible(e) };
+  }
+
+  if (r.estado === 'componiendo' || r.estado === 'desconocido') {
+    return {
+      proyecto,
+      progreso: {
+        fase: 'musica',
+        hechos: (t.hechos || []).length,
+        total: Number(t.fragmentos) || 1,
+        texto: r.fase === 'en cola'
+          ? 'La composición está en cola en Google…'
+          : 'Componiendo la música en una máquina de Google…',
+        transcurridoMs: Date.now() - (b.desde || Date.now()),
+      },
+    };
+  }
+
+  if (r.estado === 'fallo') {
+    return { proyecto: await anotarFallo(proyecto.id, activo.id, gen.id, r.error) };
+  }
+
+  // Terminó bien. Qué es lo que dejó se decide con la MISMA tabla de firmas de
+  // siempre, mirando sólo los primeros bytes: el archivo entero puede ser de
+  // treinta megas y no hace falta bajárselo para saber qué es.
+  const q = vertex.reconocerAudio(Buffer.from(r.cabeceraHex || '', 'hex'), r.mimeType);
+  const ruta = almacen.rutaGeneracion(
+    proyecto.id, activo, gen.index, sufijoFragmento(1, q.extension),
+  );
+
+  let tamano = 0;
+  if (q.intacto) {
+    // No hay que tocarle ni un byte: se copia dentro del propio bucket, sin
+    // pasar por aquí. Bajar y volver a subir treinta megas dentro de una
+    // función que se corta al minuto es volver a tener el problema de siempre.
+    tamano = await gcsCopy(token, cfg.bucket, r.objeto, cfg.bucket, ruta, q.tipo);
+  } else {
+    // WAV o PCM crudo: hay que arreglarle la cabecera, así que sí se baja. Un
+    // WAV que necesita ese arreglo lo trae mal declarado, no grande.
+    const crudo = await bajarObjeto(token, cfg.bucket, r.objeto);
+    const listo = vertex.prepararAudio(crudo, r.mimeType, t.durationSec);
+    await almacen.subirMedio(ruta, listo.bytes, listo.tipo);
+    tamano = listo.bytes.length;
+  }
+
+  const actualizado = await anotar(proyecto.id, (p) => {
+    const a = dominio.getAsset(p, activo.id);
+    const g = generacionDe(a, gen.id);
+    if (g && g.provider) g.provider.formato = q.descripcion;
+    if (!g.trabajo || g.trabajo.tipo !== 'musica') return;
+    g.trabajo.editable = q.editable !== false;
+    g.trabajo.mimeType = q.tipo;
+    g.trabajo.build = null;
+    const hechos = g.trabajo.hechos || (g.trabajo.hechos = []);
+    if (!hechos.some((h) => h.indice === 1)) hechos.push({ indice: 1, ruta, bytes: tamano });
+  });
+
+  // El siguiente latido encuentra el fragmento hecho y cierra la pieza. No se
+  // hace aquí: unir y cerrar es trabajo de su propia petición.
+  return {
+    proyecto: actualizado,
+    progreso: {
+      fase: 'uniendo',
+      hechos: 1,
+      total: Number(t.fragmentos) || 1,
+      texto: 'Uniendo los fragmentos de la pieza…',
+    },
+  };
+}
+
 async function tropezarMusica(proyecto, activo, gen, mensaje) {
+  // EL RELOJ NO SE ARREGLA REINTENTANDO EN EL MISMO SITIO. Si la pieza no cupo
+  // en el minuto de la función, volver a pedirla desde la función es volver a
+  // jugársela al mismo dado. La primera vez que pasa se le encarga el trabajo a
+  // una máquina de Cloud Build, que no tiene ese límite; los reintentos de aquí
+  // se quedan para lo que sí puede salir bien a la segunda.
+  if (esFalloDeReloj(mensaje) && !(gen.trabajo && gen.trabajo.build)) {
+    try {
+      return await encargarComposicion(proyecto, activo, gen);
+    } catch (e) {
+      // Si no se pudo ni lanzar —falta un permiso, la API está apagada—, se
+      // sigue contando el tropiezo con el motivo delante, para que se lea.
+      mensaje = motivoLegible(e) + ' El intento anterior fue: ' + mensaje;
+    }
+  }
+
   const previos = Number((gen.trabajo && gen.trabajo.tropiezos) || 0) + 1;
   const tope = topeDeTropiezos(mensaje);
 

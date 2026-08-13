@@ -388,19 +388,24 @@ async function gcsReadText(token, bucket, objectPath) {
  *
  * Devuelve el tamaño en bytes del objeto resultante.
  */
-async function gcsCopy(token, bucketOrigen, objetoOrigen, bucketDestino, objetoDestino) {
+async function gcsCopy(token, bucketOrigen, objetoOrigen, bucketDestino, objetoDestino, tipo) {
   const base =
     'https://storage.googleapis.com/storage/v1/b/' + encodeURIComponent(bucketOrigen) +
     '/o/' + encodeURIComponent(objetoOrigen) +
     '/rewriteTo/b/' + encodeURIComponent(bucketDestino) +
     '/o/' + encodeURIComponent(objetoDestino);
 
+  // El tipo de contenido del destino, cuando el del origen no vale. Un archivo
+  // que subió `gcloud storage cp` llega como application/octet-stream, y con
+  // eso el navegador no reproduce el audio: hay que decirle qué es.
+  const cuerpo = tipo ? JSON.stringify({ contentType: tipo }) : '{}';
+
   let testigo = '';
   for (let vuelta = 0; vuelta < 40; vuelta += 1) {
     const r = await fetch(base + (testigo ? '?rewriteToken=' + encodeURIComponent(testigo) : ''), {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: '{}',
+      body: cuerpo,
     });
     if (!r.ok) {
       const detalle = (await r.text().catch(() => '')).slice(0, 200);

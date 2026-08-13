@@ -1046,6 +1046,21 @@ async function principal() {
       'a la música se le ofrece un modelo que no se puede elegir');
   });
 
+  comprobar('lo que el servidor avisa de una generación, la ficha lo enseña', () => {
+    // EL FALLO: el servidor escribía `gen.aviso` en dos sitios —cuando Google
+    // rechaza las palabras de un clip y hay que relanzarlo recortado, y cuando
+    // la música se compone fuera porque no cabe en el minuto de Vercel— y la
+    // interfaz NO LO PINTABA EN NINGÚN LADO. El usuario veía un clip distinto de
+    // los demás, o una espera mucho más larga de lo normal, sin ninguna
+    // explicación; y las pruebas del servidor pasaban en verde porque el aviso
+    // sí se guardaba.
+    const html = fs.readFileSync(path.join(RAIZ, 'index.html'), 'utf8');
+    cierto(/gen\.aviso/.test(html), 'la ficha de un activo no enseña el aviso de su generación');
+
+    const generar = fs.readFileSync(path.join(RAIZ, 'api/generar.js'), 'utf8');
+    cierto(/g\.aviso\s*=/.test(generar), 'el servidor ya no escribe ningún aviso: sobra pintarlo');
+  });
+
   comprobar('no queda ninguna descarga fuera del enlace que sabe de iOS', () => {
     // Si mañana alguien añade otro botón de descarga con `<a ... download>` a
     // mano, en la app instalada volvería a no hacer nada — y sería un fallo
@@ -1434,6 +1449,221 @@ async function principal() {
     const decide = cuerpo.slice(0, cuerpo.indexOf('\n}\n'));
     cierto(/const tope = topeDeTropiezos\(mensaje\)/.test(decide),
       'tropezarMusica ya no decide el tope por el mensaje del fallo');
+  });
+
+  comprobar('lo que se compone en Google es lo mismo que se compondría aquí', () => {
+    // La pieza puede salir por dos puertas: la llamada directa desde la función
+    // de Vercel, o el encargo a una máquina de Cloud Build cuando esa función no
+    // da tiempo. Si cada puerta pidiera una cosa distinta, la música cambiaría
+    // según por dónde saliera — y esa es la clase de diferencia que luego no hay
+    // quien encuentre, porque las dos «funcionan».
+    const opciones = {
+      projectId: 'proyecto-de-prueba',
+      prompt: 'Instruments: erhu. Mood: calm. Tempo: around 70 BPM.',
+      segundos: 180,
+      instrumentos: ['erhu'],
+    };
+    const encargo = vertex.encargoMusica(opciones);
+
+    cierto(/aiplatform\.googleapis\.com/.test(encargo.url), 'la URL no es de Vertex: ' + encargo.url);
+    cierto(!/undefined/.test(encargo.url), 'la URL lleva undefined dentro: ' + encargo.url);
+    const texto = encargo.cuerpo.contents[0].parts[0].text;
+    cierto(/\[00:00\]/.test(texto) && /\[03:00\]/.test(texto),
+      'el encargo pierde la línea de tiempo, que es la única forma de pedir la duración');
+    cierto(/INSTRUMENTAL ONLY/.test(texto), 'el encargo pierde la orden de que no cante nadie');
+    cierto(!/[áéíóúñ¿¡]/i.test(texto), 'se le cuela español a Lyria por esta puerta');
+    igual(encargo.cuerpo.generationConfig, { responseModalities: ['AUDIO', 'TEXT'] },
+      'la configuración del encargo');
+  });
+
+  await comprobarAsync('la llamada directa manda exactamente el encargo compartido', async () => {
+    const opciones = {
+      projectId: 'p', prompt: 'Instruments: piano. Mood: calm.',
+      segundos: 60, instrumentos: ['piano'],
+    };
+    const encargo = vertex.encargoMusica(opciones);
+
+    const original = globalThis.fetch;
+    let url = '';
+    let cuerpo = null;
+    globalThis.fetch = async (u, o) => {
+      url = String(u);
+      cuerpo = JSON.parse(o.body);
+      return { ok: false, status: 500, text: async () => 'no importa' };
+    };
+    try {
+      await vertex.generarMusica({ token: 't', ...opciones }).catch(() => {});
+    } finally {
+      globalThis.fetch = original;
+    }
+    igual(url, encargo.url, 'la llamada directa va a otra URL que la del encargo');
+    igual(cuerpo, encargo.cuerpo, 'la llamada directa manda otro cuerpo que el del encargo');
+  });
+
+  comprobar('reconocer el audio por la cabecera dice lo mismo que abrirlo entero', () => {
+    // De esto depende el atajo que hace posible componer en Cloud Build: cuando
+    // el audio ya está en el bucket, se miran sus dieciséis primeros bytes y, si
+    // no hay que tocarlo, se COPIA dentro del propio bucket sin bajárselo. Un
+    // corto de tres minutos en PCM son treinta y cuatro megas: bajarlos y
+    // volverlos a subir dentro de una función que se corta al minuto es volver a
+    // tener el problema que esto venía a resolver.
+    //
+    // El atajo sólo vale si «no hay que tocarlo» es verdad. Aquí se comprueba
+    // contra la función que sí abre el archivo entero.
+    const ftyp = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypM4A ')]);
+    const muestras = [
+      { que: 'MP3 con ID3', bytes: Buffer.concat([Buffer.from('ID3'), Buffer.alloc(200)]), mime: 'audio/mpeg', atajo: true },
+      { que: 'MP3 sin etiqueta', bytes: Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(200)]), mime: 'audio/mpeg', atajo: true },
+      { que: 'OGG', bytes: Buffer.concat([Buffer.from('OggS'), Buffer.alloc(200)]), mime: 'audio/ogg', atajo: true },
+      { que: 'FLAC', bytes: Buffer.concat([Buffer.from('fLaC'), Buffer.alloc(200)]), mime: 'audio/flac', atajo: true },
+      { que: 'M4A', bytes: Buffer.concat([ftyp, Buffer.alloc(200)]), mime: 'audio/mp4', atajo: true },
+      { que: 'WebM', bytes: Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(200)]), mime: 'audio/webm', atajo: true },
+      { que: 'sin firma ni etiqueta', bytes: Buffer.alloc(200, 7), mime: '', atajo: true },
+      // Estos dos llevan cabecera que arreglar, así que sí hay que bajarlos.
+      { que: 'WAV', bytes: audio.encodeWav(new Float32Array(4410), 44100), mime: 'audio/wav', atajo: false },
+      { que: 'PCM crudo', bytes: Buffer.alloc(48000 * 4), mime: 'audio/L16;codec=pcm;rate=48000', atajo: false },
+    ];
+
+    for (const m of muestras) {
+      const rapido = vertex.reconocerAudio(m.bytes.subarray(0, 16), m.mime);
+      const entero = vertex.prepararAudio(m.bytes, m.mime, 1);
+      igual(rapido.tipo, entero.tipo, m.que + ': el tipo mirando la cabecera');
+      igual(rapido.extension, entero.extension, m.que + ': la extensión mirando la cabecera');
+      igual(rapido.editable, entero.editable, m.que + ': si es editable mirando la cabecera');
+      igual(rapido.intacto, m.atajo, m.que + ': si se puede copiar sin bajarlo');
+
+      // Y LO QUE DE VERDAD IMPORTA, en un solo sentido: cuando dice que se puede
+      // copiar tal cual, abrir el archivo entero no le habría cambiado ni un
+      // byte. Al revés no hace falta: un WAV bien formado tampoco cambia, pero
+      // decir «bájalo» de más sólo cuesta tiempo, y decir «cópialo» de menos
+      // guardaría un archivo roto.
+      if (rapido.intacto) {
+        cierto(entero.bytes.equals(m.bytes),
+          m.que + ': dice que se puede copiar tal cual y abrirlo entero sí lo cambia');
+      }
+    }
+  });
+
+  await comprobarAsync('el trabajo de componer se le encarga a la cuenta del usuario', async () => {
+    // POR QUÉ ESTO IMPORTA MÁS QUE PARECER UN DETALLE. La regla de este proyecto
+    // es que cambiar de cuenta de Google sea cambiar una variable en Vercel y
+    // nada más. Si el build corriera con la cuenta por defecto de Cloud Build,
+    // habría que entrar en la consola a darle permiso de Vertex AI a OTRA cuenta
+    // —desde el móvil— cada vez que se cambia de proyecto.
+    //
+    // Corriendo con la misma cuenta de servicio que ya usa Vercel, hereda sus
+    // permisos y no hay nada que configurar.
+    const compositor = require(path.join(RAIZ, 'api/_lib/compositor.js'));
+    const original = globalThis.fetch;
+    const llamadas = [];
+    globalThis.fetch = async (u, o) => {
+      llamadas.push({ url: String(u), opciones: o });
+      if (/cloudbuild/.test(String(u))) {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ metadata: { build: { id: 'build-123' } } }) };
+      }
+      return { ok: true, status: 200, text: async () => '{}', json: async () => ({}) };
+    };
+
+    let lanzado;
+    try {
+      lanzado = await compositor.lanzarComposicion({
+        token: 't', projectId: 'mi-proyecto', cuentaEmail: 'estudio@mi-proyecto.iam.gserviceaccount.com',
+        bucket: 'mi-bucket', carpeta: 'proyectos/p1/musica/abc',
+        url: 'https://aiplatform.googleapis.com/v1/x:generateContent',
+        cuerpo: { contents: [{ role: 'user', parts: [{ text: 'compose' }] }] },
+      });
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    igual(lanzado.buildId, 'build-123', 'no se recogió el identificador del trabajo');
+
+    const build = JSON.parse(llamadas.find((l) => /cloudbuild/.test(l.url)).opciones.body);
+    igual(build.serviceAccount, 'projects/mi-proyecto/serviceAccounts/estudio@mi-proyecto.iam.gserviceaccount.com',
+      'el build no corre con la cuenta del usuario');
+    igual(build.options.logging, 'CLOUD_LOGGING_ONLY',
+      'sin esto, un build con cuenta propia se rechaza antes de empezar por no tener dónde escribir el registro');
+
+    const guion = build.steps.map((s) => s.args.join('\n')).join('\n');
+    cierto(/print-access-token/.test(guion),
+      'el build no saca su propio token: entonces habría que meterle uno, y un token escrito en el bucket es un token que dura una hora ahí');
+    cierto(!/Bearer t\b/.test(guion), 'el token de Vercel se está escribiendo dentro del guion');
+    cierto(/error\.txt/.test(guion),
+      'el build no deja escrito el motivo cuando falla: desde un teléfono no hay otra forma de leerlo');
+    // El paso de subir tiene que correr aunque componer falle, o el motivo se
+    // queda dentro de una máquina que ya no existe.
+    const componer = build.steps.find((s) => s.id === 'componer');
+    igual(componer.allowFailure, true, 'si componer falla, el motivo no llega a subirse');
+
+    // Y sin cuenta no se lanza nada: es mejor un error claro que un build que
+    // corre con permisos que no son los del usuario.
+    let sinCuenta = null;
+    try {
+      await compositor.lanzarComposicion({ token: 't', projectId: 'p', bucket: 'b', carpeta: 'c', url: 'u', cuerpo: {} });
+    } catch (e) {
+      sinCuenta = e.message;
+    }
+    cierto(sinCuenta && /client_email/.test(sinCuenta), 'sin cuenta de servicio se lanza igual: ' + sinCuenta);
+  });
+
+  await comprobarAsync('el guion que corre en Google saca el audio de la respuesta de verdad', async () => {
+    // El trozo de Python que va dentro del build no se puede probar «leyéndolo»:
+    // se ejecuta tal cual, con la misma respuesta que devuelve Vertex.
+    const compositor = require(path.join(RAIZ, 'api/_lib/compositor.js'));
+    const { execFileSync } = require('child_process');
+    const os = require('os');
+
+    const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'ams-musica-'));
+    fs.writeFileSync(path.join(carpeta, 'sacar.py'), compositor.SACAR_AUDIO);
+
+    const correr = (respuesta) => {
+      fs.writeFileSync(path.join(carpeta, 'respuesta.json'), JSON.stringify(respuesta));
+      for (const f of ['audio.bin', 'formato.txt', 'cabecera.txt', 'error.txt']) {
+        try { fs.unlinkSync(path.join(carpeta, f)); } catch (e) { /* no estaba */ }
+      }
+      let codigo = 0;
+      try {
+        execFileSync('python3', ['sacar.py'], { cwd: carpeta, stdio: 'pipe' });
+      } catch (e) {
+        codigo = e.status || 1;
+      }
+      const leer = (f) => {
+        try { return fs.readFileSync(path.join(carpeta, f)); } catch (e) { return null; }
+      };
+      return { codigo, audio: leer('audio.bin'), formato: leer('formato.txt'), cabecera: leer('cabecera.txt'), error: leer('error.txt') };
+    };
+
+    // Una respuesta buena, con un MP3 dentro.
+    const trama = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(500, 9)]);
+    const bien = correr({ candidates: [{ content: { parts: [
+      { text: 'aquí va la charla del modelo' },
+      { inlineData: { mimeType: 'audio/mpeg', data: trama.toString('base64') } },
+    ] } }] });
+    igual(bien.codigo, 0, 'el guion falló con una respuesta buena: ' + (bien.error || ''));
+    cierto(bien.audio && bien.audio.equals(trama), 'el audio salió distinto del que mandó Google');
+    igual(String(bien.formato), 'audio/mpeg', 'la etiqueta de formato');
+    igual(String(bien.cabecera), trama.subarray(0, 16).toString('hex'), 'los primeros bytes en hexadecimal');
+
+    // Y con esos primeros bytes, el lado de Vercel reconoce la pieza sin
+    // bajársela: eso es lo que cierra el círculo.
+    const q = vertex.reconocerAudio(Buffer.from(String(bien.cabecera), 'hex'), String(bien.formato));
+    igual(q.extension, '.mp3', 'no se reconoce el MP3 con lo que dejó escrito el guion');
+    igual(q.intacto, true, 'el MP3 no se puede copiar tal cual');
+
+    // Una respuesta sin audio deja el motivo escrito, que es lo único que se
+    // puede leer desde un teléfono.
+    const vacia = correr({ candidates: [{ finishReason: 'SAFETY', content: { parts: [{ text: 'no puedo' }] } }] });
+    cierto(vacia.codigo !== 0, 'una respuesta sin audio se dio por buena');
+    cierto(vacia.error && /SAFETY/.test(String(vacia.error)),
+      'el motivo no queda escrito: ' + vacia.error);
+
+    // Y un error de Vertex también.
+    const rota = correr({ error: { code: 400, message: 'Request contains an invalid argument.' } });
+    cierto(rota.codigo !== 0, 'un error de Vertex se dio por bueno');
+    cierto(rota.error && /invalid argument/.test(String(rota.error)),
+      'el error de Vertex no queda escrito: ' + rota.error);
+
+    fs.rmSync(carpeta, { recursive: true, force: true });
   });
 
   comprobar('ninguna URL de Vertex sale con undefined dentro', () => {

@@ -2309,6 +2309,13 @@ function htmlRevision(p){
 
   if (gen && gen.error) html += '<div class="nota mala">' + esc(gen.error) + '</div>';
 
+  // El aviso de la propia generación: que el encargo se recortó porque Google
+  // rechazó unas palabras, o que la música se está componiendo en una máquina
+  // de Google porque no cabía en el minuto de Vercel. El servidor lo escribía y
+  // NADIE LO ENSEÑABA, así que el usuario veía un clip distinto o una espera
+  // más larga sin ninguna explicación.
+  if (gen && gen.aviso) html += '<div class="nota aviso">' + esc(gen.aviso) + '</div>';
+
   // ── Las dos decisiones ──
   var textoGenerar = (a.generations && a.generations.length) ? 'Regenerar' : 'Generar';
   var puedePulsarGenerar = !estado.trabajando && !generando && (puerta.ok || a.locked);

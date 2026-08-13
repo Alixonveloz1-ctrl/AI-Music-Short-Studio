@@ -108,7 +108,7 @@ las veces que quieras: no duplica ni rompe nada.
 |---|---|
 | `aiplatform.googleapis.com` | Imagen, Veo y Lyria |
 | `storage.googleapis.com` | guardar proyectos y material |
-| `cloudbuild.googleapis.com` | montar el MP4 final |
+| `cloudbuild.googleapis.com` | montar el MP4 final y componer la música larga |
 | `serviceusage.googleapis.com` | la pantalla de diagnóstico |
 
 ### Roles que da a la cuenta de servicio
@@ -117,13 +117,20 @@ las veces que quieras: no duplica ni rompe nada.
 |---|---|
 | `roles/aiplatform.user` | llamar a Imagen, Veo y Lyria |
 | `roles/storage.admin` | leer y escribir en el bucket |
-| `roles/cloudbuild.builds.editor` | lanzar el montaje |
+| `roles/cloudbuild.builds.editor` | lanzar el montaje y la composición |
 | `roles/iam.serviceAccountUser` | **el que más se olvida** |
 | `roles/logging.logWriter` | que el montaje deje registro |
 
 Sobre `iam.serviceAccountUser`: cuando falta, todo funciona
 hasta el último paso y ahí el montaje devuelve un 403 hablando
 de `actAs`, que no se parece en nada a «te falta un permiso».
+
+Son los mismos cinco de siempre. Componer la música en Cloud
+Build —lo que pasa cuando la pieza no cabe en el minuto que
+dura una función de Vercel— no añade ninguno: ese trabajo corre
+con ESTA MISMA cuenta de servicio, así que hereda sus permisos.
+Cambiar de cuenta de Google sigue siendo cambiar una variable
+en Vercel y nada más.
 
 También intenta dar `roles/serviceusage.serviceUsageConsumer`,
 que es opcional y solo sirve para que la pantalla de
