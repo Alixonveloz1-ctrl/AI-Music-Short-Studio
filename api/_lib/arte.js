@@ -959,7 +959,7 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
     esCierre ? block('EL PLANO DE CIERRE: AQUÍ NO SE TOCA', CIERRE_VIDEO) : null,
     block('Requisitos', [
       'Sin cortes internos ni cambios de plano',
-      'Sin deformaciones en manos, rostro ni instrumento',
+      'Manos, rostro e instrumento bien dibujados y estables durante todo el clip',
       'Sin texto en pantalla',
       esCierre
         ? 'El movimiento se va apagando hasta quedar quieto'
@@ -983,13 +983,49 @@ function beatLabel(beat) {
   }
 }
 
+/**
+ * EL NEGATIVO DEL VÍDEO SE ESCRIBE APARTE, Y NO POR GUSTO.
+ *
+ * Veo rechazó el clip antes siquiera de empezar: «The prompt could not be
+ * submitted. This prompt contains sensitive words that violate Google's
+ * Responsible AI practices.» El usuario encadenó nueve intentos contra eso.
+ *
+ * Las palabras sensibles estaban en el PROMPT NEGATIVO. El de las imágenes
+ * enumera los defectos típicos de un generador con el vocabulario natural para
+ * ello —«manos deformes», «anatomía imposible», «rostro distorsionado», «dedos
+ * que se funden»— y ese vocabulario, leído por un filtro que mira palabras y no
+ * intención, es indistinguible del de la mutilación. A los modelos de imagen no
+ * les molesta; Veo rechaza la petición entera.
+ *
+ * Así que el vídeo pide lo mismo con otras palabras. No se ha rebajado la
+ * exigencia: se ha quitado la sangre del diccionario. `LIMPIO_PARA_VIDEO`
+ * traduce cada término marcado, y lo que no tiene traducción se cae — vale más
+ * un negativo más corto que un clip que no llega a generarse.
+ */
+const LIMPIO_PARA_VIDEO = {
+  'manos deformes': 'manos mal dibujadas',
+  'dedos de más o de menos': 'número de dedos incorrecto',
+  'anatomía imposible': 'proporciones del cuerpo incorrectas',
+  'instrumento deformado o incompleto': 'instrumento mal dibujado o incompleto',
+  'rostro distorsionado': 'rasgos de la cara mal dibujados',
+  'proporciones torpes': 'proporciones mal resueltas',
+};
+
+/** El negativo de las imágenes, dicho con palabras que Veo acepta. */
+function negativoParaVideo(negativo) {
+  return String(negativo || '')
+    .split(', ')
+    .map((t) => (Object.prototype.hasOwnProperty.call(LIMPIO_PARA_VIDEO, t) ? LIMPIO_PARA_VIDEO[t] : t))
+    .join(', ');
+}
+
 /** Defectos que solo aparecen al animar, así que se añaden solo al prompt de vídeo. */
 const NEGATIVE_VIDEO_EXTRA = [
   'fondo congelado mientras el personaje se mueve',
   'fondo que parece una fotografía fija',
   'parpadeo entre fotogramas',
-  'morphing del rostro',
-  'dedos que se funden',
+  'la cara cambia de un fotograma a otro',
+  'los dedos se mezclan entre sí',
   'instrumento que cambia de forma',
   'cambio de plano brusco',
 ].join(', ');
@@ -1004,6 +1040,7 @@ module.exports = {
   buildShotImagePrompt,
   buildClipPrompt,
   musicaQueSuena,
+  negativoParaVideo,
   ENERGIA_AL_TOCAR,
   BASE_NEGATIVE,
   NEGATIVE_VIDEO_EXTRA,

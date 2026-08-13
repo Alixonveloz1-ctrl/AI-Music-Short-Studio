@@ -224,6 +224,48 @@ async function principal() {
 
   });
 
+  await paso('el modelo se puede cambiar con el corto ya empezado', async () => {
+    // «Después que ya tengo seleccionado un modelo de imagen o de video, ya no
+    // puedo cambiarlo otra vez, debería poder estar libre, para yo intercambiar
+    // generaciones entre modelos.»
+    //
+    // Antes se fijaba al crear el corto. La razón era buena —dos modelos no
+    // dibujan igual y mezclarlos se nota— pero la decisión es suya. Y hay una
+    // razón práctica encima: cuando un modelo rechaza un clip una y otra vez,
+    // quedarse encerrado en él significa tirar el corto entero.
+    const modeloEp = require('../api/modelo.js');
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const aprobadosAntes = antes.assets.filter((a) => a.approvedGenerationId).length;
+    const videoAntes = antes.config.videoModelId;
+
+    const r = await pedir(modeloEp, {
+      metodo: 'POST',
+      cuerpo: { id, videoModelId: 'veo-3.1-fast-generate-001', imageModelId: 'gemini-3.1-flash-image' },
+    });
+    if (r.codigo !== 200) throw new Error('cambiar modelo: ' + JSON.stringify(r.cuerpo).slice(0, 200));
+    cierto(r.cuerpo.cambios.length, 'no dice qué cambió');
+
+    // Se guarda de verdad, no sólo en la respuesta.
+    const despues = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    cierto(despues.config.videoModelId === 'veo-3.1-fast-generate-001',
+      'el modelo de vídeo no se guardó: ' + despues.config.videoModelId);
+    cierto(videoAntes !== despues.config.videoModelId, 'la prueba no distingue nada: era el mismo modelo');
+
+    // NADA SE DESAPRUEBA NI SE PIERDE: lo hecho sigue siendo lo oficial.
+    cierto(despues.assets.filter((a) => a.approvedGenerationId).length === aprobadosAntes,
+      'cambiar de modelo se llevó por delante aprobaciones');
+    cierto(despues.events.some((e) => e.type === 'model_changed'),
+      'el cambio no queda en la actividad, y es lo primero que hay que poder mirar ' +
+      'cuando dos tomas no se parecen');
+
+    // Un modelo inventado se rechaza con un motivo, no con un 500.
+    const malo = await pedir(modeloEp, { metodo: 'POST', cuerpo: { id, videoModelId: 'no-existe' } });
+    cierto(malo.codigo === 400, 'acepta un modelo que no existe (código ' + malo.codigo + ')');
+
+    // Y se deja como estaba, que el resto de la prueba cuenta con ello.
+    await pedir(modeloEp, { metodo: 'POST', cuerpo: { id, videoModelId: videoAntes } });
+  });
+
   await paso('el montaje se niega mientras falte material, y dice cuál', async () => {
     const r = await pedir(montar, { metodo: 'POST', cuerpo: { id } });
     cierto(r.codigo === 409, 'código ' + r.codigo);

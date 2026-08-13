@@ -1235,6 +1235,43 @@ async function principal() {
     }
   });
 
+  comprobar('a Veo no se le mandan las palabras que hacen que rechace la petición', () => {
+    // EL FALLO, con el mensaje literal de Google: «The prompt could not be
+    // submitted. This prompt contains sensitive words that violate Google's
+    // Responsible AI practices.» Nueve intentos contra eso.
+    //
+    // Las palabras estaban en el PROMPT NEGATIVO. El de las imágenes enumera
+    // los defectos típicos de un generador con el vocabulario natural para ello
+    // —«manos deformes», «anatomía imposible», «rostro distorsionado», «dedos
+    // que se funden»— y ese vocabulario, leído por un filtro que mira palabras
+    // y no intención, es indistinguible del de la mutilación.
+    const PELIGROSAS = [
+      /deforme/i, /anatomía imposible/i, /distorsionad/i,
+      /se funden/i, /morphing/i, /mutil/i, /desfigur/i,
+    ];
+    const proyecto = dominio.createProject(CONFIG, plan);
+
+    for (const clip of proyecto.assets.filter((a) => a.kind === 'clip')) {
+      const todo = clip.spec.prompt + ' ' + (clip.spec.negativePrompt || '');
+      for (const mala of PELIGROSAS) {
+        cierto(!mala.test(todo),
+          'al vídeo le llega una palabra que Veo rechaza (' + mala + ') en ' + clip.id);
+      }
+      // Y no se ha perdido la exigencia: se pide lo mismo con otras palabras.
+      cierto(/manos mal dibujadas/.test(clip.spec.negativePrompt), 'se perdió la exigencia sobre las manos');
+      cierto(/número de dedos incorrecto/.test(clip.spec.negativePrompt), 'se perdió la exigencia sobre los dedos');
+      cierto(/rasgos de la cara mal dibujados/.test(clip.spec.negativePrompt), 'se perdió la exigencia sobre la cara');
+    }
+
+    // A LAS IMÁGENES SÍ SE LES SIGUE DICIENDO ASÍ: a esos modelos no les
+    // molesta, funcionaban perfectamente, y «deforme» es la palabra que mejor
+    // describe lo que hay que evitar. Cambiarlo también ahí sería empeorar algo
+    // que no estaba roto.
+    const imagen = proyecto.assets.find((a) => a.kind === 'shot_image');
+    cierto(/deformes/.test(imagen.spec.negativePrompt),
+      'se ha rebajado también el negativo de las imágenes, que no lo necesitaba');
+  });
+
   await comprobarAsync('cuando Veo falla, se dice POR QUÉ', async () => {
     // EL FALLO: el usuario encadenó nueve intentos del mismo clip y los nueve
     // dijeron «Veo terminó pero no devolvió ningún vídeo». Ese mensaje no

@@ -403,6 +403,7 @@ function buildAssets(config, plan) {
     buildShotImagePrompt,
     buildClipPrompt,
     NEGATIVE_VIDEO_EXTRA,
+    negativoParaVideo,
   } = equipo();
 
   const bible = plan.visualBible;
@@ -561,7 +562,10 @@ function buildAssets(config, plan) {
           spec: {
             objective: `${shot.purpose} (${clip.motionNote})`,
             prompt: buildClipPrompt(bible, shot, clip, shot.clips.length, clip.id === ultimoDeLaPelicula),
-            negativePrompt: `${bible.negativePrompt}, ${NEGATIVE_VIDEO_EXTRA}`,
+            // El negativo pasa por el filtro de palabras que Veo acepta: tal
+            // cual, su vocabulario de defectos anatómicos hace que Google
+            // rechace la petición antes de generar nada.
+            negativePrompt: `${negativoParaVideo(bible.negativePrompt)}, ${NEGATIVE_VIDEO_EXTRA}`,
             referenceAssetIds: [`${shot.id}_image`],
             continuityNotes: [
               'El primer fotograma debe coincidir con la imagen aprobada de la toma',

@@ -940,6 +940,9 @@ var api = {
   aprobar: function(id, activo, gen){ return pedir('aprobar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   actualizarPlan: function(id){ return pedir('actualizar', { metodo:'POST', cuerpo:{ id:id } }); },
+  cambiarModelo: function(id, cambio){
+    return pedir('modelo', { metodo:'POST', cuerpo: Object.assign({ id:id }, cambio) });
+  },
   guardarPrompt: function(id, activo, prompt, negativo){
     return pedir('prompt', { metodo:'POST', cuerpo:{ id:id, activo:activo, prompt:prompt, negativePrompt:negativo } });
   },
@@ -2418,13 +2421,32 @@ function panelPlan(p){
       ['Escenario', cfg.scenarioCustom || cfg.scenarioId],
       ['Estilo visual', cfg.visualStyleCustom || cfg.visualStyleId],
       ['Formato', nombreFormato(cfg.formatoId)],
-      ['Modelo de imagen', nombreModelo('modelosImagen', cfg.imageModelId)],
-      ['Modelo de vídeo', nombreModelo('modelosVideo', cfg.videoModelId)],
       ['Creado', fmtFecha(p.createdAt)]
     ]) +
-    // Que no se pueda cambiar es una decisión, no un olvido: hay que decirlo
-    // donde el usuario iría a buscar el botón que no existe.
-    '<p class="tenue mini" style="margin-top:8px">Los modelos y el formato se eligen al crear el corto y no se pueden cambiar: producir unas tomas con un modelo y otras con otro rompería la continuidad visual entre ellas.</p>' +
+    // LOS MODELOS SÍ SE CAMBIAN, con el corto ya empezado. Antes no: «se eligen
+    // al crear el corto y no se pueden cambiar», decía aquí mismo, porque
+    // mezclarlos puede romper la continuidad entre tomas. Sigue siendo verdad,
+    // pero la decisión es del usuario y él la quiere: «debería poder estar
+    // libre, para yo intercambiar generaciones entre modelos». Y hay una razón
+    // práctica encima — cuando un modelo rechaza un clip una y otra vez, poder
+    // probar otro es la diferencia entre seguir o tirar el corto entero.
+    '<label class="campo" style="margin-top:12px"><span>Modelo de imagen</span>' +
+      '<select data-modelo="imagen" data-id="' + esc(p.id) + '">' +
+      ((estado.catalogo && estado.catalogo.modelosImagen) || []).map(function(m){
+        return '<option value="' + esc(m.id) + '"' + (cfg.imageModelId === m.id ? ' selected' : '') + '>' +
+          esc(m.etiqueta || m.id) + '</option>';
+      }).join('') + '</select></label>' +
+    '<label class="campo"><span>Modelo de vídeo</span>' +
+      '<select data-modelo="video" data-id="' + esc(p.id) + '">' +
+      ((estado.catalogo && estado.catalogo.modelosVideo) || []).map(function(m){
+        return '<option value="' + esc(m.id) + '"' + (cfg.videoModelId === m.id ? ' selected' : '') + '>' +
+          esc(m.etiqueta || m.id) + '</option>';
+      }).join('') + '</select></label>' +
+    '<p class="tenue mini" style="margin-top:8px">Cámbialos cuando quieras. Lo que ya aprobaste no se toca ni se pierde: ' +
+      'sigue siendo lo oficial, hecho con el modelo con el que se hizo. Lo que generes a partir de ahora usará el nuevo, ' +
+      'y en el historial de cada elemento se ve con cuál salió cada intento.<br>' +
+      'Ten en cuenta que dos modelos distintos no dibujan igual, así que mezclarlos puede notarse entre tomas. ' +
+      'El formato sí se queda fijo: cambiarlo dejaría unas tomas verticales y otras apaisadas.</p>' +
     // Si el corto salió mal, aquí es donde se está mirando cuando se decide
     // tirarlo. Va al final del bloque de configuración y no junto a los
     // botones de producir, para que no se toque por error.
@@ -3196,6 +3218,21 @@ document.addEventListener('change', function(ev){
   if (campo === 'genero') { ajustarTipos(); limpiarFichasDeOtroGenero(); pintar(); }
   if (campo === 'tipo') { limpiarFichasDeOtroGenero(); pintar(); }
   if (campo === 'escenario' || campo === 'estilo' || campo === 'generoMusical') pintar();
+});
+
+// Cambiar el modelo de un corto ya empezado. Va por su propio atributo y no por
+// `data-campo` porque no es un borrador de formulario: se guarda en el acto.
+document.addEventListener('change', function(ev){
+  var el = ev.target;
+  var cual = el.getAttribute && el.getAttribute('data-modelo');
+  if (!cual) return;
+  var id = el.getAttribute('data-id');
+  var cuerpo = cual === 'imagen' ? { imageModelId: el.value } : { videoModelId: el.value };
+  ejecutar(async function(){
+    await api.cambiarModelo(id, cuerpo);
+    await cargarProyecto(id);
+    avisar('Modelo cambiado. Lo que generes a partir de ahora lo usará.', 'ok');
+  });
 });
 
 document.addEventListener('keydown', function(ev){
