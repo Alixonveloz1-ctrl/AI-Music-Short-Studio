@@ -96,6 +96,14 @@ const BASE_NEGATIVE = [
   'dibujo tosco o de aficionado',
   'proporciones torpes',
   'acabado sucio o descuidado',
+  // Y esto es lo tercero: no un defecto de dibujo ni de gusto, sino de MONTAJE.
+  // La figura y el sitio salían como dos capas pegadas.
+  'personaje recortado y pegado sobre el fondo',
+  'fondo plano como un telón pintado detrás',
+  'figura flotando, sin sombra de contacto con el suelo',
+  'persona y fondo con perspectivas distintas',
+  'persona a una escala que no corresponde al fondo',
+  'fotomontaje',
 ];
 
 function buildVisualBible(config, brief) {
@@ -149,6 +157,14 @@ function buildVisualBible(config, brief) {
     },
     environment: {
       location,
+      // DÓNDE SE PONE LA PERSONA DENTRO DEL SITIO, y qué se mueve ahí. Sin el
+      // primero, el modelo la coloca donde le parece —el usuario mandó un
+      // guitarrista de pie ENCIMA DE LAS BUTACAS de un auditorio, teniendo el
+      // escenario al lado— y sin el segundo, el vídeo anima al personaje sobre
+      // un fondo congelado: «un bosque lleno de árboles, y los árboles quietos
+      // ni se movían, parecían una imagen fija».
+      donde: (scenario && scenario.donde) || '',
+      movimiento: (scenario && scenario.movimiento) || '',
       // El brief va PRIMERO porque es donde entra, encabezándolo, lo que
       // escribió el usuario. Al revés, su «decorada con luces decorativas»
       // quedaba el último de la lista, detrás de «skyline, grava, antenas».
@@ -725,6 +741,9 @@ function buildScenePrompt(bible, config) {
     bloqueIndicacion(config.scenarioCustom, 'EL ESCENARIO'),
     bloqueIndicacion(config.creativeDirection, 'EL CORTO'),
     `PLANO MAESTRO DE ESCENA. ${bible.character.summary} interpretando su ${bible.instrument.names.join(' y ')} dentro de ${bible.environment.location}.`,
+    // Ésta es LA referencia de todas las tomas: si aquí la gente sale pegada
+    // sobre el fondo, sale pegada en el corto entero.
+    bloqueDentroDelSitio(bible, null),
     // Con más de un músico hay que decir quién es quién, o la escena maestra
     // devuelve dos veces la misma persona y arrastra ese error a todas las tomas.
     bloqueReparto(bible, 'todos'),
@@ -745,6 +764,60 @@ function buildScenePrompt(bible, config) {
 }
 
 /** Planos donde no aparece ninguna cara, asi que no hay belleza que exigir. */
+/**
+ * LA PERSONA ESTÁ DENTRO DEL SITIO, NO PEGADA ENCIMA.
+ *
+ * EL FALLO, y es el más grave que ha tenido la herramienta: «no está poniendo
+ * al personaje en los escenarios, simplemente lo está montando como sobre un
+ * fondo y ya». Un guitarrista de pie sobre las butacas de un auditorio, con el
+ * escenario iluminado ahí al lado. Una chica sentada en un bosque «como si el
+ * bosque fuera una pancarta de fondo».
+ *
+ * POR QUÉ PASABA. El prompt describía a la persona en una lista y el lugar en
+ * otra, sin nada que las uniera. Dos listas separadas se componen como dos
+ * capas separadas, que es literalmente lo que salía. Nada pedía lo único que
+ * hace que una figura pertenezca a un sitio:
+ *
+ *   - APOYARSE en algo concreto de ese sitio, y proyectar sombra sobre ello.
+ *   - Compartir la PERSPECTIVA: un solo horizonte, una sola altura de cámara.
+ *     Sin esto la figura se dibuja de frente y a tamaño de retrato mientras el
+ *     fondo tiene su propia fuga, y el ojo lo lee como un recorte.
+ *   - Recibir la LUZ del lugar, con su dirección y su color.
+ *   - Tener algo DELANTE y algo DETRÁS. Un encuadre con sólo figura y fondo son
+ *     dos capas; con primer término son tres, y ahí ya hay espacio.
+ */
+function bloqueDentroDelSitio(bible, shot) {
+  const ent = bible.environment || {};
+  const luz = bible.lighting || {};
+  // Sin toma es el PLANO MAESTRO DE ESCENA, que es abierto por definición: su
+  // trabajo es enseñar el sitio entero con la gente dentro.
+  const abierto = !shot || PLANOS_ABIERTOS.indexOf(shot.shotType) !== -1;
+
+  return block('LA PERSONA ESTÁ DENTRO DEL SITIO, NO PEGADA ENCIMA', [
+    ent.donde ? 'Dónde está exactamente: ' + ent.donde : '',
+    'APOYADA de verdad: los pies (o el asiento, o la pica del instrumento) tocan una ' +
+      'superficie concreta del lugar, y proyectan SU SOMBRA sobre ella',
+    'UNA SOLA PERSPECTIVA para la persona y para el sitio: la misma línea de horizonte ' +
+      'y la misma altura de cámara. Su tamaño tiene que corresponder a la distancia a la ' +
+      'que está, no al tamaño que tendría en un retrato',
+    'La luz del lugar CAE SOBRE ELLA: ' + [luz.direction, luz.intensity].filter(Boolean).join(', ') +
+      '. Los mismos colores de luz en su piel, su ropa y su instrumento que en el suelo y las paredes',
+    'Algo POR DELANTE y algo POR DETRÁS: primer término, figura y fondo. Tres planos de ' +
+      'profundidad, no dos capas',
+    'Aire entre la cámara y ella: la distancia se tiene que notar',
+    abierto
+      ? 'PLANO ABIERTO: el lugar se ve NÍTIDO y se lee entero. Aquí el fondo NO va ' +
+        'desenfocado, aunque el estilo lo pida en general — un fondo borroso en un plano ' +
+        'general es exactamente lo que lo convierte en un telón pintado'
+      : '',
+    'La prueba: si la figura se pudiera recortar con unas tijeras y el fondo quedara ' +
+      'entero detrás, está MAL HECHA. Tiene que haber sombra, contacto y oclusión',
+  ]);
+}
+
+/** Planos en los que el sitio se ve entero y tiene que leerse, no difuminarse. */
+const PLANOS_ABIERTOS = ['establishing_wide', 'wide', 'high_angle', 'low_angle'];
+
 const SIN_PERSONAS = ['instrument_detail', 'detail'];
 
 /** El tipo de plano que cierra el corto. Mismo valor que en productor.js. */
@@ -807,6 +880,10 @@ function buildShotImagePrompt(bible, shot, config) {
       `Tipo de plano: ${SHOT_TYPE_LABELS[shot.shotType]}`,
       `Movimiento previsto en el vídeo: ${CAMERA_MOVE_LABELS[shot.cameraMove]}`,
     ]),
+    // DÓNDE SE PONE, y que de verdad esté ahí dentro. Va ANTES de describir a la
+    // persona: primero el sitio y su sitio en él, después cómo es ella. Al revés
+    // —que es como estaba— el modelo compone un retrato y luego le busca fondo.
+    SIN_PERSONAS.indexOf(shot.shotType) === -1 ? bloqueDentroDelSitio(bible, shot) : null,
     // QUIÉN SALE. Sin esto, un dúo salía trece veces con la misma chica y la
     // otra desaparecía del corto entero.
     bloqueQuienSale(bible, shot),
@@ -858,6 +935,16 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
       esCierre ? null : `Relación intérprete-instrumento: ${bible.instrument.physicalRelation}`,
       `Entorno: ${bible.environment.atmosphere}`,
     ].filter(Boolean)),
+    // EL SITIO TAMBIÉN SE MUEVE. Sin esto Veo anima al personaje y deja el
+    // fondo congelado, y el resultado es un recorte moviéndose sobre una foto:
+    // «un bosque lleno de árboles, y los árboles quietos ni se movían».
+    block('EL SITIO TAMBIÉN SE MUEVE, NO SÓLO LA PERSONA', [
+      bible.environment.movimiento || 'algo del entorno se mueve todo el rato: aire, luz, polvo o agua',
+      'El fondo NO puede quedarse congelado: si lo único que se mueve es el intérprete, ' +
+        'el plano parece un recorte animado sobre una fotografía',
+      'Ese movimiento es de fondo y continuo, nunca un acontecimiento que robe la atención',
+      'La luz también vive: late, parpadea o cambia muy poco a lo largo del clip',
+    ]),
     // Con cuánta fuerza toca. En el plano de cierre no se pide: es el que NO
     // toca, y pedirle intensidad de interpretación sería deshacerlo.
     esCierre ? null : bloqueComoSeToca(bible, 'video'),
@@ -898,6 +985,8 @@ function beatLabel(beat) {
 
 /** Defectos que solo aparecen al animar, así que se añaden solo al prompt de vídeo. */
 const NEGATIVE_VIDEO_EXTRA = [
+  'fondo congelado mientras el personaje se mueve',
+  'fondo que parece una fotografía fija',
   'parpadeo entre fotogramas',
   'morphing del rostro',
   'dedos que se funden',

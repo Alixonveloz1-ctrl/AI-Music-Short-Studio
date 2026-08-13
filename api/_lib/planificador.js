@@ -800,6 +800,7 @@ function buildHeuristicBrief(input) {
           instrument: leadName,
           place: placeName,
           elements: scenario?.elements ?? [],
+          donde: scenario?.donde ?? '',
           timeOfDay,
           // El reparto entero y quién manda en esta toma.
           cast,
@@ -888,7 +889,13 @@ function purposeFor(beat, index, total) {
 }
 
 function describeShot(args) {
-  const anchor = args.elements[0] ? `, con ${args.elements[0]} en el encuadre` : '';
+  // EL ANCLA DICE DÓNDE ESTÁ, no qué se ve. Antes cogía el primer elemento del
+  // escenario y escribía «con butacas en penumbra en el encuadre» — y para un
+  // auditorio eso empuja justo al error que reportó el usuario: el guitarrista
+  // acabó de pie ENTRE LAS BUTACAS, con el escenario iluminado ahí al lado.
+  const anchor = args.donde
+    ? `, ${args.donde}`
+    : (args.elements[0] ? `, con ${args.elements[0]} en el encuadre` : '');
   const reparto = Array.isArray(args.cast) ? args.cast : [];
 
   // Quién sale y con qué instrumento. Con un solo músico esto se queda como
@@ -1053,6 +1060,8 @@ Formación: ${formation?.label ?? 'Solista'} (${formation?.description ?? ''})
 Intérprete: ${performerType?.label ?? ''} — ${performerType?.descriptor ?? ''}
 Escenario: ${scenario?.label ?? ''}${config.scenarioCustom ? ` — indicación del usuario: ${config.scenarioCustom}` : ''}
 Elementos habituales del escenario: ${scenario?.elements.join(', ') || 'sin definir'}
+DÓNDE SE COLOCA AL INTÉRPRETE dentro de ese escenario: ${scenario?.donde || '(decídelo tú, pero dilo explícitamente en cada toma)'}
+QUÉ SE MUEVE en ese escenario: ${scenario?.movimiento || '(decídelo tú)'}
 Estilo visual: ${style?.label ?? ''} — ${style?.treatment ?? ''}${config.visualStyleCustom ? `; indicación del usuario: ${config.visualStyleCustom}` : ''}
 Duración total: ${runtimeSec} segundos
 
@@ -1061,6 +1070,14 @@ ${config.creativeDirection.trim() || '(el usuario no ha escrito indicaciones adi
 
 PLAN DE TOMAS YA DECIDIDO POR EL PRODUCTOR (no lo cambies, solo descríbelo):
 ${shotLines}
+
+CÓMO SE DESCRIBE UNA TOMA (esto es lo que más se ha roto hasta ahora)
+Cada descripción tiene que situar a la persona DENTRO del sitio, no delante de él.
+Di sobre qué se apoya, qué le queda por delante y qué por detrás, y de dónde le
+llega la luz. Lo que NO puede pasar es que la persona y el lugar se lean como dos
+capas pegadas: el usuario recibió un guitarrista de pie encima de las butacas de
+un auditorio teniendo el escenario al lado, y una intérprete sentada en un bosque
+«como si el bosque fuera una pancarta de fondo».
 
 TAREA
 Escribe la capa creativa completa: concepto, biblia visual (personaje, instrumento, escenario, luz), una descripción por toma, el brief musical instrumental, los metadatos de publicación y una nota breve por cada rol del equipo.`;

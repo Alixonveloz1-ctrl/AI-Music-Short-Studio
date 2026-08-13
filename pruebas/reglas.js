@@ -583,6 +583,109 @@ async function principal() {
     igual(raro.label, 'ñangaré tropical', 'la pantalla ya no enseña lo que escribió el usuario');
   });
 
+  await comprobarAsync('la persona está DENTRO del sitio, no pegada sobre un fondo', async () => {
+    // EL FALLO MÁS GRAVE QUE HA TENIDO LA HERRAMIENTA, en palabras del usuario:
+    // «no está poniendo al personaje en los escenarios, simplemente lo está
+    // montando como sobre un fondo y ya». Mandó un guitarrista de pie ENCIMA DE
+    // LAS BUTACAS de un auditorio, con el escenario iluminado ahí al lado. Y una
+    // intérprete en un bosque «como si el bosque fuera una pancarta de fondo».
+    //
+    // La causa era de estructura: el prompt describía a la persona en una lista
+    // y el lugar en otra, sin nada que las uniera. Dos listas separadas se
+    // componen como dos capas separadas.
+    for (const escenario of ['auditorium', 'forest', 'rooftop', 'beach']) {
+      const config = Object.assign({}, CONFIG, { scenarioId: escenario, creativeDirection: '' });
+      const armado = await construirPlan(config);
+      const proyecto = dominio.createProject(config, armado.plan);
+      const esc = catalogo.SCENARIOS_BY_ID.get(escenario);
+
+      // 1. Cada imagen de toma CON GENTE dice dónde se apoya y exige contacto.
+      // Los planos detalle del instrumento o del entorno no llevan a nadie
+      // dentro, así que se excluyen por su tipo y no por si tienen el bloque —
+      // si se filtrara por eso, quitar el bloque haría pasar la prueba en vez
+      // de fallarla, que es exactamente lo contrario de lo que sirve.
+      const conGente = proyecto.assets.filter(
+        (a) => a.kind === 'shot_image' &&
+          !/Tipo de plano: plano detalle (del instrumento|del entorno)/.test(a.spec.prompt),
+      );
+      cierto(conGente.length, escenario + ': el corto no tiene imágenes de toma con gente');
+      for (const img of conGente) {
+        const p = img.spec.prompt;
+        cierto(/DENTRO DEL SITIO/.test(p),
+          escenario + ': ' + img.id + ' no ata la persona al sitio');
+        cierto(p.indexOf(esc.donde) !== -1,
+          escenario + ': ' + img.id + ' no dice dónde se coloca dentro del sitio');
+        cierto(/proyectan SU SOMBRA/.test(p), escenario + ': no exige sombra de contacto');
+        cierto(/UNA SOLA PERSPECTIVA/.test(p), escenario + ': no exige perspectiva compartida');
+        cierto(/La luz del lugar CAE SOBRE ELLA/.test(p), escenario + ': la luz del sitio no cae sobre la persona');
+        cierto(/POR DELANTE y algo POR DETRÁS/.test(p), escenario + ': no pide primer término');
+      }
+
+      // 2. Y el PLANO MAESTRO DE ESCENA también, que es la referencia de todas.
+      const escena = proyecto.assets.find((a) => a.kind === 'master_scene');
+      cierto(/DENTRO DEL SITIO/.test(escena.spec.prompt),
+        escenario + ': la escena maestra no ata la gente al sitio, y es la referencia de todo el corto');
+
+      // 3. Los negativos nombran el defecto concreto, no sólo «collage».
+      const neg = conGente[0].spec.negativePrompt || '';
+      cierto(/recortado y pegado sobre el fondo/.test(neg), escenario + ': el negativo no prohíbe el recorte pegado');
+      cierto(/telón pintado/.test(neg), escenario + ': el negativo no prohíbe el fondo de telón');
+    }
+  });
+
+  comprobar('en un plano abierto el sitio se ve nítido, no desenfocado', () => {
+    // El estilo pide «fondo muy desenfocado» y para un primer plano está bien.
+    // En un plano general es justo lo que convierte el sitio en un telón: si el
+    // lugar que se está presentando sale borroso, deja de ser un lugar.
+    const config = Object.assign({}, CONFIG, { scenarioId: 'auditorium' });
+    const proyecto = dominio.createProject(config, plan);
+    const abiertos = proyecto.assets.filter(
+      (a) => a.kind === 'shot_image' && /PLANO ABIERTO: el lugar se ve NÍTIDO/.test(a.spec.prompt),
+    );
+    cierto(abiertos.length, 'ningún plano abierto pide que el sitio se vea nítido');
+    // Y en los cerrados no se dice, que ahí el desenfoque es correcto.
+    const cerrados = proyecto.assets.filter(
+      (a) => a.kind === 'shot_image' && /Tipo de plano: primer plano/.test(a.spec.prompt),
+    );
+    for (const c of cerrados) {
+      cierto(!/PLANO ABIERTO/.test(c.spec.prompt),
+        'a un primer plano se le está prohibiendo el desenfoque: ' + c.id);
+    }
+  });
+
+  await comprobarAsync('el sitio se mueve en el vídeo, no sólo el personaje', async () => {
+    // «Un bosque lleno de árboles, y los árboles quietos ni se movían, parecían
+    // una imagen fija.» Veo anima lo que se le pide, y sólo se le pedía el
+    // intérprete: el resultado es un recorte moviéndose sobre una fotografía.
+    for (const escenario of ['forest', 'beach', 'auditorium']) {
+      const config = Object.assign({}, CONFIG, { scenarioId: escenario, creativeDirection: '' });
+      const armado = await construirPlan(config);
+      const proyecto = dominio.createProject(config, armado.plan);
+      const esc = catalogo.SCENARIOS_BY_ID.get(escenario);
+
+      const clips = proyecto.assets.filter((a) => a.kind === 'clip');
+      cierto(clips.length, escenario + ': sin clips');
+      for (const c of clips) {
+        cierto(/EL SITIO TAMBIÉN SE MUEVE/.test(c.spec.prompt),
+          escenario + ': ' + c.id + ' no pide que se mueva el entorno');
+        cierto(c.spec.prompt.indexOf(esc.movimiento) !== -1,
+          escenario + ': ' + c.id + ' no dice QUÉ se mueve en ese sitio concreto');
+      }
+      cierto(/fondo congelado/.test(clips[0].spec.negativePrompt || ''),
+        escenario + ': el negativo de vídeo no prohíbe el fondo congelado');
+    }
+  });
+
+  comprobar('los 21 escenarios saben dónde va la gente y qué se mueve', () => {
+    // Si mañana se añade un escenario sin estos dos datos, sus cortos volverían
+    // al recorte sobre el fondo — y en silencio, porque todo lo demás funciona.
+    for (const e of catalogo.SCENARIOS) {
+      if (e.id === 'other') continue; // lo describe el usuario a mano
+      cierto(e.donde && e.donde.length > 20, 'el escenario «' + e.label + '» no dice dónde se coloca al intérprete');
+      cierto(e.movimiento && e.movimiento.length > 15, 'el escenario «' + e.label + '» no dice qué se mueve en él');
+    }
+  });
+
   await comprobarAsync('el vídeo se toca con la energía de la música que va a sonar', async () => {
     // EL FALLO: el usuario eligió un cuatro —instrumento de música llanera— y
     // el vídeo salió con el personaje rasgueando joropo a toda velocidad
