@@ -608,19 +608,29 @@ function enlaceDeDescarga(url, texto, clases, estilo){
 
 /** El aviso de que la descarga se abre en Safari. Sólo cuando de verdad pasa. */
 /**
- * EL AVISO, Y POR QUÉ DICE LO QUE DICE.
+ * LO QUE SE OFRECE DEBAJO DE LOS BOTONES DE DESCARGA, EN LA APP INSTALADA.
  *
- * `target="_blank"` saca el archivo de la ventana de la app, pero iOS NO lo
- * abre en Safari: lo abre en un navegador incrustado —el de la X arriba a la
- * izquierda y la brújula abajo a la derecha— y ese visor tampoco sabe
- * descargar. Se queda con la barra de carga parada y la pantalla en blanco.
+ * En la app de la pantalla de inicio el enlace de descarga no sirve: iOS lo
+ * manda a un navegador incrustado que no sabe descargar y deja la pantalla en
+ * blanco. Así que ahí lo principal es GUARDAR con la hoja de compartir, que es
+ * la única forma que tiene una web de dejar un archivo en el teléfono.
  *
- * La brújula es «Abrir en Safari», y desde Safari la descarga sí funciona. Es
- * un toque de más, así que se explica dónde está en vez de dejar al usuario
- * mirando una pantalla vacía sin saber qué ha pasado.
+ * Y si el navegador no supiera compartir archivos, queda el camino de siempre
+ * explicado: la brújula del visor incrustado es «Abrir en Safari», y desde
+ * Safari la descarga funciona.
  */
-function notaDeDescarga(url){
+function notaDeDescarga(url, nombre){
   if (!enModoApp()) return '';
+
+  if (url && puedeCompartirArchivos()) {
+    return '<button class="btn pri ancho" style="margin-top:10px" data-accion="guardar-telefono" ' +
+        'data-url="' + esc(url) + '"' + (nombre ? ' data-nombre="' + esc(nombre) + '"' : '') + '>' +
+        'Guardar en el teléfono</button>' +
+      '<p class="tenue mini centro" style="margin-top:8px">Se abre la hoja de compartir de iOS: ' +
+        '«Guardar en Archivos» o «Guardar vídeo». Es la forma que funciona desde la app instalada; ' +
+        'los botones de arriba sólo funcionan en el navegador.</p>';
+  }
+
   return '<p class="tenue mini centro" style="margin-top:8px">' +
       'Si se queda una <b>pantalla en blanco</b>, toca la <b>brújula</b> de abajo a la derecha ' +
       '(«Abrir en Safari»): iOS no deja descargar desde la app instalada. El archivo queda en ' +
@@ -629,6 +639,122 @@ function notaDeDescarga(url){
       ? '<button class="btn fantasma ancho pequeno" style="margin-top:8px" ' +
         'data-accion="copiar-enlace" data-url="' + esc(url) + '">Copiar el enlace para pegarlo en Safari</button>'
       : '');
+}
+
+/**
+ * GUARDAR EL ARCHIVO CON LA HOJA DE COMPARTIR DE iOS.
+ *
+ * Es la ÚNICA forma que hay en iOS de que una web guarde un archivo en el
+ * teléfono: `navigator.share` con un File deja mandarlo a Fotos o a Archivos.
+ * Descargar con un enlace no funciona desde la app de la pantalla de inicio —no
+ * hay barra ni descargador— y el navegador incrustado al que iOS manda los
+ * enlaces tampoco descarga: se queda en blanco.
+ *
+ * DOS DETALLES QUE MANDAN SOBRE TODO EL DISEÑO DE ESTO:
+ *
+ *   1. Los bytes se piden a /api/archivo, no a Google. Un `fetch` a otro origen
+ *      necesita permiso CORS del bucket, que no lo da; pasando por nuestro
+ *      propio dominio no hace falta pedirle permiso a nadie.
+ *
+ *   2. `navigator.share` EXIGE que la haya disparado un toque, y descargar
+ *      treinta megas tarda más de lo que dura ese permiso. Así que el primer
+ *      toque descarga y el segundo comparte — con el archivo ya en memoria, ese
+ *      segundo toque es instantáneo y el permiso sigue vivo. Donde el navegador
+ *      sea más flexible se intenta compartir directamente y sale de un toque.
+ */
+var descargasEnMemoria = {};
+
+function puedeCompartirArchivos(){
+  try {
+    return !!(navigator.canShare && navigator.share &&
+      navigator.canShare({ files: [new File([new Blob([1])], 'p.txt', { type: 'text/plain' })] }));
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Trae el archivo a memoria enseñando cuánto lleva. */
+async function traerArchivo(url, alAvanzar){
+  var cabeceras = {};
+  if (estado.clave) cabeceras['x-app-key'] = estado.clave;
+  var r = await fetch('/api/archivo?u=' + encodeURIComponent(url), { headers: cabeceras });
+  if (!r.ok) {
+    var detalle = '';
+    try { detalle = (await r.json()).error || ''; } catch (e) { /* respuesta sin JSON */ }
+    throw new Error(detalle || ('No se pudo traer el archivo (' + r.status + ')'));
+  }
+  var total = Number(r.headers.get('content-length')) || 0;
+  // Sin cuerpo legible a trozos no hay progreso, pero el archivo sí llega.
+  if (!r.body || !r.body.getReader) return await r.blob();
+
+  var lector = r.body.getReader();
+  var trozos = [];
+  var leidos = 0;
+  for (;;) {
+    var paso = await lector.read();
+    if (paso.done) break;
+    trozos.push(paso.value);
+    leidos += paso.value.length;
+    if (alAvanzar) alAvanzar(leidos, total);
+  }
+  return new Blob(trozos, { type: r.headers.get('content-type') || 'application/octet-stream' });
+}
+
+function nombreDeArchivo(url, porDefecto){
+  try {
+    var p = new URL(url, location.href).pathname;
+    var ultimo = decodeURIComponent(p.split('/').pop() || '');
+    return ultimo || porDefecto;
+  } catch (e) {
+    return porDefecto;
+  }
+}
+
+async function accionGuardarEnElTelefono(boton){
+  var url = boton.getAttribute('data-url') || '';
+  var nombre = boton.getAttribute('data-nombre') || nombreDeArchivo(url, 'corto.mp4');
+  if (!url) return;
+
+  var listo = descargasEnMemoria[url];
+  if (listo) {
+    // Segundo toque: el archivo ya está aquí y compartir es inmediato, así que
+    // el permiso del toque sigue vivo.
+    try {
+      await navigator.share({ files: [listo], title: nombre });
+    } catch (e) {
+      // Cancelar la hoja de compartir lanza AbortError y no es un fallo.
+      if (e && e.name !== 'AbortError') avisar('No se pudo abrir la hoja de compartir: ' + e.message);
+    }
+    return;
+  }
+
+  var etiqueta = boton.textContent;
+  boton.disabled = true;
+  try {
+    var blob = await traerArchivo(url, function(leidos, total){
+      boton.textContent = total
+        ? 'Preparando… ' + Math.round((leidos / total) * 100) + '%'
+        : 'Preparando… ' + fmtBytes(leidos);
+    });
+    var archivo = new File([blob], nombre, { type: blob.type || 'application/octet-stream' });
+    descargasEnMemoria[url] = archivo;
+
+    boton.disabled = false;
+    try {
+      await navigator.share({ files: [archivo], title: nombre });
+      boton.textContent = etiqueta;
+    } catch (e) {
+      if (e && e.name === 'AbortError') { boton.textContent = etiqueta; return; }
+      // Aquí es donde cae iOS: el permiso del toque expiró mientras descargaba.
+      // El archivo ya está en memoria, así que el siguiente toque va directo.
+      boton.textContent = 'Guardar ahora (' + fmtBytes(blob.size) + ')';
+      avisar('Listo. Toca otra vez para guardarlo.', 'ok');
+    }
+  } catch (e) {
+    boton.disabled = false;
+    boton.textContent = etiqueta;
+    avisar(e.message || 'No se pudo preparar el archivo.');
+  }
 }
 
 /** Copia un texto al portapapeles, con el camino viejo por si no hay permiso. */
@@ -2475,7 +2601,8 @@ function panelMontaje(p, sit){
             'la descripción y los hashtags, listos para copiar y pegar. ' + esc(fmtBytes(corte.paquete.bytes)) + '</p>' +
           enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:10px')
         : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho grande')) +
-      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url) +
+      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url,
+        (corte.paquete && corte.paquete.nombre) || null) +
       '<p class="tenue mini centro" style="margin-top:8px">' + esc(fmtBytes(corte['export'].bytes)) + ' · ' +
         Math.round(corte['export'].durationSec || 0) + ' s' +
         (corte.exportedAt ? ' · exportado ' + esc(fmtFecha(corte.exportedAt)) : '') + '</p>' +
@@ -2545,7 +2672,8 @@ function vistaBiblioteca(){
         ? enlaceDeDescarga(corte.paquete.url, 'Descargar el paquete (.zip)', 'btn pri ancho') +
           enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:8px')
         : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho')) +
-      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url) + '</div>';
+      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url,
+        (corte.paquete && corte.paquete.nombre) || null) + '</div>';
   }
 
   if (!aprobados.length) {
@@ -2930,6 +3058,7 @@ document.addEventListener('click', function(ev){
 
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
   if (accion === 'actualizar-plan') { accionActualizarPlan(el.getAttribute('data-id')); return; }
+  if (accion === 'guardar-telefono') { accionGuardarEnElTelefono(el); return; }
   if (accion === 'copiar-enlace') {
     var u = el.getAttribute('data-url') || '';
     copiarAlPortapapeles(u).then(function(ok){

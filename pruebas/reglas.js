@@ -145,6 +145,10 @@ function reglasDeLaInterfaz(navegador) {
     ),
   };
   contexto.window.navigator = contexto.navigator;
+  // Globales extra que sólo necesitan algunas pruebas: un `fetch` de mentira,
+  // File/Blob para la hoja de compartir… Se añaden aquí en vez de dejarlos
+  // siempre puestos para que el resto siga corriendo sin navegador ninguno.
+  Object.assign(contexto, (navegador && navegador.extras) || {});
   contexto.globalThis = contexto;
   vm.createContext(contexto);
   // El arranque de la interfaz falla sin navegador de verdad, y da igual: para
@@ -202,7 +206,7 @@ async function principal() {
       for (const nombre of fs.readdirSync(dir)) {
         const completo = path.join(dir, nombre);
         if (fs.statSync(completo).isDirectory()) { revisar(completo); continue; }
-        if (!nombre.endsWith('.js')) continue;
+        if (!nombre.endsWith('.js') && !nombre.endsWith('.mjs')) continue;
         const texto = fs.readFileSync(completo, 'utf8');
         texto.split('\n').forEach((linea, i) => {
           // Solo ASIGNACIONES. El lookbehind descarta ===, !==, <= y >=: una
@@ -643,6 +647,67 @@ async function principal() {
     igual(armado.plan.music.genre.id, 'joropo', 'un cuatro sin más indicaciones no sale joropo');
   });
 
+  await comprobarAsync('la ruta que sirve archivos no es un proxy abierto', async () => {
+    // POR QUÉ EXISTE ESA RUTA. En iOS, la única forma de que una web guarde un
+    // archivo en el teléfono es la hoja de compartir, y para eso hay que poder
+    // LEER los bytes desde JavaScript. Están en storage.googleapis.com, que es
+    // otro origen, y el bucket no da permiso CORS. Así que pasan por el propio
+    // dominio, donde no hace falta permiso de nadie.
+    //
+    // Y EL RIESGO DE HACER ESO es convertir la cuenta de Vercel del usuario en
+    // un proxy público que cualquiera pueda usar a su costa. De ahí las cuatro
+    // puertas que se comprueban aquí.
+    const antes = { ...process.env };
+    process.env.APP_KEY = 'la-clave';
+    process.env.VERCEL_ENV = 'production';
+    process.env.GCS_OUTPUT_BUCKET = 'mi-bucket';
+    process.env.GCS_PREFIX = 'music-studio';
+
+    const mod = await import('../api/archivo.mjs');
+    const handler = mod.default;
+    igual(mod.config.runtime, 'edge',
+      'tiene que ser una función Edge: una normal no puede devolver un MP4 de 25 MB');
+
+    const pedir = (u, clave, metodo) => handler(new Request(
+      'https://app.local/api/archivo' + (u ? '?u=' + encodeURIComponent(u) : ''),
+      { method: metodo || 'GET', headers: clave ? { 'x-app-key': clave } : {} },
+    ));
+    const bueno = 'https://storage.googleapis.com/mi-bucket/music-studio/proyectos/p1/final/corto.mp4?X-Goog-Signature=abc';
+
+    // 1. Sin la contraseña de la app no se sirve nada.
+    igual((await pedir(bueno, '')).status, 401, 'sirve archivos sin contraseña');
+    igual((await pedir(bueno, 'otra-clave')).status, 401, 'acepta una contraseña equivocada');
+
+    // 2. Sólo el almacenamiento de Google, y sólo por https.
+    for (const malo of [
+      'https://ejemplo.com/archivo.mp4',
+      'https://storage.googleapis.com.ejemplo.com/x.mp4',
+      'http://storage.googleapis.com/mi-bucket/music-studio/x.mp4',
+    ]) {
+      igual((await pedir(malo, 'la-clave')).status, 400, 'acepta un destino que no es el bucket: ' + malo);
+    }
+
+    // 3. Sólo dentro del bucket y de la carpeta de esta herramienta.
+    for (const fuera of [
+      'https://storage.googleapis.com/otro-bucket/music-studio/x.mp4',
+      'https://storage.googleapis.com/mi-bucket/otra-carpeta/x.mp4',
+      'https://storage.googleapis.com/mi-bucket/music-studio/../../otro/x.mp4',
+    ]) {
+      igual((await pedir(fuera, 'la-clave')).status, 403, 'deja salir de su carpeta: ' + fuera);
+    }
+
+    // 4. Y sin URL no hay nada que servir; POST tampoco.
+    igual((await pedir('', 'la-clave')).status, 400, 'acepta una petición sin archivo');
+    igual((await pedir(bueno, 'la-clave', 'POST')).status, 405, 'acepta métodos que no son GET');
+
+    // Sin APP_KEY configurada, en producción se CIERRA: un despiste de
+    // configuración no puede dejar la puerta abierta.
+    process.env.APP_KEY = '';
+    igual((await pedir(bueno, '')).status, 401, 'sin APP_KEY en producción queda abierto');
+
+    Object.assign(process.env, antes);
+  });
+
   comprobar('desde la app de la pantalla de inicio, las descargas se abren en Safari', () => {
     // EL FALLO. El usuario guardó la herramienta en la pantalla de inicio desde
     // Safari y dejó de poder descargar: «no me deja descargar nada, solo como
@@ -679,6 +744,94 @@ async function principal() {
       cierto(!/target="_blank"/.test(enlace), nombre + ': se le puso el rodeo de iOS sin necesitarlo');
       igual(iu.notaDeDescarga('https://x/y.zip'), '', nombre + ': le sale un aviso que no le toca');
     }
+  });
+
+  await comprobarAsync('en la app de iOS se guarda con la hoja de compartir, en dos toques', async () => {
+    // Es la única forma que tiene una web de dejar un archivo en un iPhone. Y
+    // tiene una trampa: `navigator.share` EXIGE que la haya disparado un toque,
+    // y descargar treinta megas tarda más de lo que dura ese permiso. Si se
+    // intenta compartir después de la descarga, iOS lanza NotAllowedError y el
+    // usuario se queda sin nada y sin explicación.
+    //
+    // Por eso el primer toque descarga y el segundo comparte: con el archivo ya
+    // en memoria, el segundo es instantáneo y el permiso sigue vivo.
+    const PESO = 12 * 1024 * 1024;
+    const compartidos = [];
+    let permiso = false;
+
+    const nav = {
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari',
+      standalone: true,
+      maxTouchPoints: 5,
+      canShare: (d) => Boolean(d && d.files),
+      share: async (d) => {
+        if (!permiso) { const e = new Error('gesto caducado'); e.name = 'NotAllowedError'; throw e; }
+        compartidos.push(d.files[0]);
+      },
+    };
+
+    let pedidoA = null;
+    let claveEnviada = null;
+    let descargas = 0;
+    const iu = reglasDeLaInterfaz({
+      navigator: nav,
+      extras: {
+        File, Blob, URL,
+        fetch: async (u, o) => {
+          descargas += 1;
+          pedidoA = String(u);
+          claveEnviada = (o && o.headers && o.headers['x-app-key']) || null;
+          let enviados = 0;
+          return {
+            ok: true,
+            headers: { get: (k) => (k === 'content-length' ? String(PESO) : 'video/mp4') },
+            body: { getReader: () => ({ read: async () => {
+              if (enviados >= PESO) return { done: true };
+              const n = Math.min(4 * 1024 * 1024, PESO - enviados);
+              enviados += n;
+              return { done: false, value: new Uint8Array(n) };
+            } }) },
+          };
+        },
+      },
+    });
+    iu.estado.clave = 'la-clave';
+
+    // En la app instalada, lo que se ofrece es GUARDAR, no el enlace.
+    cierto(/data-accion="guardar-telefono"/.test(iu.notaDeDescarga('https://x/y.mp4', 'corto.mp4')),
+      'no se ofrece guardar con la hoja de compartir');
+
+    const url = 'https://storage.googleapis.com/b/music-studio/p/final/corto.mp4?sig=x';
+    const boton = {
+      textContent: 'Guardar en el teléfono', disabled: false,
+      getAttribute: (k) => (k === 'data-url' ? url : 'corto.mp4'),
+    };
+
+    // Primer toque: descarga. iOS rechaza el compartir por gesto caducado.
+    await iu.accionGuardarEnElTelefono(boton);
+    igual(compartidos.length, 0, 'compartió con el permiso del toque ya caducado');
+    cierto(/Guardar ahora/.test(boton.textContent),
+      'el botón no avisa de que ya está listo: ' + boton.textContent);
+    cierto(!boton.disabled, 'el botón se quedó bloqueado y no se puede dar el segundo toque');
+
+    // LOS BYTES SE PIDEN A NUESTRO DOMINIO, no a Google: un fetch al bucket lo
+    // bloquearía CORS, y configurarlo no está al alcance de este usuario.
+    cierto(pedidoA && pedidoA.indexOf('/api/archivo?') === 0,
+      'los bytes no se piden por nuestro dominio, sino a ' + pedidoA);
+    cierto(pedidoA.indexOf(encodeURIComponent(url)) !== -1, 'no se le dice qué archivo hay que traer');
+    igual(claveEnviada, 'la-clave', 'no se manda la contraseña de la app al traer el archivo');
+
+    // Segundo toque: ya está en memoria, así que comparte al instante.
+    permiso = true;
+    await iu.accionGuardarEnElTelefono(boton);
+    igual(compartidos.length, 1, 'el segundo toque no compartió nada');
+    // Y NO vuelve a descargar. Si lo hiciera, el usuario pagaría los megas dos
+    // veces y —peor— el permiso del toque volvería a caducar por el camino, así
+    // que el segundo toque tampoco guardaría nada y no habría forma de salir.
+    igual(descargas, 1, 'el segundo toque volvió a descargar el archivo entero');
+    igual(compartidos[0].name, 'corto.mp4', 'el archivo llega sin nombre reconocible');
+    igual(compartidos[0].size, PESO, 'el archivo llega incompleto');
+    igual(compartidos[0].type, 'video/mp4', 'el archivo llega sin tipo, y iOS no sabría dónde guardarlo');
   });
 
   comprobar('no queda ninguna descarga fuera del enlace que sabe de iOS', () => {
