@@ -1259,6 +1259,14 @@ async function cargarLoQueFalte(){
       pintar();
       return;
     }
+    // El Perfil enseña QUÉ VERSIÓN está desplegada, y ése es el dato que se va
+    // a mirar precisamente cuando algo «no aparece». Pedirle además que pulse un
+    // botón para verlo sería esconder la respuesta detrás de la pregunta.
+    if (estado.vista === 'perfil' && !estado.salud) {
+      await comprobarSalud('perfil');
+      pintar();
+      return;
+    }
     if (estado.vista === 'proyecto' && estado.proyectoId) {
       // El plan enseña con qué modelos se está produciendo el corto, y el
       // nombre legible de cada modelo está en el catálogo. Sin él sólo se
@@ -2761,7 +2769,25 @@ function vistaPerfil(){
   var clave = estado.clave || '';
   var enmascarada = clave ? clave.slice(0, 2) + '•'.repeat(Math.max(3, clave.length - 2)) : '(sin clave)';
 
+  // QUÉ VERSIÓN SE ESTÁ VIENDO. Lo primero de la pantalla, y por encima del
+  // acceso, porque es lo primero que hace falta cuando algo «no aparece»: sin
+  // esto, la única forma de saber si el navegador tiene la última versión era
+  // entrar en el panel de Vercel desde el móvil.
+  var ver = (estado.salud && estado.salud.version) || null;
   var html = cab +
+    '<div class="tarjeta"><h3>Versión desplegada</h3>' +
+      (ver && ver.conocida
+        ? htmlDatos([
+            ['Cambio', ver.mensaje || '(sin mensaje)'],
+            ['Commit', ver.commit],
+            ['Rama', ver.rama],
+            ['Entorno', ver.entorno]
+          ]) +
+          '<p class="tenue mini" style="margin-top:8px">Si aquí no sale el último cambio, el navegador está ' +
+            'enseñando una copia guardada: cierra la pestaña (o la app) y vuelve a abrirla. Si sigue igual, ' +
+            'el despliegue de Vercel no ha terminado o ha fallado.</p>'
+        : '<p class="tenue mini">' + esc((ver && ver.nota) || 'Todavía no se ha consultado el diagnóstico.') + '</p>') +
+    '</div>' +
     '<div class="tarjeta"><h3>Acceso</h3>' +
       htmlDatos([
         ['Clave guardada', enmascarada],

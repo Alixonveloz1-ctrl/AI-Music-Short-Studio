@@ -42,11 +42,41 @@ const ROLES = [
   ['roles/logging.logWriter', 'Escritor de registros', 'que el montaje pueda escribir su registro'],
 ];
 
+/**
+ * De qué commit salió lo que se está sirviendo.
+ *
+ * `VERCEL_GIT_COMMIT_SHA` y sus hermanas las pone Vercel sola en cada
+ * despliegue; no hay que configurar nada. El mensaje del commit es lo que de
+ * verdad sirve para reconocerlo de un vistazo — un sha de siete letras no le
+ * dice nada a nadie.
+ */
+function versionDesplegada() {
+  const sha = (process.env.VERCEL_GIT_COMMIT_SHA || '').trim();
+  if (!sha) {
+    return { conocida: false, nota: 'Esto no se está ejecutando en Vercel, así que no hay despliegue que identificar.' };
+  }
+  return {
+    conocida: true,
+    commit: sha.slice(0, 7),
+    mensaje: (process.env.VERCEL_GIT_COMMIT_MESSAGE || '').split('\n')[0].slice(0, 160),
+    rama: process.env.VERCEL_GIT_COMMIT_REF || '',
+    entorno: process.env.VERCEL_ENV || '',
+  };
+}
+
 module.exports = async function handler(req, res) {
   // sinClave: esta pantalla tiene que poder verse aunque APP_KEY no esté puesta.
   if (empezar(req, res, ['GET', 'POST'], { sinClave: true })) return;
 
   const salida = {
+    // QUÉ VERSIÓN ESTÁ DESPLEGADA. Existe porque la pregunta se hizo y no había
+    // forma de contestarla: «¿tú estás desplegando en main? porque yo no veo
+    // nada de los cambios». Sin esto, saber si el navegador está viendo la
+    // última versión exige entrar en el panel de Vercel desde el móvil.
+    //
+    // Vercel pone estas variables en cada despliegue. Fuera de Vercel no
+    // existen, y entonces se dice eso mismo en vez de inventar una versión.
+    version: versionDesplegada(),
     app: {
       appKey: process.env.APP_KEY
         ? { ok: true }

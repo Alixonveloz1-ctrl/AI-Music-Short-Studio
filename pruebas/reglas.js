@@ -937,6 +937,56 @@ async function principal() {
     igual(compartidos[0].type, 'video/mp4', 'el archivo llega sin tipo, y iOS no sabría dónde guardarlo');
   });
 
+  await comprobarAsync('se puede ver QUÉ VERSIÓN está desplegada, sin salir de la app', async () => {
+    // «¿Tú estás desplegando en la rama de main? Porque yo no veo nada de los
+    // cambios que hace por ningún lado.»
+    //
+    // La pregunta era razonable y no había forma de contestarla desde el
+    // teléfono: para saber si el navegador estaba viendo la última versión
+    // había que entrar en el panel de Vercel. Ahora lo dice la propia app.
+    const antes = { ...process.env };
+    process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890';
+    process.env.VERCEL_GIT_COMMIT_MESSAGE = 'Un cambio cualquiera\ncon segunda línea';
+    process.env.VERCEL_GIT_COMMIT_REF = 'main';
+    process.env.VERCEL_ENV = 'production';
+
+    const salud = require(path.join(RAIZ, 'api/salud.js'));
+    const cuerpo = await new Promise((listo) => {
+      const res = {
+        setHeader() {}, status() { return this; },
+        json(b) { listo(b); return this; }, end() { listo(null); return this; },
+      };
+      salud({ method: 'GET', headers: { host: 'l' }, url: '/' }, res);
+    });
+
+    cierto(cuerpo && cuerpo.version, 'el diagnóstico no dice qué versión está desplegada');
+    cierto(cuerpo.version.conocida, 'no reconoce el despliegue estando en Vercel');
+    igual(cuerpo.version.commit, 'abcdef1', 'el commit no sale abreviado y legible');
+    igual(cuerpo.version.rama, 'main', 'no dice de qué rama salió');
+    // El mensaje es lo que de verdad se reconoce de un vistazo; un sha de siete
+    // letras no le dice nada a nadie.
+    igual(cuerpo.version.mensaje, 'Un cambio cualquiera', 'el mensaje del commit no llega, o llega con más de una línea');
+
+    // Fuera de Vercel se dice eso, en vez de inventar una versión.
+    delete process.env.VERCEL_GIT_COMMIT_SHA;
+    const fuera = await new Promise((listo) => {
+      const res = { setHeader() {}, status() { return this; }, json(b) { listo(b); return this; }, end() { listo(null); return this; } };
+      salud({ method: 'GET', headers: { host: 'l' }, url: '/' }, res);
+    });
+    cierto(!fuera.version.conocida, 'se inventa una versión fuera de Vercel');
+    cierto(fuera.version.nota, 'no explica por qué no hay versión que enseñar');
+
+    Object.assign(process.env, antes);
+
+    // Y la pantalla lo enseña sin que haya que pulsar nada.
+    const iu = reglasDeLaInterfaz();
+    iu.estado.salud = { version: { conocida: true, commit: 'abcdef1', mensaje: 'Un cambio cualquiera', rama: 'main', entorno: 'production' } };
+    const pantalla = iu.vistaPerfil();
+    cierto(/Versión desplegada/.test(pantalla), 'el Perfil no enseña la versión');
+    cierto(/abcdef1/.test(pantalla) && /Un cambio cualquiera/.test(pantalla),
+      'la versión no llega a la pantalla');
+  });
+
   comprobar('el modelo se puede cambiar desde el elemento que está fallando', () => {
     // Los selectores estaban sólo en la ficha del corto, y la ficha vive en otra
     // pestaña: «no veo ningún botón para el selector de generador ni de imagen
