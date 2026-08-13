@@ -1467,6 +1467,75 @@ async function principal() {
     }
   });
 
+  await comprobarAsync('el rechazo por palabras llega en la OPERACIÓN, no en el envío', async () => {
+    // ESTE ES EL ERROR QUE COSTÓ DOS TARDES, y era mío. Se dio por hecho que
+    // Google rechazaba el ENVÍO, y el reintento con menos texto se puso allí.
+    //
+    // Pero Veo acepta el envío, devuelve su operación como si todo fuera bien, y
+    // sólo AL TERMINAR dice que el prompt tenía palabras sensibles. El reintento
+    // nunca se ejecutaba: el usuario veía el mismo error una y otra vez sobre un
+    // arreglo que no se estaba aplicando por ningún lado.
+    //
+    // La marca de abajo es lo que permite que quien empuja la generación se
+    // entere y pueda volver a lanzarla recortada.
+    const RAI = "The prompt could not be submitted. This prompt contains sensitive words " +
+      "that violate Google's Responsible AI practices. Support codes: 89371032";
+    const original = global.fetch;
+    const conOperacion = (op) => {
+      global.fetch = async (u) => {
+        const cuerpo = String(u).indexOf('oauth2') !== -1
+          ? { access_token: 't', expires_in: 3600 } : op;
+        return { ok: true, status: 200, headers: { get: () => null },
+          json: async () => cuerpo, text: async () => JSON.stringify(cuerpo) };
+      };
+      return vertex.consultarVideo({
+        token: 't', projectId: 'p', operationName: 'op/1', modelo: 'veo-3.1-lite-generate-001',
+      });
+    };
+
+    try {
+      const rechazado = await conOperacion({ done: true, error: { code: 3, message: RAI } });
+      cierto(rechazado.listo, 'la operación rechazada no se da por terminada');
+      cierto(rechazado.rechazoPorPalabras === true,
+        'no se marca el rechazo por palabras, así que nadie puede reintentar recortando');
+      cierto(/sensitive words/.test(rechazado.error), 'se pierde el motivo de Google');
+
+      // Y un fallo que NO es de palabras no se marca: reintentar recortando el
+      // encargo no arreglaría una cuota agotada, sólo gastaría otro intento.
+      const cuota = await conOperacion({ done: true, error: { code: 8, message: 'Quota exceeded' } });
+      cierto(!cuota.rechazoPorPalabras, 'una cuota agotada se confunde con un rechazo por palabras');
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  comprobar('a Veo no se le repite la continuidad, que ya viene en la imagen', () => {
+    // Veo no dibuja desde cero: ANIMA UNA IMAGEN YA APROBADA, y esa imagen lleva
+    // dentro el rostro, el pelo, la ropa y la luz. Volcarle otra vez las veinte
+    // reglas de continuidad no añadía nada y sí quitaba: diluía lo único que
+    // tiene que entender —qué se mueve y cómo— y multiplicaba el texto que el
+    // filtro de contenido de Google puede marcar.
+    const proyecto = dominio.createProject(CONFIG, plan);
+    const clip = proyecto.assets.find((a) => a.kind === 'clip');
+    const imagen = proyecto.assets.find((a) => a.kind === 'shot_image');
+
+    // El clip ancla en la imagen aprobada, y eso basta.
+    cierto(/coincidir EXACTAMENTE con la imagen de referencia aprobada/.test(clip.spec.prompt),
+      'el clip ya no se ancla en la imagen aprobada');
+    // Pero NO repite el catálogo de rasgos.
+    cierto(!/Mismo cabello:/.test(clip.spec.prompt), 'al clip se le sigue describiendo el pelo');
+    cierto(!/Mismo vestuario:/.test(clip.spec.prompt), 'al clip se le sigue describiendo la ropa');
+    cierto(!/Mismo rostro en todas las tomas/.test(clip.spec.prompt), 'al clip se le sigue describiendo la cara');
+
+    // La IMAGEN sí las lleva, que ahí es donde hacen falta: dibuja desde cero.
+    cierto(/Mismo vestuario:/.test(imagen.spec.prompt),
+      'se le han quitado las reglas de continuidad a la imagen, que sí las necesita');
+
+    // Y el encargo de vídeo se ha quedado corto de verdad.
+    cierto(clip.spec.prompt.length < 2600,
+      'el encargo de vídeo sigue siendo enorme (' + clip.spec.prompt.length + ' caracteres)');
+  });
+
   await comprobarAsync('cuando Veo falla, se dice POR QUÉ', async () => {
     // EL FALLO: el usuario encadenó nueve intentos del mismo clip y los nueve
     // dijeron «Veo terminó pero no devolvió ningún vídeo». Ese mensaje no

@@ -569,8 +569,23 @@ async function consultarVideo(opciones) {
   // con el mismo mensaje inútil, sin una sola pista de qué estaba pasando. Ese
   // mensaje no describía el fallo: describía que no sabíamos cuál era.
   if (d.error) {
-    const motivo = d.error.message || d.error.status || ('código ' + d.error.code);
-    return { listo: true, error: 'Veo no pudo generar el clip: ' + String(motivo).slice(0, 400) };
+    const motivo = String(d.error.message || d.error.status || ('código ' + d.error.code));
+    return {
+      listo: true,
+      error: 'Veo no pudo generar el clip: ' + motivo.slice(0, 400),
+      // AQUÍ ES DONDE LLEGA DE VERDAD EL RECHAZO POR PALABRAS, y costó verlo.
+      //
+      // Se dio por hecho que Google rechazaba el ENVÍO, y el reintento con menos
+      // texto se puso allí. Pero Veo acepta el envío, devuelve su operación como
+      // si todo fuera bien, y sólo al terminar dice que el prompt tenía palabras
+      // sensibles. El reintento nunca llegaba a ejecutarse — el usuario veía el
+      // mismo error una y otra vez sobre un arreglo que no se estaba aplicando.
+      //
+      // Se marca para que quien empuja la generación pueda volver a lanzarla con
+      // el encargo recortado, que es lo único que se puede hacer sin saber cuál
+      // es la palabra.
+      rechazoPorPalabras: rechazaPorPalabras(motivo),
+    };
   }
 
   const resp = d.response || {};

@@ -309,6 +309,56 @@ async function principal() {
       'sigue sin poder montarse; faltan: ' + (p.cuerpo.estado.missingForEdit || []).slice(0, 5).join(', '));
   });
 
+  await paso('si Google rechaza el clip por sus palabras, se reintenta solo y más corto', async () => {
+    // EL FALLO QUE COSTÓ DOS TARDES. Google contesta «this prompt contains
+    // sensitive words» y no dice cuál. Se puso un reintento con menos texto…
+    // en el ENVÍO. Pero Veo ACEPTA el envío, devuelve su operación como si todo
+    // fuera bien, y sólo AL TERMINAR dice que el prompt tenía palabras
+    // sensibles: el reintento nunca llegaba a ejecutarse.
+    //
+    // Aquí el Google de mentira rechaza igual que el de verdad — en la
+    // operación, no en el envío — porque un simulacro más amable que el
+    // servicio real deja pasar exactamente este tipo de error.
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    // A estas alturas el corto está entero y aprobado, así que se desbloquea
+    // uno para regenerarlo: es exactamente lo que hace el usuario cuando un
+    // clip le sale mal.
+    const clip = antes.assets.find((a) => a.kind === 'clip');
+    cierto(clip, 'el corto no tiene clips');
+    if (clip.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+
+    google.videosPedidos.length = 0;
+    google.rechazarProximosVideos(1);   // el primer intento se rechaza; el segundo pasa
+
+    const g = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+    cierto(g.codigo === 200 || g.codigo === 202, 'lanzar el clip dio ' + g.codigo);
+    let gen = g.cuerpo.gen;
+    for (let n = 0; n < 30 && gen && gen.status === 'generating'; n += 1) {
+      const s = await pedir(generar, { metodo: 'GET', query: { id, activo: clip.id, gen: gen.id } });
+      gen = s.cuerpo.gen;
+    }
+
+    // 1. NO se rindió: el clip existe.
+    cierto(gen && gen.status === 'review',
+      'el clip se dio por perdido en vez de reintentarlo: ' + (gen && gen.status) + ' — ' + (gen && gen.error));
+
+    // 2. Se lanzó DOS veces, y la segunda con menos texto y sin negativo.
+    cierto(google.videosPedidos.length >= 2,
+      'no se relanzó el clip: sólo hubo ' + google.videosPedidos.length + ' envío(s)');
+    const primero = google.videosPedidos[0];
+    const segundo = google.videosPedidos[google.videosPedidos.length - 1];
+    cierto(primero.negativo, 'el primer intento ya iba sin prompt negativo');
+    cierto(!segundo.negativo, 'el reintento sigue llevando el prompt negativo');
+    cierto(segundo.bloques < primero.bloques,
+      'el reintento no va más corto: ' + primero.bloques + ' → ' + segundo.bloques + ' bloques');
+    cierto(segundo.bloques >= 3, 'el reintento recortó hasta dejar el clip sin descripción de la toma');
+
+    // 3. Y SE LE DICE AL USUARIO, porque un clip con menos contexto puede no
+    // encajar con los demás y eso hay que mirarlo antes de aprobarlo.
+    cierto(/rechazó el encargo/.test(gen.aviso || ''),
+      'no se avisa de que el clip salió con un encargo recortado: ' + gen.aviso);
+  });
+
   await paso('el montaje se lanza y termina', async () => {
     const r = await pedir(montar, { metodo: 'POST', cuerpo: { id } });
     cierto(r.codigo === 200 || r.codigo === 202, 'código ' + r.codigo + ' ' + JSON.stringify(r.cuerpo).slice(0, 250));

@@ -948,9 +948,22 @@ function buildClipPrompt(bible, shot, clip, totalClips, esElUltimoDelCorto) {
     // Con cuánta fuerza toca. En el plano de cierre no se pide: es el que NO
     // toca, y pedirle intensidad de interpretación sería deshacerlo.
     esCierre ? null : bloqueComoSeToca(bible, 'video'),
+    // LA CONTINUIDAD NO SE LE REPITE A VEO, y esto es un cambio de fondo.
+    //
+    // Aquí se le volcaban las veinte reglas de continuidad: el rostro, el
+    // cabello, el vestuario, el instrumento, la luz… Eso tiene todo el sentido
+    // para un modelo de IMAGEN, que dibuja desde cero. Veo no dibuja desde
+    // cero: ANIMA UNA IMAGEN YA APROBADA, y esa imagen ya lleva dentro el
+    // rostro, el pelo, la ropa y la luz. Describírselo otra vez no añade nada.
+    //
+    // Y sí quita: un encargo de cuarenta líneas diluye lo único que Veo tiene
+    // que entender —qué se mueve y cómo— y multiplica el texto que el filtro de
+    // contenido de Google puede marcar. Este proyecto se quedó atascado
+    // justamente ahí, con Google rechazando el encargo por «palabras sensibles»
+    // sin decir cuáles.
     block(CONTINUITY_HEADER, [
-      'El primer fotograma debe coincidir con la imagen de referencia aprobada',
-      ...bible.continuityRules,
+      'El primer fotograma debe coincidir EXACTAMENTE con la imagen de referencia aprobada',
+      'Todo lo que ya se ve en esa imagen se conserva sin cambios durante el clip',
     ]),
     // EL FINAL DEL CORTO. Aquí ya no hay que pedirle al modelo que invente la
     // transición de tocar a no tocar: la imagen de referencia de este plano ya

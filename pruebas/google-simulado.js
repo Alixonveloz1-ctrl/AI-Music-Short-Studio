@@ -28,6 +28,10 @@ function instalarGoogleSimulado() {
   const llamadas = [];
   /** Cada petición a un modelo, con su cuerpo ya interpretado. */
   const pedidos = [];
+  /** Cada clip que se le pidió a Veo, con el encargo que se le mandó. */
+  const videosPedidos = [];
+  /** Cuántas operaciones de vídeo seguidas rechaza Google por «palabras». */
+  let rechazarVideos = 0;
   let buildsLanzados = 0;
   const consultasBuild = new Map();
 
@@ -229,9 +233,33 @@ function instalarGoogleSimulado() {
       let cuerpo = {};
       try { cuerpo = JSON.parse(String(o.body || '{}')); } catch (e) { /* no-JSON */ }
       if (u.indexOf(':predictLongRunning') !== -1) {
-        return ok({ name: 'operaciones/veo-1' });
+        // Se apunta con qué encargo se lanzó cada operación. Sirve para
+        // comprobar que un reintento va de verdad más corto que el anterior.
+        const encargo = (cuerpo.instances && cuerpo.instances[0] && cuerpo.instances[0].prompt) || '';
+        videosPedidos.push({
+          prompt: encargo,
+          bloques: encargo.split('\n\n').length,
+          negativo: Boolean(cuerpo.parameters && cuerpo.parameters.negativePrompt),
+        });
+        return ok({ name: 'operaciones/veo-' + videosPedidos.length });
       }
       if (u.indexOf(':fetchPredictOperation') !== -1) {
+        // COMO GOOGLE DE VERDAD: el rechazo por palabras NO llega al enviar,
+        // llega cuando la operación TERMINA. Se descubrió tarde y le costó dos
+        // tardes al usuario —el reintento estaba puesto en el envío y no se
+        // ejecutaba nunca—, así que el simulacro lo reproduce tal cual. Un
+        // simulacro más amable que el servicio real deja pasar justo esto.
+        if (rechazarVideos > 0) {
+          rechazarVideos -= 1;
+          return ok({
+            done: true,
+            error: {
+              code: 3,
+              message: "The prompt could not be submitted. This prompt contains sensitive " +
+                "words that violate Google's Responsible AI practices. Support codes: 89371032",
+            },
+          });
+        }
         const clip = 'music-studio/veo/clip-de-prueba.mp4';
         objetos.set(clip, Buffer.from('mp4 de prueba'));
         return ok({ done: true, response: { videos: [{ gcsUri: 'gs://bucket-de-prueba/' + clip }] } });
@@ -329,7 +357,11 @@ function instalarGoogleSimulado() {
   // Lo que este simulacro dio por audio, para que la prueba pueda exigir que
   // llegue al bucket SIN QUE NADIE LO TOQUE, que es la regla que se saltó tres
   // veces: envolver audio comprimido en una cabecera WAV produce ruido blanco.
-  return { objetos, llamadas, pedidos, audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
+  return {
+    objetos, llamadas, pedidos, videosPedidos,
+    /** Hace que las N próximas operaciones de vídeo se rechacen por palabras. */
+    rechazarProximosVideos(n) { rechazarVideos = n; },
+    audioEnviado: Buffer.from(PCM_CRUDO, 'base64'), audioMime: PCM_MIME };
 }
 
 /** Credenciales de mentira, con una clave RSA de verdad para poder firmar. */

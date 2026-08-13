@@ -339,7 +339,7 @@ function papelDeReferencia(activo, referencia) {
 // Clip — se lanza aquí y se recoge en el GET
 // ---------------------------------------------------------------------------
 
-async function arrancarClip(proyecto, activo, gen) {
+async function arrancarClip(proyecto, activo, gen, recorte) {
   const spec = activo.spec || {};
   const { token, projectId } = await auth();
 
@@ -370,8 +370,10 @@ async function arrancarClip(proyecto, activo, gen) {
       projectId,
       modeloId: modeloVideoDe(proyecto).id,
       formatoId: (proyecto.config || {}).formatoId,
-      prompt: gen.prompt,
-      negativePrompt: gen.negativePrompt,
+      // Con `recorte`, el encargo va más corto y sin negativo: es el reintento
+      // de cuando Google lo rechaza por «palabras sensibles» sin decir cuáles.
+      prompt: recorte ? vertex.encargoMasCorto(gen.prompt, recorte) : gen.prompt,
+      negativePrompt: recorte ? '' : gen.negativePrompt,
       imagenBase64: imagenBytes.toString('base64'),
       imagenMime: imagen.mimeType || 'image/png',
       fotogramaFinalBase64: finalBytes ? finalBytes.toString('base64') : undefined,
@@ -467,6 +469,44 @@ async function arrancarMusica(proyecto, activo, gen, inicio) {
   });
 
   return hacerFragmento(registrado, activo.id, gen.id, 1, inicio);
+}
+
+/**
+ * Volver a lanzar el clip con el encargo recortado.
+ *
+ * POR QUÉ NO SE ARREGLA EN EL ENVÍO. Se intentó, y no servía: Veo ACEPTA el
+ * envío, devuelve su operación como si todo fuera bien, y sólo al terminar dice
+ * que el prompt llevaba palabras sensibles. Para cuando se sabe, esa operación
+ * ya está cerrada y lo único que se puede hacer es lanzar otra.
+ *
+ * El recorte quita el prompt negativo y va cortando el encargo por el final,
+ * donde están las listas largas. Se conserva siempre lo que describe la toma:
+ * un clip generado con menos contexto es peor que uno completo, pero es
+ * infinitamente mejor que ninguno.
+ *
+ * El contador vive en el trabajo, así que sobrevive a que la función muera
+ * entre una consulta y la siguiente — que en Vercel es lo normal.
+ */
+async function relanzarMasCorto(proyecto, activo, gen, recorte) {
+  try {
+    await arrancarClip(proyecto, activo, gen, recorte);
+  } catch (e) {
+    return anotarFallo(proyecto.id, activo.id, gen.id, motivoLegible(e));
+  }
+
+  return anotar(proyecto.id, (p) => {
+    const a = dominio.getAsset(p, activo.id);
+    const g = generacionDe(a, gen.id);
+    if (!g || !g.trabajo) return;
+    g.trabajo.recortes = recorte;
+    // Se le cuenta al usuario, porque un clip con menos contexto puede no
+    // encajar con los demás y eso hay que mirarlo antes de aprobarlo.
+    g.aviso = recorte === 1
+      ? 'Google rechazó el encargo por las palabras que llevaba. Se ha vuelto a lanzar sin el ' +
+        'prompt negativo. El resultado puede tener más defectos de lo normal.'
+      : 'Google volvió a rechazarlo. Se ha lanzado con el encargo recortado, sin las notas de ' +
+        'continuidad. Este clip puede no encajar del todo con los demás: compáralo antes de aprobarlo.';
+  });
 }
 
 /** El trabajo apuntado en una generación, si lo tiene. */
@@ -766,6 +806,21 @@ async function empujarVideo(proyecto, activo, gen) {
   }
 
   if (r.error) {
+    // ─── RECHAZADO POR LAS PALABRAS: SE VUELVE A LANZAR CON MENOS TEXTO ───
+    //
+    // Google dice que el encargo lleva palabras sensibles pero no dice cuáles.
+    // Perseguirlas de una en una es un juego que paga el usuario con su tiempo,
+    // y ya se le fueron dos tardes. Así que se reintenta solo, con el encargo
+    // recortado por el final —que es donde están las listas largas y donde el
+    // filtro encuentra más de lo que marcar— conservando siempre lo que
+    // describe la toma.
+    //
+    // Se cuentan los recortes en el propio trabajo para no repetirlos sin fin:
+    // dos, y si Google sigue sin querer, se le cuenta al usuario.
+    const recortes = Number(t.recortes || 0);
+    if (r.rechazoPorPalabras && recortes < 2) {
+      return { proyecto: await relanzarMasCorto(proyecto, activo, gen, recortes + 1) };
+    }
     return { proyecto: await anotarFallo(proyecto.id, activo.id, gen.id, r.error) };
   }
 
