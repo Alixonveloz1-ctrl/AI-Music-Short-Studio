@@ -447,6 +447,27 @@ async function iniciarVideo(opciones) {
   };
 }
 
+/**
+ * Qué contestó Google, en una línea que quepa en la pantalla de un móvil.
+ *
+ * No es un volcado: es la forma de la respuesta más los valores cortos. Con
+ * esto se distingue «vino vacía» de «vino con campos que no esperábamos», que
+ * es justo lo que no se podía saber cuando el mensaje era «no devolvió ningún
+ * vídeo» y nada más.
+ */
+function resumen(d) {
+  const resp = (d && d.response) || {};
+  const partes = [];
+  for (const clave of Object.keys(resp).slice(0, 12)) {
+    const valor = resp[clave];
+    if (valor === null || valor === undefined) { partes.push(clave + '=null'); continue; }
+    if (Array.isArray(valor)) { partes.push(clave + '[' + valor.length + ']'); continue; }
+    if (typeof valor === 'object') { partes.push(clave + '{' + Object.keys(valor).join(',') + '}'); continue; }
+    partes.push(clave + '=' + String(valor).slice(0, 60));
+  }
+  return partes.length ? partes.join(', ') : '(una respuesta vacía)';
+}
+
 /** ¿Terminó el clip? Devuelve el objeto del bucket cuando está listo. */
 async function consultarVideo(opciones) {
   const { token, projectId, operationName, modelo } = opciones;
@@ -465,16 +486,48 @@ async function consultarVideo(opciones) {
 
   if (!d.done) return { listo: false };
 
+  // LA OPERACIÓN PUDO TERMINAR MAL, y eso no se leía en ninguna parte.
+  //
+  // Una operación larga de Google acaba de una de dos maneras: con `response`
+  // si salió bien, o con `error` si no. Aquí sólo se miraba `response`, así que
+  // CUALQUIER fallo —una cuota agotada, un parámetro que el modelo no admite,
+  // un error interno— se contaba como «terminó y no devolvió ningún vídeo».
+  //
+  // El usuario lo pagó caro: nueve intentos seguidos del mismo clip, los nueve
+  // con el mismo mensaje inútil, sin una sola pista de qué estaba pasando. Ese
+  // mensaje no describía el fallo: describía que no sabíamos cuál era.
+  if (d.error) {
+    const motivo = d.error.message || d.error.status || ('código ' + d.error.code);
+    return { listo: true, error: 'Veo no pudo generar el clip: ' + String(motivo).slice(0, 400) };
+  }
+
   const resp = d.response || {};
-  if (resp.raiMediaFilteredCount > 0 && !(resp.videos || []).length) {
+
+  // Los filtros de contenido. `raiMediaFilteredReasons` viene a veces sin el
+  // contador, así que valen las dos señales: con una sola se escapaban casos
+  // que acababan en el mensaje genérico de abajo.
+  const razonesRai = resp.raiMediaFilteredReasons || resp.raiMediaFilteredReason;
+  const filtrados = Number(resp.raiMediaFilteredCount || 0) > 0 ||
+    (Array.isArray(razonesRai) ? razonesRai.length > 0 : Boolean(razonesRai));
+  if (filtrados && !(resp.videos || []).length) {
+    const detalle = Array.isArray(razonesRai) ? razonesRai.join('; ') : (razonesRai || '');
     return {
       listo: true,
-      error: 'los filtros de contenido bloquearon este clip. Abre «Ver y editar el prompt» ' +
-        'aquí abajo, cambia la palabra que lo dispara y vuelve a generar.',
+      error: 'los filtros de contenido bloquearon este clip' +
+        (detalle ? ' (' + String(detalle).slice(0, 300) + ')' : '') +
+        '. Abre «Ver y editar el prompt» aquí abajo, cambia la palabra que lo dispara ' +
+        'y vuelve a generar.',
     };
   }
+
   const video = (resp.videos || [])[0];
-  if (!video) return { listo: true, error: 'Veo terminó pero no devolvió ningún vídeo.' };
+  if (!video) {
+    // Si se llega aquí, Veo dijo que terminó bien y aun así no hay vídeo ni
+    // motivo. Antes esto era un callejón sin salida; ahora se cuenta QUÉ
+    // contestó, que es lo único con lo que se puede diagnosticar desde un
+    // teléfono sin poder abrir los registros de Google.
+    return { listo: true, error: 'Veo terminó sin vídeo y sin decir por qué. Contestó: ' + resumen(d) };
+  }
 
   if (video.gcsUri) {
     const sin = video.gcsUri.replace('gs://', '');

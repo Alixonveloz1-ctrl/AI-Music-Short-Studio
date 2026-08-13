@@ -2881,11 +2881,37 @@ async function accionRestaurarPrompt(activoId){
   });
 }
 
+/** Cuántas veces seguidas ha fallado un activo, contando desde la última. */
+function fallosSeguidos(a){
+  var gens = (a && a.generations) || [];
+  var n = 0;
+  for (var i = gens.length - 1; i >= 0; i -= 1) {
+    if (gens[i].status !== 'failed') break;
+    n += 1;
+  }
+  return n;
+}
+
 async function accionGenerar(activoId){
   var p = estado.proyecto;
   if (!p) return;
   var a = activos(p).find(function(x){ return x.id === activoId; });
   if (!a) return;
+
+  // NO SEGUIR PAGANDO EL MISMO FALLO. El usuario encadenó NUEVE intentos del
+  // mismo clip, los nueve con el mismo error, porque el mensaje no le decía
+  // nada con lo que decidir. Cada intento de vídeo se factura igual haya salido
+  // o no, así que a partir del tercero se pregunta y se le recuerda el error.
+  var seguidos = fallosSeguidos(a);
+  if (seguidos >= 3) {
+    var ultimo = (a.generations || []).filter(function(g){ return g.status === 'failed'; }).pop();
+    if (!window.confirm(
+      'Este elemento ha fallado ' + seguidos + ' veces seguidas, siempre por lo mismo:\n\n' +
+      recorte((ultimo && ultimo.error) || 'sin motivo', 220) + '\n\n' +
+      'Cada intento se paga aunque falle. Si no has cambiado nada, va a volver a fallar: ' +
+      'prueba a editar el prompt.\n\n¿Intentarlo otra vez de todos modos?'
+    )) return;
+  }
 
   // Regenerar algo aprobado invalida todo lo que se apoyaba en ello. Se avisa
   // con el número exacto: es una decisión cara, no un clic más.
@@ -3356,8 +3382,6 @@ async function colaTic(){
       // Tres fallos seguidos no son tres activos con mala suerte: es que algo
       // está mal en la configuración y los catorce restantes van a fallar
       // igual. Se para y se le enseña el error al usuario.
-      var seguidos = 0;
-      for (var i = c.fallos.length - 1; i >= 0 && seguidos < 3; i -= 1) seguidos += 1;
       if (c.fallos.length >= 3 && c.hechos === 0) {
         c.activa = false;
         c.aviso = 'Cola detenida: han fallado ' + c.fallos.length + ' seguidos sin que ninguno saliera bien. ' +

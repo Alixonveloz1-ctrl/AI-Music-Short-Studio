@@ -1235,6 +1235,82 @@ async function principal() {
     }
   });
 
+  await comprobarAsync('cuando Veo falla, se dice POR QUÉ', async () => {
+    // EL FALLO: el usuario encadenó nueve intentos del mismo clip y los nueve
+    // dijeron «Veo terminó pero no devolvió ningún vídeo». Ese mensaje no
+    // describía el fallo, describía que no sabíamos cuál era.
+    //
+    // Y la causa estaba a la vista: una operación larga de Google acaba con
+    // `response` si salió bien o con `error` si no, y aquí sólo se leía
+    // `response`. Cualquier fallo real —cuota, parámetro inválido, error
+    // interno— caía en ese mensaje genérico.
+    const original = global.fetch;
+    const conOperacion = (op) => {
+      global.fetch = async (u) => {
+        const cuerpo = String(u).indexOf('oauth2') !== -1
+          ? { access_token: 't', expires_in: 3600 }
+          : op;
+        return { ok: true, status: 200, headers: { get: () => null },
+          json: async () => cuerpo, text: async () => JSON.stringify(cuerpo) };
+      };
+      return vertex.consultarVideo({
+        token: 't', projectId: 'p', operationName: 'op/1', modelo: 'veo-3.1-lite-generate-001',
+      });
+    };
+
+    try {
+      // 1. La operación falló: se cuenta el motivo de Google, no un genérico.
+      const falló = await conOperacion({
+        done: true, error: { code: 3, message: 'Quota exceeded for veo generations' },
+      });
+      cierto(falló.listo, 'una operación fallida no se da por terminada');
+      cierto(/Quota exceeded/.test(falló.error), 'se pierde el motivo real: ' + falló.error);
+      cierto(!/no devolvió ningún vídeo/.test(falló.error), 'sigue saliendo el mensaje que no dice nada');
+
+      // 2. Filtrada. Vale el contador Y las razones sueltas: Veo manda unas
+      // veces uno y otras las otras, y mirando sólo el contador se escapaban.
+      for (const resp of [
+        { raiMediaFilteredCount: 1, raiMediaFilteredReasons: ['58061214'] },
+        { raiMediaFilteredReasons: ['unsafe content'] },
+      ]) {
+        const r = await conOperacion({ done: true, response: resp });
+        cierto(/filtros de contenido/.test(r.error), 'no se reconoce un clip filtrado: ' + r.error);
+        cierto(/editar el prompt/.test(r.error), 'no se dice qué hacer con un clip filtrado');
+      }
+
+      // 3. Terminó sin vídeo y sin motivo: se dice QUÉ contestó. Es lo único
+      // con lo que se puede diagnosticar desde un móvil, sin poder abrir los
+      // registros de Google.
+      const raro = await conOperacion({ done: true, response: { videos: [], loQueSea: 'x' } });
+      cierto(/Contestó:/.test(raro.error), 'no se cuenta lo que devolvió Veo: ' + raro.error);
+      cierto(/loQueSea/.test(raro.error), 'el resumen no nombra los campos que llegaron: ' + raro.error);
+
+      // 4. Y lo que funciona sigue funcionando.
+      const bien = await conOperacion({ done: true, response: { videos: [{ gcsUri: 'gs://b/c/clip.mp4' }] } });
+      igual(bien.objeto, 'c/clip.mp4', 'un clip correcto ya no se recoge bien');
+      const enCurso = await conOperacion({ done: false });
+      igual(enCurso.listo, false, 'una operación en curso se da por terminada');
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  comprobar('no se repite en bucle un fallo que se paga', () => {
+    // Nueve intentos del mismo clip son nueve generaciones facturadas. La cola
+    // ya no reintenta un activo roto, pero a mano no había ningún freno: el
+    // botón «Regenerar» se podía pulsar indefinidamente sobre el mismo error.
+    const iu = reglasDeLaInterfaz();
+    cierto(typeof iu.fallosSeguidos === 'function', 'la interfaz no sabe contar fallos seguidos');
+
+    const gens = (estados) => ({ generations: estados.map((s) => ({ status: s, error: 'x' })) });
+    igual(iu.fallosSeguidos(gens([])), 0, 'sin generaciones no hay fallos');
+    igual(iu.fallosSeguidos(gens(['failed', 'failed', 'failed'])), 3, 'no cuenta bien tres seguidos');
+    // Los seguidos son los del FINAL: un acierto por el medio corta la racha.
+    igual(iu.fallosSeguidos(gens(['failed', 'failed', 'approved', 'failed'])), 1,
+      'cuenta fallos viejos que ya no vienen seguidos');
+    igual(iu.fallosSeguidos(gens(['failed', 'review'])), 0, 'cuenta una racha que ya se cortó');
+  });
+
   comprobar('un 429 de Google se distingue de un fallo de verdad', () => {
     cierto(typeof ui.esLimiteDeCuota === 'function', 'falta esLimiteDeCuota en index.html');
     const limite = [
