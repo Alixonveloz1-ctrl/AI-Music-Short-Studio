@@ -546,6 +546,75 @@ function fmtBytes(n){
 }
 
 /**
+ * ¿Estamos dentro de la app de iOS instalada en la pantalla de inicio?
+ *
+ * SE PREGUNTA POR iOS Y NO POR «INSTALADA» EN GENERAL a propósito. En Android y
+ * en el escritorio una app instalada descarga igual de bien que una pestaña, así
+ * que aplicarles el rodeo de abajo sería cambiarles a peor algo que ya funciona.
+ * El fallo es sólo de iOS.
+ *
+ * `navigator.standalone` es una propiedad que sólo existe en Safari y que vale
+ * `true` cuando la página se abrió desde el icono. `display-mode: standalone` es
+ * el estándar equivalente, y se mira también —junto a la comprobación de que
+ * esto es un iPhone o un iPad— por si algún día Safari deja de poner la suya.
+ */
+function esIOS(){
+  var ua = (window.navigator && window.navigator.userAgent) || '';
+  // El iPad moderno se presenta como un Mac; se distingue porque tiene táctil.
+  var iPadNuevo = /Macintosh/.test(ua) && (window.navigator.maxTouchPoints || 0) > 1;
+  return /iPad|iPhone|iPod/.test(ua) || iPadNuevo;
+}
+
+function enModoApp(){
+  try {
+    if (window.navigator && window.navigator.standalone === true) return true;
+    if (!esIOS()) return false;
+    return !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * UN ENLACE DE DESCARGA QUE TAMBIÉN FUNCIONA EN LA APP DE LA PANTALLA DE INICIO.
+ *
+ * EL PROBLEMA. Instalada como app desde Safari, la herramienta dejó de poder
+ * descargar nada: «no me deja descargar nada, solo como que se recarga la
+ * página y ya». En el navegador funcionaba perfectamente.
+ *
+ * POR QUÉ. Una app en la pantalla de inicio de iOS no es una pestaña: es una
+ * ventana sin barra de navegación y con una sola página. Ahí el atributo
+ * `download` se ignora —iOS nunca lo ha soportado— y navegar a un archivo que
+ * viene con «Content-Disposition: attachment» no tiene a dónde ir: la ventana
+ * no puede abrir un descargador ni una pestaña nueva, así que se queda donde
+ * estaba. Desde fuera se ve exactamente como lo describió el usuario: la página
+ * parpadea y no pasa nada.
+ *
+ * LA SALIDA. `target="_blank"` es lo único que en ese modo saca la navegación
+ * fuera de la ventana de la app: iOS la abre en Safari, y allí sí hay barra,
+ * descargador y app Archivos.
+ *
+ * Y SÓLO EN ESE MODO. En un navegador normal `download` ya funciona y abrir
+ * una pestaña que se cierra sola al empezar la descarga es peor. Así que en
+ * Chrome, en Safari sin instalar y en el escritorio no cambia nada.
+ */
+function enlaceDeDescarga(url, texto, clases, estilo){
+  var extra = enModoApp()
+    ? ' target="_blank" rel="noopener"'
+    : ' download';
+  return '<a class="' + clases + '" href="' + esc(url) + '"' +
+    (estilo ? ' style="' + estilo + '"' : '') + extra + '>' + esc(texto) + '</a>';
+}
+
+/** El aviso de que la descarga se abre en Safari. Sólo cuando de verdad pasa. */
+function notaDeDescarga(){
+  if (!enModoApp()) return '';
+  return '<p class="tenue mini centro" style="margin-top:8px">' +
+    'Se abrirá en Safari para guardarlo: desde la app instalada no se puede descargar directamente. ' +
+    'El archivo queda en <b>Archivos → Descargas</b>.</p>';
+}
+
+/**
  * Sustituye el contenido de un contenedor SIN pisar lo que el usuario está
  * escribiendo. El repintado automático llega cada pocos segundos mientras se
  * consulta el estado de una generación; sin esta guarda, escribir la
@@ -2359,11 +2428,12 @@ function panelMontaje(p, sit){
       // —el vídeo y el texto en una sola descarga— y bajar el MP4 suelto es la
       // opción de después, no la principal.
       (corte.paquete && corte.paquete.url
-        ? '<a class="btn pri ancho grande" href="' + esc(corte.paquete.url) + '" download>Descargar el paquete (.zip)</a>' +
+        ? enlaceDeDescarga(corte.paquete.url, 'Descargar el paquete (.zip)', 'btn pri ancho grande') +
           '<p class="tenue mini centro" style="margin-top:8px">El MP4 y un archivo de texto con el título, ' +
             'la descripción y los hashtags, listos para copiar y pegar. ' + esc(fmtBytes(corte.paquete.bytes)) + '</p>' +
-          '<a class="btn ancho" style="margin-top:10px" href="' + esc(corte['export'].url) + '" download>Sólo el MP4</a>'
-        : '<a class="btn pri ancho grande" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>') +
+          enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:10px')
+        : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho grande')) +
+      notaDeDescarga() +
       '<p class="tenue mini centro" style="margin-top:8px">' + esc(fmtBytes(corte['export'].bytes)) + ' · ' +
         Math.round(corte['export'].durationSec || 0) + ' s' +
         (corte.exportedAt ? ' · exportado ' + esc(fmtFecha(corte.exportedAt)) : '') + '</p>' +
@@ -2430,9 +2500,10 @@ function vistaBiblioteca(){
     html += '<div class="tarjeta"><h3>Corto terminado</h3>' +
       '<div class="medio"><video src="' + esc(corte['export'].url) + '" controls playsinline preload="metadata"></video></div>' +
       (corte.paquete && corte.paquete.url
-        ? '<a class="btn pri ancho" href="' + esc(corte.paquete.url) + '" download>Descargar el paquete (.zip)</a>' +
-          '<a class="btn ancho" style="margin-top:8px" href="' + esc(corte['export'].url) + '" download>Sólo el MP4</a>'
-        : '<a class="btn pri ancho" href="' + esc(corte['export'].url) + '" download>Descargar MP4</a>') + '</div>';
+        ? enlaceDeDescarga(corte.paquete.url, 'Descargar el paquete (.zip)', 'btn pri ancho') +
+          enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:8px')
+        : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho')) +
+      notaDeDescarga() + '</div>';
   }
 
   if (!aprobados.length) {

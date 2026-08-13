@@ -98,7 +98,7 @@ const CONFIG = {
  * silencio porque el arranque va dentro de un try, y las funciones sí quedan
  * definidas en el contexto.
  */
-function reglasDeLaInterfaz() {
+function reglasDeLaInterfaz(navegador) {
   const html = fs.readFileSync(path.join(RAIZ, 'index.html'), 'utf8');
   const guion = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/.exec(html);
   if (!guion) throw new Error('index.html no tiene un bloque <script>');
@@ -121,14 +121,30 @@ function reglasDeLaInterfaz() {
       body: elementoFalso,
       documentElement: elementoFalso,
     },
-    window: { addEventListener: nada, matchMedia: () => ({ matches: false, addEventListener: nada }) },
+    // `navegador` permite fingir un dispositivo concreto: hay comportamiento que
+    // depende de si esto es un iPhone y de si se abrió desde el icono de la
+    // pantalla de inicio, y eso no se puede comprobar de otra manera.
+    window: {
+      addEventListener: nada,
+      matchMedia: (q) => ({
+        matches: Boolean(
+          navegador && navegador.displayModeStandalone &&
+          String(q).indexOf('display-mode: standalone') !== -1,
+        ),
+        addEventListener: nada,
+      }),
+    },
     localStorage: { getItem: () => null, setItem: nada, removeItem: nada },
     location: { hash: '', href: '' },
     fetch: () => Promise.reject(new Error('sin red en las pruebas')),
     setTimeout: nada, clearTimeout: nada, setInterval: nada, clearInterval: nada,
     requestAnimationFrame: nada,
-    navigator: { userAgent: 'pruebas' },
+    navigator: Object.assign(
+      { userAgent: 'pruebas', maxTouchPoints: 0 },
+      navegador && navegador.navigator,
+    ),
   };
+  contexto.window.navigator = contexto.navigator;
   contexto.globalThis = contexto;
   vm.createContext(contexto);
   // El arranque de la interfaz falla sin navegador de verdad, y da igual: para
@@ -625,6 +641,51 @@ async function principal() {
     // Y sin tocar nada, un corto sale con el género que le pega al instrumento.
     const armado = await construirPlan(Object.assign({}, CONFIG, { instrumentIds: ['cuatro'] }));
     igual(armado.plan.music.genre.id, 'joropo', 'un cuatro sin más indicaciones no sale joropo');
+  });
+
+  comprobar('desde la app de la pantalla de inicio, las descargas se abren en Safari', () => {
+    // EL FALLO. El usuario guardó la herramienta en la pantalla de inicio desde
+    // Safari y dejó de poder descargar: «no me deja descargar nada, solo como
+    // que se recarga la página y ya». En Chrome descargaba sin problema.
+    //
+    // POR QUÉ. Una app de la pantalla de inicio no es una pestaña: es una
+    // ventana sin barra y con una sola página. Ahí el atributo `download` se
+    // ignora —iOS no lo ha soportado nunca— y navegar a un archivo que llega
+    // con «Content-Disposition: attachment» no tiene a dónde ir, así que la
+    // ventana se queda donde estaba.
+    const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari';
+    const app = reglasDeLaInterfaz({ navigator: { userAgent: IPHONE, standalone: true } });
+    const enlaceApp = app.enlaceDeDescarga('https://x/y.zip', 'Descargar', 'btn');
+    cierto(/target="_blank"/.test(enlaceApp),
+      'en la app instalada la descarga no sale de la ventana: ' + enlaceApp);
+    cierto(/rel="noopener"/.test(enlaceApp), 'falta rel="noopener" en el enlace que abre fuera');
+    cierto(app.notaDeDescarga().length, 'no se avisa de que la descarga se abre en Safari');
+
+    // Y EN TODO LO DEMÁS NO CAMBIA NADA. `download` ya funciona en un navegador
+    // normal, y abrir una pestaña que se cierra sola al empezar la descarga
+    // sería cambiar a peor algo que va bien.
+    const otros = [
+      ['iPhone en una pestaña normal', { userAgent: IPHONE, standalone: false }, false],
+      ['Android con la app instalada', { userAgent: 'Mozilla/5.0 (Linux; Android 14) Chrome' }, true],
+      ['Chrome de escritorio', { userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome' }, false],
+    ];
+    for (const [nombre, navegador, standalone] of otros) {
+      const iu = reglasDeLaInterfaz({ navigator: navegador, displayModeStandalone: standalone });
+      const enlace = iu.enlaceDeDescarga('https://x/y.zip', 'Descargar', 'btn');
+      cierto(/ download>/.test(enlace), nombre + ': perdió la descarga directa — ' + enlace);
+      cierto(!/target="_blank"/.test(enlace), nombre + ': se le puso el rodeo de iOS sin necesitarlo');
+      igual(iu.notaDeDescarga(), '', nombre + ': le sale un aviso que no le toca');
+    }
+  });
+
+  comprobar('no queda ninguna descarga fuera del enlace que sabe de iOS', () => {
+    // Si mañana alguien añade otro botón de descarga con `<a ... download>` a
+    // mano, en la app instalada volvería a no hacer nada — y sería un fallo
+    // silencioso, porque en el navegador de quien lo escribió funcionaría.
+    const html = fs.readFileSync(path.join(RAIZ, 'index.html'), 'utf8');
+    const sueltos = html.match(/<a [^>]*\bdownload\b/g) || [];
+    igual(sueltos.length, 0,
+      'hay ' + sueltos.length + ' enlace(s) de descarga escritos a mano; usa enlaceDeDescarga()');
   });
 
   comprobar('la interfaz y el servidor editan EL MISMO campo del prompt', () => {
