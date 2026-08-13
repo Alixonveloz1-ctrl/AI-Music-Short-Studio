@@ -607,11 +607,53 @@ function enlaceDeDescarga(url, texto, clases, estilo){
 }
 
 /** El aviso de que la descarga se abre en Safari. Sólo cuando de verdad pasa. */
-function notaDeDescarga(){
+/**
+ * EL AVISO, Y POR QUÉ DICE LO QUE DICE.
+ *
+ * `target="_blank"` saca el archivo de la ventana de la app, pero iOS NO lo
+ * abre en Safari: lo abre en un navegador incrustado —el de la X arriba a la
+ * izquierda y la brújula abajo a la derecha— y ese visor tampoco sabe
+ * descargar. Se queda con la barra de carga parada y la pantalla en blanco.
+ *
+ * La brújula es «Abrir en Safari», y desde Safari la descarga sí funciona. Es
+ * un toque de más, así que se explica dónde está en vez de dejar al usuario
+ * mirando una pantalla vacía sin saber qué ha pasado.
+ */
+function notaDeDescarga(url){
   if (!enModoApp()) return '';
   return '<p class="tenue mini centro" style="margin-top:8px">' +
-    'Se abrirá en Safari para guardarlo: desde la app instalada no se puede descargar directamente. ' +
-    'El archivo queda en <b>Archivos → Descargas</b>.</p>';
+      'Si se queda una <b>pantalla en blanco</b>, toca la <b>brújula</b> de abajo a la derecha ' +
+      '(«Abrir en Safari»): iOS no deja descargar desde la app instalada. El archivo queda en ' +
+      '<b>Archivos → Descargas</b>.</p>' +
+    (url
+      ? '<button class="btn fantasma ancho pequeno" style="margin-top:8px" ' +
+        'data-accion="copiar-enlace" data-url="' + esc(url) + '">Copiar el enlace para pegarlo en Safari</button>'
+      : '');
+}
+
+/** Copia un texto al portapapeles, con el camino viejo por si no hay permiso. */
+async function copiarAlPortapapeles(texto){
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(texto);
+      return true;
+    }
+  } catch (e) { /* se prueba el camino de abajo */ }
+  try {
+    var caja = document.createElement('textarea');
+    caja.value = texto;
+    caja.setAttribute('readonly', '');
+    caja.style.position = 'fixed';
+    caja.style.opacity = '0';
+    document.body.appendChild(caja);
+    caja.select();
+    caja.setSelectionRange(0, texto.length);
+    var ok = document.execCommand('copy');
+    document.body.removeChild(caja);
+    return ok;
+  } catch (e) {
+    return false;
+  }
 }
 
 /**
@@ -2433,7 +2475,7 @@ function panelMontaje(p, sit){
             'la descripción y los hashtags, listos para copiar y pegar. ' + esc(fmtBytes(corte.paquete.bytes)) + '</p>' +
           enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:10px')
         : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho grande')) +
-      notaDeDescarga() +
+      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url) +
       '<p class="tenue mini centro" style="margin-top:8px">' + esc(fmtBytes(corte['export'].bytes)) + ' · ' +
         Math.round(corte['export'].durationSec || 0) + ' s' +
         (corte.exportedAt ? ' · exportado ' + esc(fmtFecha(corte.exportedAt)) : '') + '</p>' +
@@ -2503,7 +2545,7 @@ function vistaBiblioteca(){
         ? enlaceDeDescarga(corte.paquete.url, 'Descargar el paquete (.zip)', 'btn pri ancho') +
           enlaceDeDescarga(corte['export'].url, 'Sólo el MP4', 'btn ancho', 'margin-top:8px')
         : enlaceDeDescarga(corte['export'].url, 'Descargar MP4', 'btn pri ancho')) +
-      notaDeDescarga() + '</div>';
+      notaDeDescarga((corte.paquete && corte.paquete.url) || corte['export'].url) + '</div>';
   }
 
   if (!aprobados.length) {
@@ -2888,6 +2930,13 @@ document.addEventListener('click', function(ev){
 
   if (accion === 'ver-gen') { estado.genVista = el.getAttribute('data-gen'); pintar(); return; }
   if (accion === 'actualizar-plan') { accionActualizarPlan(el.getAttribute('data-id')); return; }
+  if (accion === 'copiar-enlace') {
+    var u = el.getAttribute('data-url') || '';
+    copiarAlPortapapeles(u).then(function(ok){
+      avisar(ok ? 'Enlace copiado. Pégalo en Safari para descargarlo.' : 'No se pudo copiar el enlace.', ok ? 'ok' : '');
+    });
+    return;
+  }
   if (accion === 'editar-prompt') { estado.editandoPrompt = el.getAttribute('data-activo'); pintar(); return; }
   if (accion === 'cancelar-prompt') { estado.editandoPrompt = null; pintar(); return; }
   if (accion === 'guardar-prompt') { accionGuardarPrompt(el.getAttribute('data-activo')); return; }

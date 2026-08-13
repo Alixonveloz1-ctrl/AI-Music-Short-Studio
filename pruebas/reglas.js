@@ -659,7 +659,10 @@ async function principal() {
     cierto(/target="_blank"/.test(enlaceApp),
       'en la app instalada la descarga no sale de la ventana: ' + enlaceApp);
     cierto(/rel="noopener"/.test(enlaceApp), 'falta rel="noopener" en el enlace que abre fuera');
-    cierto(app.notaDeDescarga().length, 'no se avisa de que la descarga se abre en Safari');
+    cierto(/brújula/.test(app.notaDeDescarga('https://x/y.zip')),
+      'el aviso no dice cómo salir de la pantalla en blanco: iOS abre un visor incrustado que tampoco descarga');
+    cierto(/copiar-enlace/.test(app.notaDeDescarga('https://x/y.zip')),
+      'no hay forma de sacar el enlace para pegarlo en Safari');
 
     // Y EN TODO LO DEMÁS NO CAMBIA NADA. `download` ya funciona en un navegador
     // normal, y abrir una pestaña que se cierra sola al empezar la descarga
@@ -674,7 +677,7 @@ async function principal() {
       const enlace = iu.enlaceDeDescarga('https://x/y.zip', 'Descargar', 'btn');
       cierto(/ download>/.test(enlace), nombre + ': perdió la descarga directa — ' + enlace);
       cierto(!/target="_blank"/.test(enlace), nombre + ': se le puso el rodeo de iOS sin necesitarlo');
-      igual(iu.notaDeDescarga(), '', nombre + ': le sale un aviso que no le toca');
+      igual(iu.notaDeDescarga('https://x/y.zip'), '', nombre + ': le sale un aviso que no le toca');
     }
   });
 
