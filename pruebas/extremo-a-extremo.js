@@ -233,13 +233,13 @@ async function principal() {
     // dibujan igual y mezclarlos se nota— pero la decisión es suya. Y hay una
     // razón práctica encima: cuando un modelo rechaza un clip una y otra vez,
     // quedarse encerrado en él significa tirar el corto entero.
-    const modeloEp = require('../api/modelo.js');
+    const modeloEp = proyectoEp;
     const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
     const aprobadosAntes = antes.assets.filter((a) => a.approvedGenerationId).length;
     const videoAntes = antes.config.videoModelId;
 
     const r = await pedir(modeloEp, {
-      metodo: 'POST',
+      metodo: 'PATCH',
       cuerpo: { id, videoModelId: 'veo-3.1-fast-generate-001', imageModelId: 'gemini-3.1-flash-image' },
     });
     if (r.codigo !== 200) throw new Error('cambiar modelo: ' + JSON.stringify(r.cuerpo).slice(0, 200));
@@ -259,11 +259,11 @@ async function principal() {
       'cuando dos tomas no se parecen');
 
     // Un modelo inventado se rechaza con un motivo, no con un 500.
-    const malo = await pedir(modeloEp, { metodo: 'POST', cuerpo: { id, videoModelId: 'no-existe' } });
+    const malo = await pedir(modeloEp, { metodo: 'PATCH', cuerpo: { id, videoModelId: 'no-existe' } });
     cierto(malo.codigo === 400, 'acepta un modelo que no existe (código ' + malo.codigo + ')');
 
     // Y se deja como estaba, que el resto de la prueba cuenta con ello.
-    await pedir(modeloEp, { metodo: 'POST', cuerpo: { id, videoModelId: videoAntes } });
+    await pedir(modeloEp, { metodo: 'PATCH', cuerpo: { id, videoModelId: videoAntes } });
   });
 
   await paso('el montaje se niega mientras falte material, y dice cuál', async () => {

@@ -197,6 +197,36 @@ async function principal() {
     igual(a.locked, true, 'bloqueo');
   });
 
+  comprobar('no se pasa del tope de funciones del plan gratuito de Vercel', () => {
+    // EL FALLO QUE MOTIVA ESTA COMPROBACIÓN, y es el peor tipo: silencioso.
+    //
+    // Vercel sólo deja DOCE funciones serverless por despliegue en el plan
+    // gratuito. El proyecto estaba justo en doce. Añadir `api/modelo.js` fue la
+    // trece, y desde ese commit NINGÚN despliegue volvió a pasar: producción se
+    // quedó clavada horas en una versión vieja mientras yo daba por desplegados
+    // unos cambios que nunca salieron, y el usuario probando una herramienta que
+    // no tenía ninguno de ellos.
+    //
+    // Nada en el repositorio lo delataba: las pruebas pasaban, la sintaxis era
+    // correcta y el commit se subía bien. El límite sólo aparece en el registro
+    // de Vercel, que desde un móvil no se mira. Así que se comprueba aquí.
+    const TOPE_HOBBY = 12;
+    const enApi = fs.readdirSync(path.join(RAIZ, 'api'))
+      .filter((n) => !fs.statSync(path.join(RAIZ, 'api', n)).isDirectory())
+      .filter((n) => /\.(js|mjs|ts)$/.test(n));
+
+    // Las Edge no cuentan para ese tope: son otro tipo de función. Se reconocen
+    // porque declaran su runtime dentro del propio archivo.
+    const edge = enApi.filter((n) =>
+      /runtime:\s*'edge'/.test(fs.readFileSync(path.join(RAIZ, 'api', n), 'utf8')));
+    const serverless = enApi.filter((n) => edge.indexOf(n) === -1);
+
+    cierto(serverless.length <= TOPE_HOBBY,
+      'hay ' + serverless.length + ' funciones serverless y el plan gratuito admite ' + TOPE_HOBBY +
+      '. NINGÚN despliegue va a pasar hasta que se junten dos endpoints en uno. Son: ' +
+      serverless.join(', '));
+  });
+
   comprobar('ningún archivo de api/ aprueba por su cuenta', () => {
     // La búsqueda es tosca a propósito: si alguien añade mañana un atajo que
     // marque algo como aprobado fuera de approveGeneration, esta prueba se

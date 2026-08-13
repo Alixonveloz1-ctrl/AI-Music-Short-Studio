@@ -941,7 +941,7 @@ var api = {
   rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   actualizarPlan: function(id){ return pedir('actualizar', { metodo:'POST', cuerpo:{ id:id } }); },
   cambiarModelo: function(id, cambio){
-    return pedir('modelo', { metodo:'POST', cuerpo: Object.assign({ id:id }, cambio) });
+    return pedir('proyecto', { metodo:'PATCH', cuerpo: Object.assign({ id:id }, cambio) });
   },
   guardarPrompt: function(id, activo, prompt, negativo){
     return pedir('prompt', { metodo:'POST', cuerpo:{ id:id, activo:activo, prompt:prompt, negativePrompt:negativo } });
