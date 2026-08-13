@@ -937,6 +937,35 @@ async function principal() {
     igual(compartidos[0].type, 'video/mp4', 'el archivo llega sin tipo, y iOS no sabría dónde guardarlo');
   });
 
+  comprobar('el modelo se puede cambiar desde el elemento que está fallando', () => {
+    // Los selectores estaban sólo en la ficha del corto, y la ficha vive en otra
+    // pestaña: «no veo ningún botón para el selector de generador ni de imagen
+    // ni de video». Los buscó mirando el clip que le fallaba, que es justo donde
+    // uno decide cambiar de modelo.
+    const iu = reglasDeLaInterfaz();
+    cierto(typeof iu.htmlModeloDelActivo === 'function', 'la interfaz no ofrece el selector por elemento');
+    iu.estado.catalogo = {
+      modelosImagen: [{ id: 'img-a', etiqueta: 'Imagen A' }, { id: 'img-b', etiqueta: 'Imagen B' }],
+      modelosVideo: [{ id: 'vid-a', etiqueta: 'Vídeo A' }, { id: 'vid-b', etiqueta: 'Vídeo B' }],
+    };
+    const proyecto = { id: 'prj_1', config: { imageModelId: 'img-b', videoModelId: 'vid-b' } };
+
+    // A un clip se le ofrecen los modelos de VÍDEO, y sale marcado el suyo.
+    const deClip = iu.htmlModeloDelActivo(proyecto, { kind: 'clip', id: 'c1' });
+    cierto(/data-modelo="video"/.test(deClip), 'a un clip no se le ofrece cambiar el modelo de vídeo');
+    cierto(/value="vid-b" selected/.test(deClip), 'no viene marcado el modelo que usa ahora');
+    cierto(!/img-a/.test(deClip), 'a un clip se le ofrecen modelos de imagen, que ahí no hacen nada');
+
+    // A una imagen, los de IMAGEN.
+    const deImagen = iu.htmlModeloDelActivo(proyecto, { kind: 'shot_image', id: 'i1' });
+    cierto(/data-modelo="imagen"/.test(deImagen), 'a una imagen no se le ofrece cambiar su modelo');
+    cierto(!/vid-a/.test(deImagen), 'a una imagen se le ofrecen modelos de vídeo');
+
+    // La música no lleva selector: sólo hay un compositor.
+    igual(iu.htmlModeloDelActivo(proyecto, { kind: 'music', id: 'music' }), '',
+      'a la música se le ofrece un modelo que no se puede elegir');
+  });
+
   comprobar('no queda ninguna descarga fuera del enlace que sabe de iOS', () => {
     // Si mañana alguien añade otro botón de descarga con `<a ... download>` a
     // mano, en la app instalada volvería a no hacer nada — y sería un fallo
@@ -1270,6 +1299,92 @@ async function principal() {
     const imagen = proyecto.assets.find((a) => a.kind === 'shot_image');
     cierto(/deformes/.test(imagen.spec.negativePrompt),
       'se ha rebajado también el negativo de las imágenes, que no lo necesitaba');
+  });
+
+  await comprobarAsync('un rechazo por palabras no deja al usuario sin salida', async () => {
+    // «This prompt contains sensitive words that violate Google's Responsible AI
+    // practices.» Google no dice CUÁL es la palabra, sólo que hay una. Perseguirlas
+    // de una en una es un juego que paga el usuario con su tiempo: se le fue una
+    // tarde en nueve intentos contra el mismo muro.
+    //
+    // Un rechazo así ocurre ANTES de generar, así que no se factura. Se puede
+    // insistir con menos texto sin que le cueste dinero.
+    const RAI = "The prompt could not be submitted. This prompt contains sensitive words " +
+      "that violate Google's Responsible AI practices. Support codes: 89371032";
+    const PROMPT = ['CLIP 01A (8 s).', 'Plano medio en el auditorio.', 'Movimiento:\n- fija',
+      'EL SITIO SE MUEVE:\n- polvo', 'CONTINUIDAD:\n- bla', 'Requisitos:\n- bla'].join('\n\n');
+
+    cierto(vertex.rechazaPorPalabras(RAI), 'no se reconoce el rechazo por palabras de Google');
+    cierto(!vertex.rechazaPorPalabras('Quota exceeded'), 'confunde una cuota agotada con un rechazo por palabras');
+
+    const original = global.fetch;
+    const resp = (cuerpo, ok = true, status = 200) => ({
+      ok, status, headers: { get: () => null },
+      json: async () => cuerpo, text: async () => JSON.stringify(cuerpo),
+    });
+
+    // `rechazaHasta` = cuántos envíos seguidos rechaza Google antes de aceptar.
+    const conRechazos = async (rechazaHasta) => {
+      let envios = 0;
+      const vistos = [];
+      global.fetch = async (u, o) => {
+        if (String(u).indexOf('oauth2') !== -1) return resp({ access_token: 't', expires_in: 3600 });
+        const cuerpo = JSON.parse(o.body);
+        envios += 1;
+        vistos.push({
+          negativo: Boolean(cuerpo.parameters.negativePrompt),
+          bloques: cuerpo.instances[0].prompt.split('\n\n').length,
+        });
+        if (envios <= rechazaHasta) return resp({ error: { message: RAI } }, false, 400);
+        return resp({ name: 'operaciones/1' });
+      };
+      let r = null;
+      let error = null;
+      try {
+        r = await vertex.iniciarVideo({
+          token: 't', projectId: 'p', prompt: PROMPT, negativePrompt: 'manos deformes',
+          modelo: 'veo-3.1-lite-generate-001', durationSec: 8, formatoId: 'vertical',
+        });
+      } catch (e) { error = e; }
+      return { r, error, vistos };
+    };
+
+    try {
+      // Sin rechazo, un solo envío y con el negativo puesto.
+      const bien = await conRechazos(0);
+      igual(bien.vistos.length, 1, 'reintenta cuando no hace falta');
+      cierto(bien.vistos[0].negativo, 'no manda el prompt negativo cuando puede');
+      cierto(!bien.r.aviso, 'avisa de un apaño que no ha hecho');
+
+      // Un rechazo: se reintenta SIN EL NEGATIVO, que es donde estaban las
+      // palabras marcadas y lo menos imprescindible del encargo.
+      const uno = await conRechazos(1);
+      igual(uno.vistos.length, 2, 'no reintenta tras el rechazo por palabras');
+      cierto(!uno.vistos[1].negativo, 'el reintento sigue llevando el prompt negativo');
+      igual(uno.vistos[1].bloques, uno.vistos[0].bloques, 'recorta el encargo antes de probar sin negativo');
+      cierto(/sin el prompt negativo/.test(uno.r.aviso || ''),
+        'no se avisa de que el clip salió con menos exigencias: ' + uno.r.aviso);
+
+      // Si insiste, se recorta el encargo por el final, que es donde están las
+      // listas largas de continuidad y de requisitos.
+      const dos = await conRechazos(2);
+      igual(dos.vistos.length, 3, 'no recorta el encargo cuando quitar el negativo no basta');
+      cierto(dos.vistos[2].bloques < dos.vistos[1].bloques, 'el tercer envío no lleva menos texto');
+      cierto(/recortada/.test(dos.r.aviso || ''), 'no se avisa de que el encargo iba recortado');
+
+      // Y se recorta más, pero nunca por debajo de lo que describe la toma.
+      const tres = await conRechazos(3);
+      igual(tres.vistos.length, 4, 'no vuelve a recortar');
+      cierto(tres.vistos[3].bloques >= 3, 'recortó tanto que el clip ya no describe la toma');
+
+      // Cuando Google no cede, se rinde en vez de gastar intentos sin fin.
+      const nunca = await conRechazos(99);
+      cierto(nunca.error, 'no se rinde nunca y sigue reintentando');
+      igual(nunca.vistos.length, 4, 'gasta más intentos de la cuenta contra un muro');
+      cierto(/sensitive words/.test(nunca.error.message), 'se pierde el motivo de Google al rendirse');
+    } finally {
+      global.fetch = original;
+    }
   });
 
   await comprobarAsync('cuando Veo falla, se dice POR QUÉ', async () => {

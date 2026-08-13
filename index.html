@@ -2312,6 +2312,13 @@ function htmlRevision(p){
       (puedePulsarGenerar ? '' : ' disabled') + '>' + textoGenerar + '</button>' +
   '</div>';
 
+  // CON QUÉ MODELO SE GENERA ESTO, aquí mismo. Los selectores están también en
+  // la ficha del corto, pero la ficha vive en otra pestaña: el usuario los buscó
+  // mirando el elemento que le fallaba y no los encontró. Y es que éste es el
+  // sitio donde de verdad se decide cambiar de modelo — delante de un clip que
+  // se niega a salir.
+  html += htmlModeloDelActivo(p, a);
+
   if (esperaDecision) {
     html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="rechazar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen.id) + '">Descartar esta generación</button>';
   }
@@ -2400,6 +2407,32 @@ function htmlRevision(p){
   }
 
   return html;
+}
+
+/**
+ * El selector del modelo que le toca a ESTE elemento.
+ *
+ * A una imagen se le ofrecen los modelos de imagen y a un clip los de vídeo:
+ * enseñar los dos aquí sería enseñar uno que no hace nada. La música no lleva
+ * selector porque sólo hay un compositor.
+ */
+function htmlModeloDelActivo(p, a){
+  var c = estado.catalogo || {};
+  var esVideo = (a.kind === 'clip');
+  var lista = esVideo ? c.modelosVideo : c.modelosImagen;
+  if (a.kind === 'music' || !lista || !lista.length) return '';
+
+  var cfg = p.config || {};
+  var actual = esVideo ? cfg.videoModelId : cfg.imageModelId;
+  return '<label class="campo" style="margin-top:11px"><span>Modelo de ' +
+      (esVideo ? 'vídeo' : 'imagen') + ' con el que se generará</span>' +
+      '<select data-modelo="' + (esVideo ? 'video' : 'imagen') + '" data-id="' + esc(p.id) + '">' +
+      lista.map(function(m){
+        return '<option value="' + esc(m.id) + '"' + (actual === m.id ? ' selected' : '') + '>' +
+          esc(m.etiqueta || m.id) + '</option>';
+      }).join('') + '</select></label>' +
+    '<p class="tenue mini" style="margin-top:-4px;margin-bottom:2px">Vale para todo el corto. ' +
+      'Lo ya aprobado no se toca; lo que generes a partir de ahora usará el nuevo.</p>';
 }
 
 // ── Columna izquierda: ficha del proyecto y plan completo ──────────────

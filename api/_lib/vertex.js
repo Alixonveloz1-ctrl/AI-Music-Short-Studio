@@ -354,6 +354,43 @@ function duracionValida(modelo, pedida) {
 }
 
 /** ¿El rechazo es «este modelo no tiene fotograma final» y no «tu petición está mal»? */
+/**
+ * ¿Veo rechazó el ENCARGO, antes de generar nada, por las palabras que lleva?
+ *
+ * El mensaje literal: «The prompt could not be submitted. This prompt contains
+ * sensitive words that violate Google's Responsible AI practices.» No es que el
+ * clip saliera mal — es que ni se intentó.
+ */
+function rechazaPorPalabras(msg) {
+  const m = String(msg || '').toLowerCase();
+  return (
+    m.indexOf('could not be submitted') !== -1 ||
+    m.indexOf('sensitive word') !== -1 ||
+    (m.indexOf('responsible ai') !== -1 && m.indexOf('prompt') !== -1)
+  );
+}
+
+/**
+ * El mismo encargo, con menos texto donde puede estar la palabra que molesta.
+ *
+ * POR QUÉ ESTO Y NO SEGUIR ADIVINANDO PALABRAS. El filtro no dice CUÁL es la
+ * palabra, sólo que hay una. Perseguirlas de una en una es un juego que el
+ * usuario paga con su tiempo: ya se le fue una tarde en nueve intentos.
+ *
+ * Los bloques van de más esencial a menos: lo primero es qué se ve y qué se
+ * mueve, y lo último son las listas largas de continuidad y de requisitos, que
+ * es donde se acumulan las descripciones de cuerpos y de defectos — justo el
+ * vocabulario que un filtro de contenido mira con lupa. Quitando desde el final
+ * se conserva siempre lo que hace falta para que el clip tenga sentido.
+ */
+function encargoMasCorto(prompt, nivel) {
+  const bloques = String(prompt || '').split('\n\n');
+  // Nivel 1: se quita el último bloque. Nivel 2: se queda sólo con los tres
+  // primeros, que son la cabecera del clip, la descripción y el movimiento.
+  if (nivel <= 1) return bloques.slice(0, Math.max(3, bloques.length - 1)).join('\n\n');
+  return bloques.slice(0, 3).join('\n\n');
+}
+
 function rechazaFotogramaFinal(msg) {
   const m = String(msg || '').toLowerCase();
   return (
@@ -433,6 +470,41 @@ async function iniciarVideo(opciones) {
     aviso = modelo + ' no acepta fotograma final: el clip se generó solo con la imagen inicial.';
     r = await pedir(false);
   }
+
+  // ─── SI RECHAZA EL ENCARGO POR LAS PALABRAS, SE INSISTE CON MENOS TEXTO ───
+  //
+  // Google contesta «this prompt contains sensitive words» y no dice cuál. El
+  // usuario se comió nueve intentos seguidos contra ese muro sin nada que
+  // tocar. Un rechazo así ocurre ANTES de generar, así que no se factura: se
+  // puede reintentar sin que le cueste dinero.
+  //
+  // Se prueba primero SIN EL PROMPT NEGATIVO, que es donde estaban las palabras
+  // marcadas —la lista de defectos anatómicos— y lo menos imprescindible de
+  // todo. Después, con el encargo recortado por el final.
+  if (!r.ok && rechazaPorPalabras(r.e.message)) {
+    const negativoOriginal = parametros.negativePrompt;
+    delete parametros.negativePrompt;
+    r = await pedir(Boolean(fotogramaFinalBase64) && !aviso);
+    if (r.ok) {
+      aviso = 'Google rechazó el encargo por las palabras que llevaba. Se generó sin el ' +
+        'prompt negativo, que es donde suelen estar. El resultado puede tener más defectos ' +
+        'de lo normal: míralo con calma antes de aprobarlo.';
+    } else if (rechazaPorPalabras(r.e.message)) {
+      // Todavía. Se recorta el encargo, de menos a más, quedándose siempre con
+      // lo que describe la toma.
+      for (let nivel = 1; nivel <= 2 && !r.ok; nivel += 1) {
+        base.prompt = encargoMasCorto(prompt, nivel);
+        r = await pedir(false);
+        if (r.ok) {
+          aviso = 'Google rechazó el encargo por las palabras que llevaba. Se generó con una ' +
+            'versión recortada, sin el prompt negativo ni las notas de continuidad. Este clip ' +
+            'puede no encajar del todo con los demás: compáralo antes de aprobarlo.';
+        }
+      }
+    }
+    if (!r.ok) parametros.negativePrompt = negativoOriginal;
+  }
+
   if (!r.ok) throw r.e;
 
   const nombre = r.d.name;
@@ -1023,6 +1095,8 @@ module.exports = {
   consultarVideo,
   duracionValida,
   aIngles,
+  rechazaPorPalabras,
+  encargoMasCorto,
   generarMusica,
   fragmentosNecesarios,
   SEGUNDOS_POR_FRAGMENTO,
