@@ -1324,6 +1324,118 @@ async function principal() {
     }
   });
 
+  comprobar('a Lyria se le da casi todo el minuto de la función', () => {
+    // EL FALLO, con las palabras del usuario: «No se pudo componer el fragmento
+    // 1: Google tardó más de 45 s en responder y la función de Vercel se corta a
+    // los 60».
+    //
+    // La función tiene sesenta segundos —el tope del plan gratuito, que no se
+    // puede subir— y de esos se estaban reservando DOCE para guardar. A Lyria le
+    // quedaban cuarenta y cinco. Pero guardar es subir dos o tres megas al
+    // bucket y escribir el proyecto: dos o tres segundos, no doce. Los otros
+    // nueve eran nueve segundos que no se le estaban dando a lo único que aquí
+    // puede pasarse del minuto, que es componer.
+    const generar = require(path.join(RAIZ, 'api/generar.js'));
+    const tope = JSON.parse(fs.readFileSync(path.join(RAIZ, 'vercel.json'), 'utf8'))
+      .functions['api/generar.js'].maxDuration * 1000;
+
+    const alArrancar = generar.presupuestoRestante(Date.now());
+    cierto(alArrancar >= 50000,
+      'a Lyria se le dan ' + Math.round(alArrancar / 1000) + ' s de los ' +
+      Math.round(tope / 1000) + ' que dura la función');
+    // Pero sin comerse el margen de guardar: si el presupuesto llegara al tope,
+    // la música llegaría bien y la función moriría antes de subirla, que es peor
+    // —se paga la generación y no queda nada—.
+    cierto(alArrancar <= tope - 5000,
+      'el presupuesto (' + Math.round(alArrancar / 1000) + ' s) no deja margen para guardar');
+
+    // Y descuenta lo que la petición ya gastó antes de llegar a llamar
+    // (autenticarse, leer el proyecto), que si no el reloj de Vercel gana igual.
+    const gastados = alArrancar - generar.presupuestoRestante(Date.now() - 5000);
+    cierto(gastados >= 4500 && gastados <= 5500,
+      'gastar 5 s en la petición sólo le quitó ' + gastados + ' ms al presupuesto');
+
+    // Cuando la función ya va tarde no pide una espera negativa: pide la mínima
+    // y falla escrito, que es lo que deja el error visible en vez de morirse.
+    cierto(generar.presupuestoRestante(Date.now() - 120000) >= 8000,
+      'con la función agotada el presupuesto se va por debajo del mínimo');
+  });
+
+  await comprobarAsync('un fallo de reloj se reintenta más veces que un error de verdad', async () => {
+    // Tres intentos valen para un error de verdad: si el encargo no le gusta a
+    // Google fallará igual las tres veces, y cada intento es una llamada
+    // facturada a Lyria. Pero el propio mensaje del tiempo agotado dice lo que
+    // pasa: «el tiempo de respuesta varía mucho de una vez a otra». Ahí cada
+    // reintento es una tirada distinta y rendirse a la tercera es rendirse
+    // pronto, cuando lo único que hace falta es que una salga por debajo del
+    // minuto.
+    const generar = require(path.join(RAIZ, 'api/generar.js'));
+
+    // El mensaje no se copia a mano: se le pide a vertex.js el de verdad, que es
+    // el que va a llegar a `tropezarMusica`. Si alguien reescribe el texto del
+    // error, esta prueba se entera.
+    const original = globalThis.fetch;
+    globalThis.fetch = (url, opciones) => new Promise((resolve, reject) => {
+      const señal = opciones && opciones.signal;
+      if (!señal) return;
+      señal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('abortada'), { name: 'AbortError' }));
+      });
+      void resolve;
+    });
+    let deReloj = '';
+    try {
+      await vertex.generarMusica({
+        token: 't', projectId: 'p', prompt: 'instrumental piece',
+        segundos: 60, presupuestoMs: 200,
+      });
+    } catch (e) {
+      deReloj = e.message;
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    cierto(deReloj, 'no se pudo provocar el error de tiempo agotado');
+    cierto(generar.esFalloDeReloj(deReloj),
+      'el tiempo agotado no se reconoce como fallo de reloj: ' + deReloj);
+    // Y tal como llega de verdad, con el prefijo del fragmento delante.
+    cierto(generar.esFalloDeReloj('No se pudo componer el fragmento 1: ' + deReloj),
+      'con el prefijo del fragmento delante deja de reconocerse');
+
+    // Un error de verdad no se cuela por esa puerta: esos se siguen parando a
+    // los tres intentos, que es lo que evita quemar dinero contra un encargo
+    // que no va a funcionar nunca.
+    for (const otro of [
+      'Vertex AI respondió 400: Request contains an invalid argument.',
+      'Lyria no devolvió audio (finishReason: SAFETY).',
+      'No se pudo hablar con Vertex AI: fetch failed',
+    ]) {
+      cierto(!generar.esFalloDeReloj(otro), 'se toma por tiempo agotado: ' + otro);
+    }
+
+    igual(generar.TROPIEZOS_MAX_MUSICA, 3, 'intentos para un error de verdad');
+    cierto(generar.TROPIEZOS_MAX_MUSICA_POR_RELOJ > generar.TROPIEZOS_MAX_MUSICA,
+      'el reloj no da más intentos que un error de verdad: ' +
+      generar.TROPIEZOS_MAX_MUSICA_POR_RELOJ + ' vs ' + generar.TROPIEZOS_MAX_MUSICA);
+
+    // Y lo que cuenta no es que existan las dos cifras, es cuál se aplica.
+    igual(generar.topeDeTropiezos(deReloj), generar.TROPIEZOS_MAX_MUSICA_POR_RELOJ,
+      'intentos que se le dan al tiempo agotado');
+    igual(generar.topeDeTropiezos('Vertex AI respondió 400: invalid argument'),
+      generar.TROPIEZOS_MAX_MUSICA, 'intentos que se le dan a un error de verdad');
+
+    // Que la cuenta la haga quien la tiene que hacer. `tropezarMusica` no se
+    // puede llamar desde aquí —escribe en el bucket— así que se lee: si alguien
+    // vuelve a poner ahí una cifra fija, las dos comprobaciones de arriba
+    // seguirían pasando mientras el usuario se queda otra vez sin música al
+    // tercer intento.
+    const fuente = fs.readFileSync(path.join(RAIZ, 'api/generar.js'), 'utf8');
+    const cuerpo = fuente.slice(fuente.indexOf('async function tropezarMusica'));
+    const decide = cuerpo.slice(0, cuerpo.indexOf('\n}\n'));
+    cierto(/const tope = topeDeTropiezos\(mensaje\)/.test(decide),
+      'tropezarMusica ya no decide el tope por el mensaje del fallo');
+  });
+
   comprobar('ninguna URL de Vertex sale con undefined dentro', () => {
     // El fallo: los modelos de Veo llevan region:'' para heredar la del
     // proyecto, pero vertex.js llamaba a regionVideo() sin pasar el valor por

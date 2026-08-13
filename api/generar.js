@@ -71,6 +71,26 @@ const GRACIA_SIN_TRABAJO_MS = 5 * 60 * 1000;
 // `empujarVideo`.)
 const TROPIEZOS_MAX_MUSICA = 3;
 
+// SALVO CUANDO EL FALLO ES EL RELOJ, que es otra cosa.
+//
+// Tres intentos valen para un error de verdad: si el prompt no le gusta a
+// Google, fallará igual las tres veces. Pero cuando lo que pasa es que la
+// respuesta no llegó a tiempo, el propio mensaje lo dice: el tiempo de Lyria
+// varía mucho de una vez a otra. Ahí cada reintento es una tirada distinta, y
+// rendirse a la tercera es rendirse pronto — sobre todo cuando lo único que
+// hace falta es que una salga por debajo del minuto.
+const TROPIEZOS_MAX_MUSICA_POR_RELOJ = 8;
+
+/** ¿El fallo fue que no dio tiempo, y no que algo esté mal? */
+function esFalloDeReloj(mensaje) {
+  return /tardó más de|se corta a los|timeout|abort/i.test(String(mensaje || ''));
+}
+
+/** Cuántos intentos merece este fallo antes de darse por vencido. */
+function topeDeTropiezos(mensaje) {
+  return esFalloDeReloj(mensaje) ? TROPIEZOS_MAX_MUSICA_POR_RELOJ : TROPIEZOS_MAX_MUSICA;
+}
+
 // La URL firmada que acompaña a la respuesta es para mirar la generación
 // ahora mismo; la del proyecto la vuelve a firmar api/proyecto.js en cada
 // lectura porque caduca.
@@ -524,11 +544,23 @@ function trabajoDe(gen) {
  * generación— y ese tiempo hay que descontarlo o la función muere igualmente,
  * que es justo lo que se quiere evitar.
  */
-const RESERVA_PARA_GUARDAR_MS = 12000;
+// LO QUE HAY QUE DEJAR LIBRE DESPUÉS DE LA LLAMADA, y por qué ahora es menos.
+//
+// Eran doce segundos, y era un margen de sobra: lo que queda por hacer es subir
+// un archivo de audio de dos o tres megas al bucket y escribir el proyecto —
+// cuestión de dos o tres segundos. Doce eran doce segundos que NO se le estaban
+// dando a Lyria, y el usuario se quedó sin música por eso: «Google tardó más de
+// 45 s en responder y la función de Vercel se corta a los 60».
+//
+// Seis deja margen de sobra para guardar y le devuelve a la composición todo lo
+// demás. El tope de la función son sesenta segundos y en el plan gratuito de
+// Vercel no se puede subir, así que cada segundo que no se reserva aquí es un
+// segundo más de los que Lyria necesita.
+const RESERVA_PARA_GUARDAR_MS = 6000;
 
 function presupuestoRestante(inicio) {
   const gastado = Date.now() - (inicio || Date.now());
-  return Math.max(8000, 58000 - gastado - RESERVA_PARA_GUARDAR_MS);
+  return Math.max(8000, 59000 - gastado - RESERVA_PARA_GUARDAR_MS);
 }
 
 async function hacerFragmento(proyecto, activoId, genId, indice, inicio) {
@@ -921,8 +953,9 @@ async function empujarMusica(proyecto, activo, gen) {
 
 async function tropezarMusica(proyecto, activo, gen, mensaje) {
   const previos = Number((gen.trabajo && gen.trabajo.tropiezos) || 0) + 1;
+  const tope = topeDeTropiezos(mensaje);
 
-  if (previos >= TROPIEZOS_MAX_MUSICA) {
+  if (previos >= tope) {
     return {
       proyecto: await anotarFallo(
         proyecto.id, activo.id, gen.id,
@@ -1126,3 +1159,10 @@ function prefijar(e, contexto) {
 }
 
 const motivoLegible = (e) => String((e && e.message) || e || 'Fallo desconocido').slice(0, 400);
+
+// Se exponen para las pruebas.
+module.exports.presupuestoRestante = presupuestoRestante;
+module.exports.esFalloDeReloj = esFalloDeReloj;
+module.exports.topeDeTropiezos = topeDeTropiezos;
+module.exports.TROPIEZOS_MAX_MUSICA = TROPIEZOS_MAX_MUSICA;
+module.exports.TROPIEZOS_MAX_MUSICA_POR_RELOJ = TROPIEZOS_MAX_MUSICA_POR_RELOJ;
