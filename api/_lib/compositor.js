@@ -281,9 +281,39 @@ async function estadoComposicion(token, projectId, buildId, bucket, carpeta) {
   };
 }
 
+/**
+ * Parar una composición en marcha.
+ *
+ * Cuando el usuario para la generación, la máquina de Cloud Build sigue
+ * componiendo si nadie se lo dice: terminaría, dejaría el audio en el bucket y
+ * nadie iría a recogerlo. Se le dice.
+ *
+ * Es de mejor esfuerzo a propósito: si la llamada falla —porque el trabajo ya
+ * había terminado, o porque Google contesta mal— parar la generación sigue
+ * siendo lo correcto. Devuelve si se pudo o no, para poder contarlo.
+ */
+async function cancelarComposicion(token, projectId, buildId) {
+  if (!buildId) return false;
+  try {
+    const r = await fetch(
+      'https://cloudbuild.googleapis.com/v1/projects/' + projectId +
+      '/builds/' + encodeURIComponent(buildId) + ':cancel',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: '{}',
+      },
+    );
+    return r.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   lanzarComposicion,
   estadoComposicion,
+  cancelarComposicion,
   SACAR_AUDIO,
   IMAGEN_SDK,
 };

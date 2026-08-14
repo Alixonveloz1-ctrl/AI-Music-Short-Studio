@@ -937,6 +937,18 @@ var api = {
   estadoGeneracion: function(id, activo, gen){
     return pedir('generar?id=' + encodeURIComponent(id) + '&activo=' + encodeURIComponent(activo) + '&gen=' + encodeURIComponent(gen));
   },
+  /**
+   * Parar lo que se esté generando. Sin `activo`, todo lo del corto.
+   *
+   * Va por DELETE contra el mismo endpoint que genera, y no en uno propio: el
+   * plan gratuito de Vercel sólo admite doce funciones y estamos en doce. La
+   * número trece no rompe su archivo — rompe TODOS los despliegues.
+   */
+  parar: function(id, activo, gen){
+    return pedir('generar?id=' + encodeURIComponent(id) +
+      (activo ? '&activo=' + encodeURIComponent(activo) : '') +
+      (gen ? '&gen=' + encodeURIComponent(gen) : ''), { metodo:'DELETE' });
+  },
   aprobar: function(id, activo, gen){ return pedir('aprobar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   rechazar: function(id, activo, gen){ return pedir('rechazar', { metodo:'POST', cuerpo:{ id:id, activo:activo, gen:gen } }); },
   actualizarPlan: function(id){ return pedir('actualizar', { metodo:'POST', cuerpo:{ id:id } }); },
@@ -2186,6 +2198,7 @@ function panelProduccion(p, sit){
   '</div>';
 
   html += htmlCola(p);
+  html += htmlEnMarcha(p);
 
   html += '<div class="tarjeta" id="caja-revision">' + htmlRevision(p) + '</div>';
 
@@ -2307,7 +2320,11 @@ function htmlRevision(p){
       (prov ? ' · ' + esc(prov) : '') + esc(dur + peso + tardo) + '</p>';
   }
 
-  if (gen && gen.error) html += '<div class="nota mala">' + esc(gen.error) + '</div>';
+  // Una generación que paró el usuario NO es un fallo, y pintarla en rojo con
+  // los demás errores le haría buscar un problema que no existe.
+  if (gen && gen.error) {
+    html += '<div class="nota ' + (gen.stoppedByUser ? 'aviso' : 'mala') + '">' + esc(gen.error) + '</div>';
+  }
 
   // El aviso de la propia generación: que el encargo se recortó porque Google
   // rechazó unas palabras, o que la música se está componiendo en una máquina
@@ -2333,6 +2350,17 @@ function htmlRevision(p){
   // sitio donde de verdad se decide cambiar de modelo — delante de un clip que
   // se niega a salir.
   html += htmlModeloDelActivo(p, a);
+
+  // ── PARAR ──
+  //
+  // Lo que reintenta no vive en esta pestaña: vive en el proyecto. Mientras
+  // esto esté en «generando», cualquier pestaña que abras lo empuja otra vez,
+  // así que recargar no paraba nada — abría otro empujador. Este botón lo
+  // cierra en el servidor, y entonces sí para de verdad.
+  if (generando) {
+    html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="parar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen ? gen.id : '') + '"' +
+      (estado.trabajando ? ' disabled' : '') + '>Parar esta generación</button>';
+  }
 
   if (esperaDecision) {
     html += '<button class="btn fantasma ancho pequeno" style="margin-top:9px" data-accion="rechazar" data-activo="' + esc(a.id) + '" data-gen="' + esc(gen.id) + '">Descartar esta generación</button>';
@@ -3046,6 +3074,50 @@ async function accionRechazar(activoId, genId){
   });
 }
 
+/**
+ * Parar una generación en marcha, o todas.
+ *
+ * EL FALLO, con las palabras del usuario: «la generación se reintenta
+ * automáticamente, pero si se mantiene fallando, yo no puedo pararla, así yo
+ * reinicie la página, se sigue reintentando».
+ *
+ * Hay que parar las DOS cosas, y por eso este botón no es sólo una llamada:
+ *
+ *  1. Lo del servidor. Mientras la generación esté en «generando» dentro del
+ *     proyecto, cualquier pestaña la empuja otra vez. Eso lo cierra el DELETE.
+ *  2. Lo de aquí. Si hay una cola en marcha, en cuanto el activo deja de estar
+ *     ocupado la cola lo vuelve a lanzar — y el usuario habría parado algo que
+ *     arranca solo tres segundos después. Se marca como «roto» para que la cola
+ *     lo salte, y si se para TODO, la cola se para entera.
+ */
+async function accionParar(activoId, genId){
+  var p = estado.proyecto;
+  if (!p) return;
+
+  // Parar todo se avisa antes: puede haber varios clips pagados en marcha.
+  if (!activoId) {
+    var cuantas = activos(p).filter(function(a){ return a.status === 'generating'; }).length;
+    if (!cuantas) { avisar('No hay nada generándose ahora mismo.'); return; }
+    if (!window.confirm('Parar ' + cuantas + (cuantas === 1 ? ' generación' : ' generaciones') +
+      ' en marcha.\n\nLo que Google ya haya empezado se paga igual. Lo que se para son la ' +
+      'espera y los reintentos automáticos.')) return;
+  }
+
+  // La cola primero: así no relanza nada entre el DELETE y el repintado.
+  if (estado.cola) {
+    if (!activoId) pararCola('');
+    else estado.cola.rotos[activoId] = true;
+  }
+
+  await ejecutar(async function(){
+    var d = await api.parar(p.id, activoId, genId);
+    var n = (d && d.paradas && d.paradas.length) || 0;
+    await cargarProyecto(p.id);
+    avisar(n ? (n === 1 ? 'Generación parada.' : n + ' generaciones paradas.')
+             : 'No quedaba nada que parar.', 'ok');
+  });
+}
+
 async function accionMontar(){
   var p = estado.proyecto;
   if (!p) return;
@@ -3186,6 +3258,8 @@ document.addEventListener('click', function(ev){
   if (accion === 'restaurar-prompt') { accionRestaurarPrompt(el.getAttribute('data-activo')); return; }
   if (accion === 'cola-etapa') { arrancarCola(el.getAttribute('data-etapa')); return; }
   if (accion === 'cola-parar') { pararCola('Cola detenida. Lo generado se queda; nada se pierde.'); return; }
+  if (accion === 'parar') { accionParar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
+  if (accion === 'parar-todo') { accionParar('', ''); return; }
   if (accion === 'generar') { accionGenerar(el.getAttribute('data-activo')); return; }
   if (accion === 'aprobar') { accionAprobar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
   if (accion === 'rechazar') { accionRechazar(el.getAttribute('data-activo'), el.getAttribute('data-gen')); return; }
@@ -3500,6 +3574,36 @@ async function colaTic(){
   try { await cargarProyecto(p.id, true); } catch (e) { /* el latido reintenta */ }
   pintar();
   latir(true);
+}
+
+/**
+ * La barra de «esto se está generando ahora», con el botón de parar todo.
+ *
+ * Existe aparte de la barra de la cola porque lo que se queda girando NO
+ * necesita una cola: basta con haber pulsado «Regenerar» una vez. Lo que
+ * reintenta vive en el proyecto, así que sobrevive a recargar la página, a
+ * cerrar el navegador y a cambiar de teléfono — y hasta ahora no había ningún
+ * sitio donde pararlo.
+ */
+function htmlEnMarcha(p){
+  var enMarcha = activos(p).filter(function(a){ return a.status === 'generating'; });
+  if (!enMarcha.length) return '';
+
+  var nombres = enMarcha.slice(0, 4).map(function(a){ return a.label; }).join(', ') +
+    (enMarcha.length > 4 ? ' y ' + (enMarcha.length - 4) + ' más' : '');
+
+  return '<div class="tarjeta" style="border-color:var(--acento2)">' +
+    '<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+      '<div style="min-width:0"><p class="sube">Generando ahora</p>' +
+        '<h3 style="margin:0">' + enMarcha.length +
+        (enMarcha.length === 1 ? ' generación en marcha' : ' generaciones en marcha') + '</h3></div>' +
+      '<button class="btn fantasma pequeno" data-accion="parar-todo"' +
+        (estado.trabajando ? ' disabled' : '') + '>Parar todo</button>' +
+    '</div>' +
+    '<p class="tenue mini">' + esc(nombres) + '</p>' +
+    '<p class="tenue mini" style="margin-top:6px">Los reintentos automáticos siguen aunque cierres la página: ' +
+      'viven en el corto, no en el navegador. Párralos aquí si Google está fallando y prefieres esperar.</p>' +
+  '</div>';
 }
 
 /** La barra de la cola, arriba del todo mientras está en marcha. */

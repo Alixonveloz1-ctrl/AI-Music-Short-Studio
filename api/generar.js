@@ -37,7 +37,8 @@ const { empezar, cuerpo, requerido, fallo, ErrorPeticion } = require('./_lib/htt
 const { cfg, auth, gcsDelete, gcsCopy, gcsDescargar } = require('./_lib/gcp.js');
 const almacen = require('./_lib/almacen.js');
 const dominio = require('./_lib/dominio.js');
-const { canGenerate } = require('./_lib/progreso.js');
+const { canGenerate, computeProductionStatus } = require('./_lib/progreso.js');
+const { paraEnviar } = require('./_lib/respuesta.js');
 const vertex = require('./_lib/vertex.js');
 const compositor = require('./_lib/compositor.js');
 const modelos = require('./_lib/modelos.js');
@@ -109,7 +110,7 @@ const VIGENCIA_URL_SEG = 3600;
 // ---------------------------------------------------------------------------
 
 module.exports = async function handler(req, res) {
-  if (empezar(req, res, ['GET', 'POST'])) return;
+  if (empezar(req, res, ['GET', 'POST', 'DELETE'])) return;
 
   try {
     if (req.method === 'POST') {
@@ -118,6 +119,17 @@ module.exports = async function handler(req, res) {
         res,
         texto(requerido(datos, 'id')),
         texto(requerido(datos, 'activo')),
+      );
+    }
+    if (req.method === 'DELETE') {
+      const q = consulta(req);
+      // Sin `activo` se paran TODAS las del corto: es el botón de emergencia
+      // cuando hay varias en marcha y todas están chocando contra lo mismo.
+      return await parar(
+        res,
+        texto(requerido(q, 'id')),
+        q.activo ? texto(q.activo) : '',
+        q.gen ? texto(q.gen) : '',
       );
     }
     const q = consulta(req);
@@ -778,6 +790,88 @@ async function empujar(res, id, activoId, genId) {
   return res.status(200).json(
     await instantanea(salida.proyecto || proyecto, activoId, genId, salida.progreso),
   );
+}
+
+// ---------------------------------------------------------------------------
+// DELETE — parar
+// ---------------------------------------------------------------------------
+//
+// EL PROBLEMA, con las palabras del usuario: «la generación se reintenta
+// automáticamente, pero si se mantiene fallando, yo no puedo pararla, así yo
+// reinicie la página, se sigue reintentando».
+//
+// Y no había forma de pararla, porque lo que reintenta NO VIVE EN EL NAVEGADOR.
+// Vive en el proyecto, en el bucket: mientras una generación esté en
+// «generando», cualquier pestaña que abra el corto la empuja otra vez. Recargar
+// no paraba nada — abría otro empujador. Y cada empujón contra Veo o contra
+// Lyria se paga.
+//
+// Parar la cierra en el proyecto. A partir de ahí ninguna pestaña, ni ahora ni
+// mañana, la va a volver a empujar; y el activo vuelve a poder generarse a mano
+// cuando al usuario le dé la gana.
+
+/** Lo que se le dice a cada tipo de activo cuando el usuario lo para. */
+function motivoDeParada(kind) {
+  if (kind === 'clip') {
+    return 'Parada por ti. Veo ya había aceptado el encargo, así que ese intento se paga ' +
+      'igual; lo que se ha parado es la espera y los reintentos automáticos.';
+  }
+  if (kind === 'music') {
+    return 'Parada por ti. Ya no se va a reintentar sola: vuelve a generarla cuando quieras.';
+  }
+  return 'Parada por ti. Vuelve a generarla cuando quieras.';
+}
+
+async function parar(res, id, activoId, genId) {
+  const leido = await almacen.leerProyecto(id);
+  if (!leido) throw new dominio.DomainError(`Proyecto no encontrado: ${id}`, 404);
+
+  // Se miran ANTES de tocar nada: hay trabajos con vida propia fuera de aquí
+  // —una composición en una máquina de Cloud Build— y hay que decirles que
+  // paren, o seguirían componiendo para nadie.
+  const paraCancelar = [];
+  for (const a of leido.proyecto.assets || []) {
+    if (activoId && a.id !== activoId) continue;
+    for (const g of a.generations || []) {
+      if (g.status !== 'generating') continue;
+      if (genId && g.id !== genId) continue;
+      if (g.trabajo && g.trabajo.build && g.trabajo.build.id) paraCancelar.push(g.trabajo.build.id);
+    }
+  }
+
+  const paradas = [];
+  const proyecto = await anotar(id, (p) => {
+    paradas.length = 0;
+    for (const a of p.assets || []) {
+      if (activoId && a.id !== activoId) continue;
+      for (const g of a.generations || []) {
+        if (g.status !== 'generating') continue;
+        if (genId && g.id !== genId) continue;
+        delete g.trabajo;
+        dominio.stopGeneration(p, a, g, motivoDeParada(a.kind));
+        paradas.push({ activo: a.id, label: a.label, gen: g.id });
+      }
+    }
+  });
+
+  // De mejor esfuerzo: si no se puede cancelar el trabajo de fuera, la
+  // generación se queda parada igual. Lo que no puede pasar es lo contrario.
+  if (paraCancelar.length) {
+    try {
+      const { token, projectId } = await auth();
+      for (const b of paraCancelar) await compositor.cancelarComposicion(token, projectId, b);
+    } catch (e) { /* la generación ya está parada, que es lo que importa */ }
+  }
+
+  // La interfaz repinta con lo que devuelve ESTA respuesta, y pinta cada medio
+  // con `gen.file.url`: sin firmar aquí, parar dejaría la pantalla en blanco.
+  res.setHeader('Cache-Control', 'no-store');
+  const salida = paraEnviar(proyecto);
+  return res.status(200).json({
+    proyecto: salida,
+    estado: computeProductionStatus(salida),
+    paradas,
+  });
 }
 
 /**

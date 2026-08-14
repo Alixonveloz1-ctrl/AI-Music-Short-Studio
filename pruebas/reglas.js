@@ -1061,6 +1061,67 @@ async function principal() {
     cierto(/g\.aviso\s*=/.test(generar), 'el servidor ya no escribe ningún aviso: sobra pintarlo');
   });
 
+  comprobar('una generación en marcha se puede parar, y parada se puede repetir', () => {
+    // EL FALLO, con las palabras del usuario: «la generación de imágenes o de
+    // videos se reintenta automáticamente, pero si se mantiene fallando, yo no
+    // puedo pararla, así yo reinicie la página, se sigue reintentando».
+    //
+    // Lo que reintenta NO VIVE EN EL NAVEGADOR: vive en el proyecto. Mientras
+    // una generación esté en «generando», cualquier pestaña que abra el corto la
+    // empuja otra vez, y cada empujón contra Veo o Lyria se paga. Recargar no
+    // paraba nada — abría otro empujador.
+    const p = nuevo();
+    const a = dominio.getAsset(p, 'master_character');
+    const g = dominio.startGeneration(p, a, { prompt: 'x' });
+    igual(a.status, 'generating', 'el activo no arrancó');
+
+    dominio.stopGeneration(p, a, g, 'Parada por ti.');
+
+    // 1. Ya no está en marcha: nadie la va a empujar, ni esta pestaña ni otra.
+    cierto(g.status !== 'generating', 'la generación sigue en marcha después de pararla');
+    cierto(a.status !== 'generating', 'el activo sigue en marcha después de pararla');
+    cierto(g.completedAt, 'la generación parada se queda sin fecha de cierre');
+
+    // 2. Y es distinguible de un fallo de verdad: la paró el usuario.
+    cierto(g.stoppedByUser, 'no queda constancia de que la paró el usuario');
+    cierto(p.events.some((e) => e.type === 'generation_stopped'),
+      'parar no deja rastro en el historial del corto');
+
+    // 3. Lo que el usuario quiere después: «esperar a que se calme el rate
+    //    límite y ya yo intentarlo manualmente».
+    cierto(progreso.canGenerate(p, a).ok,
+      'después de parar no se puede volver a generar a mano: ' + progreso.canGenerate(p, a).reason);
+
+    // 4. Y no se aprueba nada por el camino, que es la regla de la casa.
+    igual(a.approvedGenerationId, null, 'parar aprobó algo');
+  });
+
+  comprobar('parar está a mano: en la ficha y para todo el corto a la vez', () => {
+    const iu = reglasDeLaInterfaz();
+    const p = nuevo();
+    const a = dominio.getAsset(p, 'master_character');
+
+    // Sin nada en marcha, la barra de parar no aparece: sería un botón que no
+    // hace nada ocupando la pantalla de un teléfono.
+    igual(iu.htmlEnMarcha(p), '', 'la barra de parar sale con el corto quieto');
+
+    dominio.startGeneration(p, a, { prompt: 'x' });
+
+    const barra = iu.htmlEnMarcha(p);
+    cierto(/data-accion="parar-todo"/.test(barra), 'no hay forma de parar todo lo que está en marcha');
+    // Y dice lo que el usuario no podía saber: que esto no se para cerrando.
+    cierto(/cierres la página|navegador/.test(barra),
+      'la barra no explica que los reintentos sobreviven a cerrar la página');
+
+    // En la ficha del activo, su propio botón: parar UNO sin parar el resto.
+    iu.estado.proyecto = p;
+    iu.estado.activoSel = a.id;
+    const ficha = iu.htmlRevision(p);
+    cierto(/data-accion="parar"/.test(ficha), 'la ficha del activo no ofrece pararlo');
+    cierto(new RegExp('data-accion="parar" data-activo="' + a.id + '"').test(ficha),
+      'el botón de parar no dice qué activo para');
+  });
+
   comprobar('no queda ninguna descarga fuera del enlace que sabe de iOS', () => {
     // Si mañana alguien añade otro botón de descarga con `<a ... download>` a
     // mano, en la app instalada volvería a no hacer nada — y sería un fallo

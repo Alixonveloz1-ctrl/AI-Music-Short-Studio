@@ -211,6 +211,39 @@ function failGeneration(project, asset, generation, error) {
 }
 
 /**
+ * PARAR una generación en marcha. La decide el usuario, no un fallo.
+ *
+ * EL PROBLEMA QUE RESUELVE, con las palabras del usuario: «la generación se
+ * reintenta automáticamente, pero si se mantiene fallando, yo no puedo pararla,
+ * así yo reinicie la página, se sigue reintentando».
+ *
+ * Y era verdad. Lo que reintenta no vive en el navegador: vive en el proyecto,
+ * en el bucket. Mientras una generación esté en «generando», CUALQUIER pestaña
+ * que abra el corto la empuja otra vez —y cada empujón contra Veo o Lyria se
+ * paga—. Recargar no paraba nada; abría otro empujador.
+ *
+ * Parar la deja en el mismo sitio que un fallo —el activo vuelve a poder
+ * generarse a mano— pero marcada como parada por el usuario, para que la ficha
+ * no le enseñe un error rojo por algo que decidió él.
+ */
+function stopGeneration(project, asset, generation, motivo) {
+  generation.status = 'failed';
+  generation.stoppedByUser = true;
+  generation.error = String(motivo || 'Parada por ti.');
+  generation.completedAt = new Date().toISOString();
+  asset.status = restingStatus(asset);
+  asset.locked = hasApprovedVersion(asset);
+  project.events.push(
+    makeEvent('generation_stopped', `${asset.label}: paraste la generación #${generation.index}`, {
+      assetId: asset.id,
+      generationId: generation.id,
+      stage: asset.stage,
+    }),
+  );
+  touch(project);
+}
+
+/**
  * Aprobar es SIEMPRE un acto explícito del usuario: sólo se llega aquí desde
  * la ruta de aprobación, nunca desde el final de una generación.
  */
@@ -678,6 +711,7 @@ module.exports = {
   startGeneration,
   completeGeneration,
   failGeneration,
+  stopGeneration,
   approveGeneration,
   rejectGeneration,
   unlockAsset,

@@ -359,6 +359,121 @@ async function principal() {
       'no se avisa de que el clip salió con un encargo recortado: ' + gen.aviso);
   });
 
+  await paso('parar una generación la para de verdad: ni el latido la resucita', async () => {
+    // EL FALLO, con las palabras del usuario: «la generación de imágenes o de
+    // videos se reintenta automáticamente, pero si se mantiene fallando, yo no
+    // puedo pararla, así yo reinicie la página, se sigue reintentando».
+    //
+    // Lo que reintenta no vive en el navegador: vive en el proyecto, en el
+    // bucket. Mientras la generación esté en «generando», CUALQUIER pestaña que
+    // abra el corto la empuja otra vez — recargar no paraba nada, abría otro
+    // empujador. Y cada empujón contra Veo se paga.
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const clip = antes.assets.find((a) => a.kind === 'clip');
+    if (clip.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+
+    const g = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+    cierto(g.codigo === 200 || g.codigo === 202, 'lanzar el clip dio ' + g.codigo);
+    const genId = g.cuerpo.gen.id;
+    cierto(g.cuerpo.gen.status === 'generating', 'el clip no se quedó generando: no hay nada que parar');
+
+    // Se para, que es lo que hasta ahora no se podía hacer.
+    const parado = await pedir(generar, {
+      metodo: 'DELETE', query: { id, activo: clip.id, gen: genId },
+    });
+    cierto(parado.codigo === 200, 'parar dio ' + parado.codigo + ' ' + JSON.stringify(parado.cuerpo).slice(0, 200));
+    cierto(parado.cuerpo.paradas && parado.cuerpo.paradas.length === 1,
+      'no se paró exactamente una generación: ' + JSON.stringify(parado.cuerpo.paradas));
+
+    const tras = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const clipTras = tras.assets.find((a) => a.id === clip.id);
+    const genTras = clipTras.generations.find((x) => x.id === genId);
+    cierto(clipTras.status !== 'generating', 'el activo sigue en marcha: ' + clipTras.status);
+    cierto(genTras.stoppedByUser, 'la generación no consta como parada por el usuario');
+
+    // LO QUE DE VERDAD SE COMPRUEBA AQUÍ: el latido vuelve —como al recargar la
+    // página— y NO se le pide nada más a Google por esta generación.
+    const llamadasAntes = google.pedidos.length;
+    for (let n = 0; n < 3; n += 1) {
+      const s = await pedir(generar, { metodo: 'GET', query: { id, activo: clip.id, gen: genId } });
+      cierto(s.codigo === 200, 'el latido sobre una parada dio ' + s.codigo);
+      cierto(s.cuerpo.gen.status !== 'generating', 'el latido resucitó la generación parada');
+    }
+    cierto(google.pedidos.length === llamadasAntes,
+      'el latido siguió pidiéndole cosas a Google después de parar: ' +
+      (google.pedidos.length - llamadasAntes) + ' llamada(s)');
+
+    // Y después, cuando al usuario le dé la gana, se vuelve a generar a mano.
+    // Parar deja el activo igual que un fallo: si ya tenía una versión aprobada
+    // vuelve a quedarse con ella, bloqueada, y regenerar pasa por desbloquear —
+    // que es la regla de siempre y no cambia por haber parado.
+    const clipParado = tras.assets.find((a) => a.id === clip.id);
+    cierto(clipParado.approvedGenerationId, 'parar se llevó por delante la versión aprobada');
+    if (clipParado.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+    const otra = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: clip.id } });
+    cierto(otra.codigo === 200 || otra.codigo === 202,
+      'después de parar no se puede regenerar a mano: ' + JSON.stringify(otra.cuerpo).slice(0, 200));
+
+    // Se deja el clip como estaba: aprobado, para que siga el resto del corto.
+    let gen2 = otra.cuerpo.gen;
+    for (let n = 0; n < 30 && gen2 && gen2.status === 'generating'; n += 1) {
+      const s = await pedir(generar, { metodo: 'GET', query: { id, activo: clip.id, gen: gen2.id } });
+      gen2 = s.cuerpo.gen;
+    }
+    cierto(gen2 && gen2.status === 'review', 'la regeneración terminó en ' + (gen2 && gen2.status));
+    const ap = await pedir(aprobar, { metodo: 'POST', cuerpo: { id, activo: clip.id, gen: gen2.id } });
+    cierto(ap.codigo === 200, 'aprobar el clip regenerado: ' + JSON.stringify(ap.cuerpo).slice(0, 200));
+  });
+
+  await paso('parar todo el corto no necesita ir activo por activo', async () => {
+    // El botón de emergencia: cuando hay varias en marcha y todas están
+    // chocando contra lo mismo —un límite de peticiones, por ejemplo— pararlas
+    // de una en una desde un teléfono no es una opción.
+    const antes = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    const clips = antes.assets.filter((a) => a.kind === 'clip').slice(0, 2);
+    cierto(clips.length === 2, 'el corto no tiene dos clips que parar');
+
+    for (const c of clips) {
+      if (c.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: c.id } });
+      const r = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: c.id } });
+      cierto(r.codigo === 200 || r.codigo === 202, 'lanzar ' + c.id + ' dio ' + r.codigo);
+    }
+
+    // Sin `activo`: se para todo lo que esté en marcha en este corto.
+    const parado = await pedir(generar, { metodo: 'DELETE', query: { id } });
+    cierto(parado.codigo === 200, 'parar todo dio ' + parado.codigo);
+    cierto(parado.cuerpo.paradas.length === 2,
+      'no se pararon las dos generaciones en marcha: ' + parado.cuerpo.paradas.length);
+
+    const tras = (await pedir(proyectoEp, { metodo: 'GET', query: { id } })).cuerpo.proyecto;
+    cierto(tras.assets.filter((a) => a.status === 'generating').length === 0,
+      'quedó algo generándose después de parar todo');
+
+    // Parar cuando ya no hay nada es inofensivo: el botón no rompe nada si se
+    // pulsa dos veces, que en un móvil pasa constantemente.
+    const otra = await pedir(generar, { metodo: 'DELETE', query: { id } });
+    cierto(otra.codigo === 200, 'parar dos veces dio ' + otra.codigo);
+    cierto(otra.cuerpo.paradas.length === 0, 'la segunda vez paró algo que no estaba en marcha');
+
+    // Y el corto se deja como estaba: los dos clips vuelven a generarse y se
+    // aprueban, que si no el montaje de más abajo no tendría material.
+    for (const c of clips) {
+      const estaAhora = tras.assets.find((a) => a.id === c.id);
+      if (estaAhora.locked) await pedir(desbloquear, { metodo: 'POST', cuerpo: { id, activo: c.id } });
+      const r = await pedir(generar, { metodo: 'POST', cuerpo: { id, activo: c.id } });
+      cierto(r.codigo === 200 || r.codigo === 202,
+        'regenerar ' + c.id + ' dio ' + r.codigo + ' ' + JSON.stringify(r.cuerpo).slice(0, 160));
+      let gen = r.cuerpo.gen;
+      for (let n = 0; n < 30 && gen && gen.status === 'generating'; n += 1) {
+        const s = await pedir(generar, { metodo: 'GET', query: { id, activo: c.id, gen: gen.id } });
+        gen = s.cuerpo.gen;
+      }
+      cierto(gen && gen.status === 'review', c.id + ' terminó en ' + (gen && gen.status));
+      const ap = await pedir(aprobar, { metodo: 'POST', cuerpo: { id, activo: c.id, gen: gen.id } });
+      cierto(ap.codigo === 200, 'aprobar ' + c.id + ': ' + JSON.stringify(ap.cuerpo).slice(0, 200));
+    }
+  });
+
   await paso('si la música no cabe en el minuto de Vercel, se compone en Google', async () => {
     // EL FALLO, con las palabras del usuario: «No se pudo componer el fragmento
     // 1: Google tardó más de 45 s en responder y la función de Vercel se corta a
